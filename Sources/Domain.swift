@@ -157,3 +157,20 @@ func uniqueAllocatedTotal(_ measurements: [FolderMeasurement]) -> Int64 {
         return sum + (item.allocatedBytes ?? 0)
     }
 }
+
+struct ScanChange { var path: String; var name: String; var delta: Int64 }
+/// Per-location size changes between a scan and the previous completed scan of the same scope.
+func scanDelta(_ record: ScanRecord, previous: ScanRecord?) -> (grew: [ScanChange], shrank: [ScanChange])? {
+    guard let previous else { return nil }
+    let before = Dictionary(previous.measurements.filter { $0.state == .measured }.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
+    var grew: [ScanChange] = [], shrank: [ScanChange] = [], comparable = 0
+    for item in record.measurements where item.state == .measured {
+        guard let old = before[item.profile.path], old.scopeID == item.scopeID, let a = old.allocatedBytes, let b = item.allocatedBytes else { continue }
+        comparable += 1
+        guard a != b else { continue }
+        let change = ScanChange(path: item.profile.path, name: item.profile.name, delta: b - a)
+        if change.delta > 0 { grew.append(change) } else { shrank.append(change) }
+    }
+    guard comparable > 0 else { return nil }
+    return (grew.sorted { $0.delta > $1.delta }, shrank.sorted { $0.delta < $1.delta })
+}

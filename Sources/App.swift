@@ -63,6 +63,9 @@ struct MainView: View {
             PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; model.editing = nil }
         }
         .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
+        .sheet(isPresented: Binding(get: { model.reportPreview != nil }, set: { if !$0 { model.reportPreview = nil } })) {
+            ReportPreview(model: model, text: model.reportPreview ?? "")
+        }
         .onReceive(timer) { _ in
             model.checkScheduledPass()
         }
@@ -225,36 +228,32 @@ struct MainView: View {
         }
     }
     func overview(_ item: FolderMeasurement) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let workspace = item.profile.evidence.first(where: { $0.label == "Workspace" }) {
-                Label(workspace.value, systemImage: "folder.badge.gearshape").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-            }
-            if let device = item.profile.evidence.first(where: { $0.label == "Device name" }) {
-                Label(device.value, systemImage: "iphone").font(.caption).foregroundStyle(.purple)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                if let workspace = item.profile.evidence.first(where: { $0.label == "Workspace" }) { Label(workspace.value, systemImage: "folder.badge.gearshape").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                if let device = item.profile.evidence.first(where: { $0.label == "Device name" }) { Label(device.value, systemImage: "iphone").font(.caption).foregroundStyle(.purple).lineLimit(1) }
             }
             FolderTrend(path: item.profile.path, records: model.records, compact: true)
-            Panel(title: "What lives here", symbol: item.profile.category.symbol, tint: item.profile.category.tint) {
-                Text(item.profile.category.shortPurpose).font(.callout)
-                if item.profile.category == .simulator {
-                    Button("Explore devices and app data", systemImage: "square.stack.3d.up") { model.inspector = "Contents" }
-                    Text("Simulators are virtual test devices, separate from physical iPhones and iPads. Their app data can include unique saves.").font(.caption).foregroundStyle(.secondary)
-                } else { Text(item.profile.explanation).font(.caption).foregroundStyle(.secondary) }
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised").foregroundStyle(item.profile.category.reproducible ? Color.accentColor : Color.attention).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.profile.category.reproducible ? "Usually rebuildable" : "May hold unique data").font(.headline)
+                    Text(item.profile.consequence).font(.callout).fixedSize(horizontal: false, vertical: true)
+                }
             }
-            Panel(title: "Before any manual change", symbol: "info.circle", tint: item.profile.category.reproducible ? .accentColor : .attention) {
-                CapsuleLabel(text: item.profile.category.reproducible ? "Usually reproducible · review first" : "May contain unique data", symbol: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised", color: item.profile.category.reproducible ? .accentColor : .attention)
-                Text(item.profile.consequence).font(.callout)
-            }
-            HStack(spacing: 10) {
-                Button("Explore contents", systemImage: "folder") { model.inspector = "Contents" }
-                Button("View evidence", systemImage: "doc.text.magnifyingglass") { model.inspector = "Evidence" }
-            }
-            DisclosureGroup("Measurement details") {
+            DisclosureGroup("What lives here and why it matters") {
                 VStack(alignment: .leading, spacing: 8) {
+                    Text(item.profile.category.shortPurpose)
+                    Text(item.profile.explanation).foregroundStyle(.secondary)
+                    if item.profile.category == .simulator {
+                        Text("Simulators are virtual test devices, separate from physical iPhones and iPads. Their app data can include unique saves.").foregroundStyle(.secondary)
+                        Button("Explore devices and app data", systemImage: "square.stack.3d.up") { model.inspector = "Contents" }
+                    }
                     if item.fileCount > 0 { LabeledContent("Files", value: item.fileCount.formatted()) }
-                    if let modified = item.latestModifiedAt { LabeledContent("Latest modification", value: modified.formatted(date: .abbreviated, time: .shortened)) }
-                    Text(item.activityCheckAvailable ? "\(Set(item.processes.map(\.pid)).count) processes had open handles at scan time. This does not prove writing or inactivity." : "Process activity was not captured in this observation. Rescan to check currently open handles.")
-                    if let diagnostic = item.diagnostic { Text(diagnostic).textSelection(.enabled) }
-                }.font(.caption).foregroundStyle(.secondary).padding(.top, 8)
+                    if let modified = item.latestModifiedAt { LabeledContent("Latest change", value: modified.formatted(date: .abbreviated, time: .shortened)) }
+                    Text(item.activityCheckAvailable ? "\(Set(item.processes.map(\.pid)).count) processes had open handles at scan time. Not proof of writing or inactivity." : "Process activity was not captured. Rescan to check open handles.").foregroundStyle(.secondary)
+                    if let diagnostic = item.diagnostic { Text(diagnostic).textSelection(.enabled).foregroundStyle(.secondary) }
+                }.font(.caption).padding(.top, 6)
             }
             let policy = model.preferences.policy(item.profile.path)
             if !policy.tags.isEmpty { Text("Tags: " + policy.tags.joined(separator: ", ")).font(.callout) }
@@ -381,16 +380,58 @@ struct MainView: View {
             }
         }
     }
+    /// Timeline of scans, newest first, with what changed against the previous scan of the same scope.
     var scanHistory: some View {
-        List(model.records.reversed()) { record in
-            VStack(alignment: .leading, spacing: 6) {
-                Text(record.finishedAt.formatted()).font(.headline)
-                Text("\(record.scope) · \(record.measurements.count) / \(record.requestedCount ?? record.measurements.count) locations · \(record.complete ? "Completed" : "Incomplete")")
-                if let reason = record.stopReason { Text(reason).font(.caption).foregroundStyle(Color.attention) }
-                DisclosureGroup("Scan coverage and limits") { ForEach(Array(record.discoveryNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) } }
-                Text(record.legacySource == nil ? "Append-only record · \(record.id)" : "Imported copy; original SpaceCheck history preserved").font(.caption).foregroundStyle(.secondary)
-            }.padding(.vertical, 6)
-        }
+        let records = model.records.sorted { $0.finishedAt > $1.finishedAt }
+        return List {
+            ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
+                let previous = records.dropFirst(index + 1).first { $0.scope == record.scope && $0.complete }
+                let changes = scanDelta(record, previous: previous)
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(spacing: 0) {
+                        Circle().fill(record.complete ? Color.accentColor : Color.growing).frame(width: 10, height: 10)
+                        Rectangle().fill(.quaternary).frame(width: 2).frame(maxHeight: .infinity)
+                    }.frame(width: 10).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(record.finishedAt.formatted(date: .abbreviated, time: .shortened)).font(.headline)
+                            Text(record.scope).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            if let free = record.freeBytes { Text("\(byteLabel(free)) free").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
+                        }
+                        HStack(spacing: 14) {
+                            Label("\(record.measurements.filter { $0.state == .measured }.count) measured", systemImage: "folder").font(.caption)
+                            let failed = record.measurements.filter { ![.measured, .cancelled, .excluded].contains($0.state) }.count
+                            if failed > 0 { Label("\(failed) could not be measured", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention) }
+                            if !record.complete { Label(record.stopReason ?? "Stopped early", systemImage: "stop.circle").font(.caption).foregroundStyle(Color.growing) }
+                            Text("\(elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt)))").font(.caption).foregroundStyle(.tertiary)
+                        }
+                        if let changes {
+                            if changes.grew.isEmpty && changes.shrank.isEmpty { Text("No size changes against the previous \(record.scope.lowercased()) scan.").font(.caption).foregroundStyle(.secondary) }
+                            else {
+                                HStack(alignment: .top, spacing: 18) {
+                                    if !changes.grew.isEmpty {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Grew · +\(byteLabel(changes.grew.reduce(0) { $0 + $1.delta }))").font(.caption.weight(.semibold)).foregroundStyle(Color.growing)
+                                            ForEach(changes.grew.prefix(4), id: \.path) { Text("\($0.name) +\(byteLabel($0.delta))").font(.caption).lineLimit(1) }
+                                            if changes.grew.count > 4 { Text("and \(changes.grew.count - 4) more").font(.caption2).foregroundStyle(.secondary) }
+                                        }
+                                    }
+                                    if !changes.shrank.isEmpty {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Shrank · −\(byteLabel(changes.shrank.reduce(0) { $0 + abs($1.delta) }))").font(.caption.weight(.semibold)).foregroundStyle(Color.stable)
+                                            ForEach(changes.shrank.prefix(4), id: \.path) { Text("\($0.name) −\(byteLabel(abs($0.delta)))").font(.caption).lineLimit(1) }
+                                            if changes.shrank.count > 4 { Text("and \(changes.shrank.count - 4) more").font(.caption2).foregroundStyle(.secondary) }
+                                        }
+                                    }
+                                }
+                            }
+                        } else { Text("Nothing comparable in an earlier \(record.scope.lowercased()) scan.").font(.caption).foregroundStyle(.secondary) }
+                        DisclosureGroup("Coverage notes") { ForEach(Array(record.discoveryNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) } }.font(.caption)
+                    }.padding(.bottom, 10)
+                }
+            }
+        }.overlay { if records.isEmpty { ContentUnavailableView("No scans yet", systemImage: "clock", description: Text("Scan Now records the first entry.")) } }
     }
     var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -501,5 +542,26 @@ struct AccessHelp: View {
                 Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
         }.padding(26).frame(width: 560)
+    }
+}
+
+struct ReportPreview: View {
+    @ObservedObject var model: CleanerModel
+    let text: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Export report").font(.title2.weight(.semibold))
+            Text("Markdown, \(model.rows.count) locations from the current view, largest first: a summary table, then one section per location with size, status, what lives there, what to consider before any manual change, evidence and your tags and notes. Nothing is sent anywhere; you choose where the file goes.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file contains every location." : text
+            ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
+                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            HStack {
+                Text("\(text.utf8.count.formatted()) bytes").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
+                Button("Cancel") { model.reportPreview = nil }.keyboardShortcut(.cancelAction)
+                Button("Save…") { model.saveReport(text) }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
+            }
+        }.padding(20).frame(width: 720, height: 560)
     }
 }

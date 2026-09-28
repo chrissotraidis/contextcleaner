@@ -317,17 +317,37 @@ struct FolderRow: Identifiable {
             } catch { DispatchQueue.main.async { self.error = "Device metadata could not be read: \(error.localizedDescription)"; self.identifyingDevices = false } }
         }
     }
-    func exportReport() {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "Context-Cleaner-\(Int(Date().timeIntervalSince1970)).md"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        var text = "# Context Cleaner\n\nRead-only report. No files are deleted by this app. Allocated sizes are estimates, not guaranteed reclaimable space.\n\n"
-        for row in rows.sorted(by: { $0.bytes > $1.bytes }) {
+    @Published var reportPreview: String?
+    /// Builds the Markdown report for the current view: every visible location, largest first.
+    func buildReport() -> String {
+        let stamp = Date().formatted(date: .long, time: .shortened)
+        var text = "# Context Cleaner report\n\n\(stamp) · \(section.rawValue)\(section == .locations ? " · \(locationFilter.rawValue)" : "")\(search.isEmpty ? "" : " · matching “\(search)”")\n\n"
+        if let v = volume { text += "Home volume: \(byteLabel(v.free)) free of \(byteLabel(v.total)) (checked \(v.date.formatted(date: .omitted, time: .shortened))).\n\n" }
+        text += "Context Cleaner never deletes files. Sizes are allocated-space estimates from the latest saved scan of each location; nested folders may overlap, and APFS shared blocks mean none of this is guaranteed reclaimable space.\n\n"
+        let listed = rows.sorted(by: { $0.bytes > $1.bytes })
+        text += "| Location | Size | Change | Status | Owner |\n|---|---:|---:|---|---|\n"
+        for row in listed {
+            let change = row.change.delta.map { "\($0 >= 0 ? "+" : "−")\(byteLabel(abs($0)))" } ?? "—"
+            text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(change) | \(row.status) | \(row.app) |\n"
+        }
+        text += "\n"
+        for row in listed {
             let p = row.measurement.profile
-            text += "## \(p.name)\n\nPath: `\(p.path)`\n\nSize: \(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status)\n\nAssociation: \(p.associatedApp)\n\n\(p.explanation)\n\nConsequences: \(p.consequence)\n\n"
-            if let change = row.change.delta { text += "Measured change: \(change >= 0 ? "+" : "−")\(byteLabel(abs(change)))\n\n" }
-            for e in p.evidence { text += "- \(e.level.rawValue): \(e.label) — \(e.value). Source: \(e.source)\n" }
+            text += "## \(p.name)\n\n`\(p.path)`\n\n\(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status)\n\n\(p.explanation)\n\nBefore any manual change: \(p.consequence)\n\n"
+            for e in p.evidence { text += "- \(e.level.rawValue): \(e.label) — \(e.value)\n" }
+            let policy = preferences.policy(p.path)
+            if !policy.tags.isEmpty { text += "\nTags: \(policy.tags.joined(separator: ", "))\n" }
+            if !policy.note.isEmpty { text += "\nNote: \(policy.note)\n" }
             text += "\n"
         }
-        do { try writeNew(Data(text.utf8), to: url) } catch { self.error = "Export preserved the existing destination and did not replace it. Choose a new filename. \(error.localizedDescription)" }
+        return text
+    }
+    func exportReport() { reportPreview = buildReport() }
+    func saveReport(_ text: String) {
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "Context Cleaner report \(Date().formatted(.iso8601.year().month().day())).md"
+        panel.message = "Saves a Markdown report. An existing file with the same name is never replaced."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try writeNew(Data(text.utf8), to: url); reportPreview = nil }
+        catch { self.error = "The report was not saved because a file already exists there. Choose a new name. \(error.localizedDescription)" }
     }
 }

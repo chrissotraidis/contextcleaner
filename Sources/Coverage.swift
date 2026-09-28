@@ -13,6 +13,13 @@ struct CoverageEntry: Identifiable, Hashable {
     func path(home: String) -> String { home + "/" + relativePath }
 }
 
+enum CoveragePresence {
+    case present, missing, unavailable
+    var label: String {
+        switch self { case .present: return "Present"; case .missing: return "Not on this Mac"; case .unavailable: return "Could not check" }
+    }
+}
+
 enum Coverage {
     static let projectSuffixes = ["android/app/.cxx", "android/app/build/intermediates", "build", "generated", "work"]
     static let entries: [CoverageEntry] = [
@@ -52,8 +59,9 @@ enum Coverage {
         "Any folder you exclude, and anything inside it.",
         "Symbolic links and other volumes reached through a parent folder.",
     ]
-    static func presence(_ entry: CoverageEntry, home: String) -> Bool {
+    static func presence(_ entry: CoverageEntry, home: String) -> CoveragePresence {
         var st = stat()
-        return lstat(entry.path(home: home), &st) == 0
+        if lstat(entry.path(home: home), &st) == 0 { return .present }
+        return errno == ENOENT || errno == ENOTDIR ? .missing : .unavailable
     }
 }

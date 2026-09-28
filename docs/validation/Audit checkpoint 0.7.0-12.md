@@ -1,0 +1,9 @@
+# Audit checkpoint 0.7.0-12
+
+2026-09-28. Optimized native build and DMG verified. All six suites pass: 28 core, 22 detail, 25 scan limits, 17 planner, 37 discovery/model and 18 Overview = 147 checks. Logs and fixtures are retained under the task work/cc-stage7-audit-tests-v1 directory.
+
+Changes: native View-menu appearance command (Shift-Command-L); single-folder rescan disabled for multiple/excluded selections; one shared multi-selection action view; pending Needs Attention status red; Coverage presence checks on a background task with missing/error distinction; History delta totals count comparable nested locations once.
+
+Real app checks: light and dark Overview at the minimum content size of 1100 × 700 (window bounds 1100 × 752 including toolbar); larger initial window 1189 × 792. Entire Overview fits without vertical scrolling. Shift-Command-L changes appearance and the toolbar action updates correctly; Dark restored. Overview drill-down opens OpenEmu and its matching inspector. Native two-page scrolling in Locations advances the visible rows and retains the selected inspector, with the tool action/state return in 1.07 seconds; this is an interaction observation, not a frame-rate benchmark. Settings opens with Command-comma, General/Scanning/Coverage are present, and schedule options Off / Daily while open / Weekly while open are exposed. Off remained selected. Access guidance opens and closes without permission changes. No broad profiler recording was repeated.
+
+Some row-targeted accessibility clicks are unreliable (no change or stale virtual row ID); standard button actions, drag resizing, scrolling and keyboard navigation work. Final release still needs the remaining visual/interaction audit and packaging with the new icon choices. No files deleted and no v0.7.0 tag yet.

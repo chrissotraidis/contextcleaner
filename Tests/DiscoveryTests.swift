@@ -85,6 +85,23 @@ import Foundation
         check(watchModel.latest.first { $0.profile.path == grower.path }?.allocatedBytes == 7_000_000_000, "same-count partial updates invalidate live measurements")
         watchModel.running = false
         check(watchModel.latest.first { $0.profile.path == grower.path }?.allocatedBytes == 4_000_000_000, "stopping a scan drops partial cache values")
+        watchModel.selection = [grower.path]
+        check(watchModel.canRescanSelection, "single included selection enables a folder rescan")
+        watchModel.selection = [grower.path, steady.path]
+        check(!watchModel.canRescanSelection, "multi-selection cannot accidentally rescan its first folder")
+        watchModel.selection = [grower.path]
+        watchModel.policy(grower.path) { $0.excluded = true }
+        check(!watchModel.canRescanSelection, "excluded selection disables a folder rescan")
+        watchModel.setAppearance("Dark"); watchModel.toggleAppearance()
+        check(watchModel.preferences.appearance == "Light", "menu appearance toggle honors explicit dark preference")
+        watchModel.toggleAppearance()
+        check(watchModel.preferences.appearance == "Dark", "menu appearance toggle switches back to dark")
+        var entry = Coverage.entries[0]; entry.relativePath = "store"
+        check(Coverage.presence(entry, home: root.path) == .present, "coverage detects a present fixture directory")
+        entry.relativePath = "absent-fixture"
+        check(Coverage.presence(entry, home: root.path) == .missing, "coverage distinguishes a missing directory")
+        entry.relativePath = String(repeating: "x", count: 300)
+        check(Coverage.presence(entry, home: root.path) == .unavailable, "filesystem errors are never reported as a missing directory")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

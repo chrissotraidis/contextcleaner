@@ -32,6 +32,17 @@ import Foundation
         let expanded = freeSpaceRange([100*gib], preserving: axis)
         check(expanded.lowerBound < axis.lowerBound && expanded.upperBound == axis.upperBound, "out-of-range observations expand only the necessary bound")
         check(freeSpaceRange([], preserving: axis) == axis, "missing observations cannot reset the axis")
+        func record(_ id: String, _ measurements: [FolderMeasurement]) -> ScanRecord {
+            ScanRecord(id: id, startedAt: start, finishedAt: start, scope: "fixture", complete: true, measurements: measurements, discoveryNotes: [])
+        }
+        let before = record("before", [a, child, cache])
+        let after = record("after", [item("/fixture/work", .workspace, 150), item("/fixture/work/build", .buildOutput, 140), item("/fixture/cache", .packageCache, 10)])
+        let changes = scanDelta(after, previous: before)!
+        check(changes.grew.count == 1 && changes.grew.reduce(0) { $0 + $1.delta } == 50, "history growth totals count comparable nested folders once")
+        check(changes.shrank.count == 1 && changes.shrank[0].delta == -15, "independent shrinkage remains visible alongside growth")
+        let failedParent = record("partial", [item("/fixture/work", .workspace, nil, .failed), item("/fixture/work/build", .buildOutput, 120)])
+        check(scanDelta(failedParent, previous: before)?.grew.first?.delta == 30, "an incomparable parent cannot hide a comparable child change")
+        check(scanDelta(record("missing", [item("/fixture/other", .workspace, 200)]), previous: before) == nil, "disjoint scan coverage does not claim zero growth")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

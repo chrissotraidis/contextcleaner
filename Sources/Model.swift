@@ -27,7 +27,7 @@ struct FolderRow: Identifiable {
     }
     /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
     var statusTint: Color {
-        if policy.excluded || measurement.state == .pending { return .secondary }
+        if policy.excluded { return .secondary }
         if measurement.state != .measured { return .attention }
         if growing { return .growing }
         if policy.expected { return .stable }
@@ -224,6 +224,17 @@ struct FolderRow: Identifiable {
         guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return }
         var next = preferences; change(&next)
         do { try store.save(next); preferences = next } catch { self.error = "Preferences were not saved: \(error.localizedDescription)" }
+    }
+    var effectiveDarkAppearance: Bool {
+        switch preferences.appearance ?? "System" {
+        case "Dark": return true
+        case "Light": return false
+        default: return NSApp?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+    }
+    func toggleAppearance() { setAppearance(effectiveDarkAppearance ? "Light" : "Dark") }
+    var canRescanSelection: Bool {
+        selection.count == 1 && selected != nil && !preferences.excluded(selected!) && !running && !inspecting && !discovering && store != nil
     }
     func toggleAppearance(current: ColorScheme) {
         setAppearance(current == .dark ? "Light" : "Dark")

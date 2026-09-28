@@ -51,12 +51,12 @@ struct MainView: View {
         .toolbar {
             ToolbarItemGroup {
                 Button { model.scan() } label: { Label("Scan Now", systemImage: "arrow.clockwise").labelStyle(.titleAndIcon) }.help("Measure every known and added location (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)
-                Button { model.scan(selectedOnly: true) } label: { Label("Rescan This Folder", systemImage: "arrow.clockwise.circle") }.help("Measure only the selected folder (Shift-Command-R)").disabled(model.selected == nil || model.running || model.inspecting || model.discovering)
+                Button { model.scan(selectedOnly: true) } label: { Label("Rescan This Folder", systemImage: "arrow.clockwise.circle") }.help("Measure only the selected folder (Shift-Command-R)").disabled(!model.canRescanSelection)
                 if model.running || model.discovering { Button(model.discovering ? "Cancel Discovery" : "Cancel Scan") { model.cancelWork() } }
             }
             if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
             ToolbarItemGroup {
-                Button { model.exportReport() } label: { Label("Export Report", systemImage: "square.and.arrow.up") }.help("Save a Markdown report of every location (Shift-Command-E)")
+                Button { model.exportReport() } label: { Label("Export Report", systemImage: "square.and.arrow.up") }.help("Preview and export locations in the current view (Shift-Command-E)")
                 Button { model.toggleAppearance(current: colorScheme) } label: { Label(colorScheme == .dark ? "Switch to Light" : "Switch to Dark", systemImage: colorScheme == .dark ? "sun.max" : "moon") }.help("Toggle light and dark. Choose Match System in Settings.")
             }
         }
@@ -91,14 +91,6 @@ struct MainView: View {
                 }
             } else { CapsuleLabel(text: "Read-only by design", symbol: "lock.shield") }
         }.padding(.horizontal, 22).padding(.top, 12).padding(.bottom, 10)
-    }
-    @ViewBuilder func multiActions(_ paths: [String]) -> some View {
-        Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
-        Button("Watch All") { for path in paths { model.policy(path) { $0.watched = true } } }
-        Button("Stop Watching All") { for path in paths { model.policy(path) { $0.watched = false; $0.autoWatched = nil } } }
-        Divider()
-        Button("Exclude All from Scans") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
-        Button("Clear Selection") { model.selection = [] }
     }
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
@@ -146,7 +138,7 @@ struct MainView: View {
             TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selection.contains(row.id) ? Color.white : row.statusTint) }.width(min: 85, ideal: 110)
         }
         .contextMenu(forSelectionType: String.self) { paths in
-            if paths.count > 1 { multiActions(Array(paths)) }
+            if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }
             else if let path = paths.first { LocationActions(model: model, path: path) }
         }
         .overlay {
@@ -169,7 +161,7 @@ struct MainView: View {
                         HStack { Text(item.profile.name).font(.caption).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.caption).monospacedDigit() }
                     }
                     if summary.items.count > 12 { Text("and \(summary.items.count - 12) more").font(.caption).foregroundStyle(.secondary) }
-                    HStack { Button("Reveal All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { multiActions(Array(model.selection)) }.frame(maxWidth: 110) }
+                    HStack { Button("Reveal All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.frame(maxWidth: 110) }
                     Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
                 } else if let item = model.chosen {
                     HStack(alignment: .top, spacing: 12) {
@@ -409,7 +401,7 @@ struct MainView: View {
                             Text("\(elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt)))").font(.caption).foregroundStyle(.tertiary)
                         }
                         if let changes {
-                            if changes.grew.isEmpty && changes.shrank.isEmpty { Text("No size changes against the previous \(record.scope.lowercased()) scan.").font(.caption).foregroundStyle(.secondary) }
+                            if changes.grew.isEmpty && changes.shrank.isEmpty { Text("No size changes in comparable locations.").font(.caption).foregroundStyle(.secondary) }
                             else {
                                 HStack(alignment: .top, spacing: 18) {
                                     if !changes.grew.isEmpty {
@@ -478,7 +470,7 @@ struct PolicyEditor: View {
             Toggle("Review later", isOn: Binding(get: { value.reviewAfter != nil }, set: { value.reviewAfter = $0 ? Date().addingTimeInterval(86400) : nil }))
             if value.reviewAfter != nil {
                 DatePicker("Review after", selection: Binding(get: { value.reviewAfter ?? Date() }, set: { value.reviewAfter = $0 }), displayedComponents: [.date, .hourAndMinute])
-                Text("Until this time, the location stays out of Growing, Candidates and priority checks. Manual scans remain available.").font(.caption).foregroundStyle(.secondary)
+                Text("Until this time, the location stays out of Growing, Rebuildable and priority checks. Manual scans remain available.").font(.caption).foregroundStyle(.secondary)
             }
             TextField("Tags, separated by commas", text: $tags)
             TextField("Review threshold (GiB of growth)", text: $threshold)
@@ -503,22 +495,28 @@ struct PolicyEditor: View {
                     Button("Add Location…") { model.addRoot() }.keyboardShortcut("o", modifiers: [.command, .shift])
                     Button("Export Report…") { model.exportReport() }.keyboardShortcut("e", modifiers: [.command, .shift])
                 }
+                CommandGroup(after: .sidebar) {
+                    Button(model.effectiveDarkAppearance ? "Switch to Light Appearance" : "Switch to Dark Appearance") { model.toggleAppearance() }
+                        .keyboardShortcut("l", modifiers: [.command, .shift])
+                }
                 CommandMenu("Scan") {
                     Button("Scan Now") { model.scan() }.keyboardShortcut("r").disabled(model.running || model.inspecting || model.discovering)
-                    Button("Rescan This Folder") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(model.selected == nil || model.running || model.inspecting || model.discovering)
+                    Button("Rescan This Folder") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(!model.canRescanSelection)
                     Button("Scan Watched Locations") { model.scan(watchedOnly: true) }.disabled(model.running || model.inspecting || model.discovering)
                     Button("Rediscover Locations") { model.discover() }.disabled(model.running || model.inspecting || model.discovering)
                     Divider()
                     Button("Cancel") { model.cancelWork() }.keyboardShortcut(".").disabled(!(model.running || model.discovering))
                 }
                 CommandMenu("Location") {
-                    if let path = model.selected {
+                    if model.selection.count > 1 {
+                        SelectionActions(model: model, paths: Array(model.selection).sorted())
+                    } else if let path = model.selected {
                         LocationActions(model: model, path: path)
                     } else {
                         Text("Select a location first")
                     }
                     Divider()
-                    Button("Tags and Notes…") { if let path = model.selected { model.editing = path } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(model.selected == nil)
+                    Button("Tags and Notes…") { if let path = model.selected { model.editing = path } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(model.selection.count != 1)
                 }
             }
         Settings { SettingsView(model: model) }

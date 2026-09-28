@@ -103,3 +103,17 @@ struct LocationActions: View {
         Button(policy.excluded ? "Include in Scans" : "Exclude from Scans") { model.policy(path) { $0.excluded.toggle() } }.disabled(model.running || model.inspecting)
     }
 }
+
+/// Shared actions for a multi-selection, in the context menu, inspector and menu bar.
+struct SelectionActions: View {
+    @ObservedObject var model: CleanerModel
+    let paths: [String]
+    var body: some View {
+        Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
+        Button("Watch All") { for path in paths { model.policy(path) { $0.watched = true } } }
+        Button("Stop Watching All") { for path in paths { model.policy(path) { $0.watched = false; $0.autoWatched = nil } } }
+        Divider()
+        Button("Exclude All from Scans") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
+        Button("Clear Selection") { model.selection = [] }
+    }
+}

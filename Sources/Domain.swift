@@ -174,8 +174,12 @@ func scanDelta(_ record: ScanRecord, previous: ScanRecord?) -> (grew: [ScanChang
     guard let previous else { return nil }
     let before = Dictionary(previous.measurements.filter { $0.state == .measured }.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
     var grew: [ScanChange] = [], shrank: [ScanChange] = [], comparable = 0
-    for item in record.measurements where item.state == .measured {
+    var accepted: [String] = []
+    for item in record.measurements.sorted(by: { $0.profile.path.count < $1.profile.path.count }) where item.state == .measured {
         guard let old = before[item.profile.path], old.scopeID == item.scopeID, let a = old.allocatedBytes, let b = item.allocatedBytes else { continue }
+        // A comparable parent already includes its children in both snapshots.
+        guard !accepted.contains(where: { containsPath($0, item.profile.path) }) else { continue }
+        accepted.append(item.profile.path)
         comparable += 1
         guard a != b else { continue }
         let change = ScanChange(path: item.profile.path, name: item.profile.name, delta: b - a)

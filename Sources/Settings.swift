@@ -67,6 +67,7 @@ struct ScanningSettings: View {
 struct CoverageSettings: View {
     @ObservedObject var model: CleanerModel
     @State private var query = ""
+    @State private var presence: [String: CoveragePresence] = [:]
     var body: some View {
         Form {
             Section {
@@ -78,14 +79,14 @@ struct CoverageSettings: View {
                 Section(writer) {
                     ForEach(groups[writer]!) { entry in
                         let path = entry.path(home: model.home)
-                        let present = Coverage.presence(entry, home: model.home)
+                        let status = presence[entry.id]
                         Toggle(isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })) {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {
                                     Image(systemName: entry.category.symbol).foregroundStyle(entry.category.tint).accessibilityHidden(true)
                                     Text("~/" + entry.relativePath).font(.callout).lineLimit(1).truncationMode(.middle)
                                     Spacer()
-                                    Text(present ? "Present" : "Not on this Mac").font(.caption).foregroundStyle(present ? Color.stable : .secondary)
+                                    Text(status?.label ?? "Checking…").font(.caption).foregroundStyle(status == .unavailable ? Color.attention : .secondary)
                                 }
                                 Text(entry.writes + (entry.kind == .folder ? "" : " Measured as: " + entry.kind.rawValue.lowercased() + ".")).font(.caption).foregroundStyle(.secondary)
                             }
@@ -113,5 +114,11 @@ struct CoverageSettings: View {
                 Text("Context Cleaner is not a whole-disk scanner. It measures the places where tools accumulate data, so the totals here never equal your used space.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).padding(.top, 4)
+        .task {
+            let home = model.home
+            presence = await Task.detached(priority: .utility) {
+                Dictionary(uniqueKeysWithValues: Coverage.entries.map { ($0.id, Coverage.presence($0, home: home)) })
+            }.value
+        }
     }
 }

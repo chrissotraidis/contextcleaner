@@ -105,6 +105,7 @@ struct FolderTrend: View {
 struct Dashboard: View {
     @ObservedObject var model: CleanerModel
     @State private var selectedDate: Date?
+    @State private var showingCaveats = false
     private var groups: [StorageGroup] { overviewGroups(model.latest, preferences: model.preferences) }
     private var measured: [FolderMeasurement] { model.latest.filter { $0.state == .measured && !model.preferences.excluded($0.profile.path) } }
     private var total: Int64 { groups.reduce(0) { $0 + $1.bytes } }
@@ -114,121 +115,180 @@ struct Dashboard: View {
             return delta > 0 && delta >= (policy.growthThresholdBytes ?? 0) && !policy.expected && (policy.reviewAfter ?? .distantPast) <= Date() && !model.preferences.excluded(item.profile.path)
         }.count
     }
-    private var freeRange: ClosedRange<Double> {
-        let values = freeHistory.compactMap { $0.freeBytes }.map { Double($0) / 1_073_741_824 }
-        let lower = values.min() ?? 0, upper = values.max() ?? 1
-        let padding = max((upper - lower) * 0.2, 1)
-        return max(0, lower - padding)...(upper + padding)
-    }
     private var freeHistory: [ScanRecord] { model.records.filter { $0.freeBytes != nil }.sorted { $0.finishedAt < $1.finishedAt } }
+    /// Fixed seven-day window ending now, so the chart does not slide when a scan or capacity refresh lands.
+    private var timeWindow: ClosedRange<Date> { let now = Date(); return now.addingTimeInterval(-7 * 86400)...now }
+    /// Rounded bounds in 10 GiB steps with at least a 20 GiB span, so the axis stays put between refreshes.
+    private var freeRange: ClosedRange<Double> {
+        let values = freeHistory.filter { timeWindow.contains($0.finishedAt) }.compactMap { $0.freeBytes }.map { Double($0) / 1_073_741_824 } + [model.volume.map { Double($0.free) / 1_073_741_824 } ?? 0]
+        let lower = (values.min() ?? 0), upper = (values.max() ?? 100)
+        var low = floor(lower / 10) * 10 - 10, high = ceil(upper / 10) * 10 + 10
+        if high - low < 20 { high = low + 20 }
+        return max(0, low)...high
+    }
     private func show(_ category: FolderCategory? = nil) { model.categoryFilter = category; model.search = ""; model.section = .locations; model.locationFilter = .all; model.selected = nil; model.inspector = "Overview" }
     private func open(_ item: FolderMeasurement) { model.categoryFilter = nil; model.search = ""; model.selected = item.profile.path; model.inspector = "Overview"; model.section = .locations; model.locationFilter = .all }
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                HStack(alignment: .top, spacing: 20) {
-                    driveCard.frame(maxWidth: .infinity)
-                    freeSpaceChart.frame(maxWidth: .infinity)
-                }
-                HStack(spacing: 12) {
-                    metric("Locations measured", value: measured.count.formatted(), detail: "Saved observations", symbol: "folder", tint: .blue) { show() }
-                    metric("Growing", value: growthCount.formatted(), detail: "Comparable baselines: \(measured.filter { growth($0.profile.path, records: model.records).delta != nil }.count)", symbol: "chart.line.uptrend.xyaxis", tint: .growing) { model.categoryFilter = nil; model.section = .locations; model.locationFilter = .growing }
-                    metric("Watching", value: model.preferences.locations.filter { $0.value.watched && !model.preferences.excluded($0.key) }.count.formatted(), detail: "Your recurring checkpoints", symbol: "eye", tint: .accentColor) { model.categoryFilter = nil; model.section = .watching }
-                }
-                HStack(alignment: .top, spacing: 20) {
-                    categories.frame(maxWidth: .infinity)
-                    largest.frame(maxWidth: .infinity)
-                }
-                Panel(title: "How much of this Mac is understood?", symbol: "viewfinder", tint: .blue) {
-                    HStack(alignment: .top, spacing: 25) {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(byteLabel(total)).font(.title2.weight(.semibold)).monospacedDigit()
-                            Text("in measured, non-nested locations").font(.caption).foregroundStyle(.secondary)
-                        }.frame(width: 230, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Scans cover recognized development and cache locations, plus folders you select. This is not a whole-disk scan.")
-                            Text("Category totals use each location's latest saved measurement, which can be from different times. Parent folders include their children. APFS shared blocks mean these estimates are not reclaimable-space totals.").font(.caption).foregroundStyle(.secondary)
-                            HStack { Button("Browse locations") { show() }; Button("Add a location…") { model.addRoot() }.disabled(model.running || model.inspecting || model.discovering) }
-                        }
-                    }
-                }
-            }.padding(22)
-        }.background(Color(nsColor: .windowBackgroundColor))
+        ScrollView(.vertical) {
+        VStack(alignment: .leading, spacing: 12) {
+            scanStatus
+            HStack(alignment: .top, spacing: 12) {
+                driveCard.frame(maxWidth: .infinity)
+                freeSpaceChart.frame(maxWidth: .infinity)
+            }.frame(height: 172)
+            HStack(spacing: 10) {
+                metric("Measured", value: measured.count.formatted(), detail: "locations", symbol: "folder", tint: .accentColor) { show() }
+                metric("Growing", value: growthCount.formatted(), detail: growthCount == 0 ? "since last comparable scan" : "need a look", symbol: "chart.line.uptrend.xyaxis", tint: growthCount > 0 ? .growing : .secondary) { model.categoryFilter = nil; model.section = .locations; model.locationFilter = .growing }
+                metric("Watching", value: model.preferences.locations.filter { ($0.value.watched || $0.value.recurring) && !model.preferences.excluded($0.key) }.count.formatted(), detail: "checked first", symbol: "eye", tint: .accentColor) { model.categoryFilter = nil; model.section = .watching }
+                metric("Needs attention", value: model.attentionCount.formatted(), detail: "not measured", symbol: "exclamationmark.triangle", tint: model.attentionCount > 0 ? .attention : .secondary) { model.categoryFilter = nil; model.section = .needsAttention }
+            }
+            HStack(alignment: .top, spacing: 12) {
+                categories.frame(maxWidth: .infinity)
+                largest.frame(maxWidth: .infinity)
+            }
+        }.padding(.horizontal, 22).padding(.bottom, 10)
+        }.scrollBounceBehavior(.basedOnSize)
+    }
+    @ViewBuilder private var scanStatus: some View {
+        if model.running || model.discovering {
+            HStack(spacing: 12) {
+                ProgressView(value: model.running ? Double(model.completed) : 0, total: Double(max(model.targetCount, 1))).frame(width: 160)
+                Text(model.running ? "Scanning \(model.completed) of \(model.targetCount) · \(model.progress)" : model.progress).font(.caption).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Button("Cancel") { model.cancelWork() }.controlSize(.small)
+            }.padding(10).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else if let last = model.lastScan {
+            HStack(spacing: 8) {
+                Image(systemName: last.complete ? "checkmark.circle.fill" : "exclamationmark.circle.fill").foregroundStyle(last.complete ? Color.stable : Color.growing).accessibilityHidden(true)
+                Text("Last scan \(last.finishedAt.formatted(date: .abbreviated, time: .shortened)) · \(last.scope.lowercased()) · \(last.measurements.count) \(last.measurements.count == 1 ? "location" : "locations")\(last.complete ? "" : " · stopped early")").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Scan Now", systemImage: "arrow.clockwise") { model.scan() }.controlSize(.small).disabled(model.inspecting || model.store == nil)
+            }.padding(.horizontal, 4)
+        }
     }
     private func metric(_ title: String, value: String, detail: String, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol).font(.title2).foregroundStyle(tint).frame(width: 44, height: 44).background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 3) { Text(title).font(.caption).foregroundStyle(.secondary); Text(value).font(.title2.weight(.semibold)); Text(detail).font(.caption).foregroundStyle(.secondary) }
-                Spacer(); Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-            }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-        }.buttonStyle(.plain).accessibilityLabel("\(title): \(value). \(detail)")
+            HStack(spacing: 8) {
+                Image(systemName: symbol).font(.body).foregroundStyle(tint).frame(width: 22).accessibilityHidden(true)
+                Text(value).font(.title3.weight(.semibold)).monospacedDigit()
+                VStack(alignment: .leading, spacing: 0) { Text(title).font(.caption.weight(.medium)); Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 10).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }.buttonStyle(.plain).accessibilityLabel("\(title): \(value) \(detail)")
     }
     private var driveCard: some View {
-        Panel(title: "Your Mac’s storage", symbol: "internaldrive", tint: .accentColor) {
+        Panel(title: "Your Mac’s storage", symbol: "internaldrive") {
             if let volume = model.volume {
-                HStack(spacing: 22) {
+                HStack(spacing: 18) {
                     ZStack {
                         Chart {
-                            SectorMark(angle: .value("Used", volume.used), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.indigo.gradient)
-                            SectorMark(angle: .value("Free", volume.free), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.accentColor.gradient)
+                            SectorMark(angle: .value("Used", volume.used), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.secondary.opacity(0.35))
+                            SectorMark(angle: .value("Free", volume.free), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.accentColor)
                         }.chartLegend(.hidden)
-                        VStack(spacing: 3) { Text((Double(volume.used) / Double(volume.total)).formatted(.percent.precision(.fractionLength(0)))).font(.system(size: 27, weight: .semibold, design: .rounded)); Text("used").font(.caption).foregroundStyle(.secondary) }
-                    }.frame(width: 148, height: 148).accessibilityElement(children: .ignore).accessibilityLabel("\(byteLabel(volume.used)) used of \(byteLabel(volume.total)) total")
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(byteLabel(volume.free)).font(.system(size: 30, weight: .semibold, design: .rounded)).minimumScaleFactor(0.7).lineLimit(1)
-                        Text("available on your home volume").font(.caption).foregroundStyle(.secondary)
-                        Label("\(byteLabel(volume.used)) used", systemImage: "circle.fill").foregroundStyle(.indigo).font(.caption)
-                        Label("\(byteLabel(volume.total)) total", systemImage: "internaldrive").font(.caption).foregroundStyle(.secondary)
+                        VStack(spacing: 2) { Text((Double(volume.used) / Double(volume.total)).formatted(.percent.precision(.fractionLength(0)))).font(.title2.weight(.semibold)).monospacedDigit(); Text("used").font(.caption2).foregroundStyle(.secondary) }
+                    }.frame(width: 96, height: 96).accessibilityElement(children: .ignore).accessibilityLabel("\(byteLabel(volume.used)) used of \(byteLabel(volume.total)) total")
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(byteLabel(volume.free)).font(.title2.weight(.semibold)).monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+                        Text("free on your home volume").font(.caption).foregroundStyle(.secondary)
+                        Label("\(byteLabel(volume.used)) used of \(byteLabel(volume.total))", systemImage: "circle.fill").font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            Text("Checked \(volume.date.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.tertiary)
+                            Button("Refresh") { model.refreshVolume() }.buttonStyle(.link).font(.caption2)
+                        }
                     }
+                    Spacer(minLength: 0)
                 }
-                HStack { Text("Capacity checked \(volume.date.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary); Spacer(); Button("Refresh", systemImage: "arrow.clockwise") { model.refreshVolume() }.buttonStyle(.borderless) }
-                Text("Volume capacity is separate from folder scanning. Sizes use binary units; APFS shares capacity across volumes.").font(.caption2).foregroundStyle(.secondary)
             } else { Text("Volume capacity is unavailable."); Button("Try again") { model.refreshVolume() } }
         }
     }
     private var freeSpaceChart: some View {
-        Panel(title: "Free space over time", symbol: "chart.xyaxis.line", tint: .accentColor) {
-            if let last = freeHistory.last, let bytes = last.freeBytes {
-                HStack(alignment: .firstTextBaseline) { Text(byteLabel(bytes)).font(.title2.weight(.semibold)); Text("at last scan").font(.caption).foregroundStyle(.secondary) }
-                Chart(freeHistory) { record in
-                    LineMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.5))
-                    PointMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.accentColor)
-                    if let selectedDate, let picked = freeHistory.min(by: { abs($0.finishedAt.timeIntervalSince(selectedDate)) < abs($1.finishedAt.timeIntervalSince(selectedDate)) }), picked.id == record.id {
-                        RuleMark(x: .value("Selected", picked.finishedAt)).foregroundStyle(.secondary).annotation(position: .top, alignment: .leading) { Text(byteLabel(picked.freeBytes ?? 0)).font(.caption).padding(4).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5)) }
+        Panel(title: "Free space, last 7 days", symbol: "chart.xyaxis.line") {
+            let points = freeHistory.filter { timeWindow.contains($0.finishedAt) }
+            if points.isEmpty {
+                Text("Each scan records the free space at that moment. Run a scan to add the first point.").font(.caption).foregroundStyle(.secondary).frame(maxHeight: .infinity)
+            } else {
+                Chart(points) { record in
+                    LineMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2)).interpolationMethod(.monotone)
+                    PointMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.accentColor).symbolSize(28)
+                    if let selectedDate, let picked = points.min(by: { abs($0.finishedAt.timeIntervalSince(selectedDate)) < abs($1.finishedAt.timeIntervalSince(selectedDate)) }), picked.id == record.id {
+                        RuleMark(x: .value("Selected", picked.finishedAt)).foregroundStyle(.tertiary)
                     }
-                }.chartXSelection(value: $selectedDate).chartYScale(domain: freeRange).chartYAxisLabel("GiB").frame(height: 122)
-                Text("\(freeHistory.count) scan-time observations · Last \(last.finishedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-                Text("Zoomed vertical scale. Changes include all disk activity; their cause is not recorded.").font(.caption2).foregroundStyle(.secondary)
-            } else { ContentUnavailableView("History starts with a scan", systemImage: "chart.xyaxis.line", description: Text("Each completed observation adds a real point. No earlier data is invented.")) }
+                }
+                .chartXSelection(value: $selectedDate)
+                .chartXScale(domain: timeWindow)
+                .chartYScale(domain: freeRange)
+                .chartXAxis { AxisMarks(values: .stride(by: .day)) { _ in AxisGridLine(); AxisTick(); AxisValueLabel(format: .dateTime.weekday(.abbreviated)) } }
+                .chartYAxis { AxisMarks(position: .trailing, values: .automatic(desiredCount: 4)) }
+                .frame(maxHeight: .infinity)
+                .accessibilityLabel("Free space over the last seven days, \(points.count) observations")
+                HStack {
+                    if let selectedDate, let picked = points.min(by: { abs($0.finishedAt.timeIntervalSince(selectedDate)) < abs($1.finishedAt.timeIntervalSince(selectedDate)) }) {
+                        Text("\(picked.finishedAt.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(picked.freeBytes ?? 0)) free").font(.caption).monospacedDigit()
+                    } else if let first = points.first?.freeBytes, let last = points.last?.freeBytes, points.count > 1 {
+                        let delta = last - first
+                        Text("\(delta >= 0 ? "+" : "−")\(byteLabel(abs(delta))) free since \(points.first!.finishedAt.formatted(date: .abbreviated, time: .omitted)) · \(points.count) scans").font(.caption).foregroundStyle(delta < 0 ? Color.growing : .secondary).monospacedDigit()
+                    } else { Text("One observation so far.").font(.caption).foregroundStyle(.secondary) }
+                    Spacer()
+                    Text("GiB, all disk activity").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
         }
     }
     private var categories: some View {
-        Panel(title: "Where the measured space goes", symbol: "square.stack.3d.up", tint: .purple) {
+        Panel(title: "Where the measured space goes", symbol: "square.stack.3d.up") {
             if groups.isEmpty { Text("Scan a location to start mapping its storage.").foregroundStyle(.secondary) }
-            ForEach(groups) { group in
-                Button { show(group.category) } label: {
-                    VStack(alignment: .leading, spacing: 7) {
-                        HStack { Label(group.category.rawValue, systemImage: group.category.symbol).foregroundStyle(group.category.tint); Spacer(); Text(byteLabel(group.bytes)).fontWeight(.semibold).monospacedDigit(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary) }
-                        ProportionBar(value: Double(group.bytes) / Double(max(groups.first?.bytes ?? 1, 1)), tint: group.category.tint)
-                    }.padding(.vertical, 5).contentShape(Rectangle())
-                }.buttonStyle(.plain).help(group.category.shortPurpose)
+            else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(byteLabel(total)).font(.title2.weight(.semibold)).monospacedDigit()
+                    Text("in \(groups.reduce(0) { $0 + $1.count }) measured locations").font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { showingCaveats.toggle() } label: { Image(systemName: "questionmark.circle") }.buttonStyle(.borderless).accessibilityLabel("How these totals are counted")
+                        .popover(isPresented: $showingCaveats, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("How these totals are counted").font(.headline)
+                                Text("Latest saved size per location, nested folders counted once. Measurements can be from different scans. Parent folders include their children. APFS shares blocks between files, so this is not reclaimable space and never equals the used space on the volume.")
+                                Text("Coverage is the catalog in Settings › Coverage plus folders you add. It is not a whole-disk scan.").foregroundStyle(.secondary)
+                            }.font(.callout).padding(16).frame(width: 360)
+                        }
+                }
+                GeometryReader { geo in
+                    HStack(spacing: 2) {
+                        ForEach(groups) { group in
+                            Rectangle().fill(group.category.tint).frame(width: max(2, geo.size.width * Double(group.bytes) / Double(max(total, 1)) - 2))
+                                .help("\(group.category.rawValue) · \(byteLabel(group.bytes))")
+                        }
+                    }.clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                }.frame(height: 18).accessibilityElement(children: .ignore).accessibilityLabel(groups.map { "\($0.category.rawValue) \(byteLabel($0.bytes))" }.joined(separator: ", "))
+                LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 3) {
+                    ForEach(groups) { group in
+                        Button { show(group.category) } label: {
+                            HStack(spacing: 7) {
+                                Circle().fill(group.category.tint).frame(width: 9, height: 9).accessibilityHidden(true)
+                                Text(group.category.rawValue).font(.caption).lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text(byteLabel(group.bytes)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            }.contentShape(Rectangle())
+                        }.buttonStyle(.plain).help(group.category.shortPurpose).accessibilityLabel("\(group.category.rawValue), \(byteLabel(group.bytes)), show locations")
+                    }
+                }
+                Spacer(minLength: 0)
             }
-            Text("Latest saved sizes, with nested folders counted once. Click a category to explore its locations.").font(.caption).foregroundStyle(.secondary)
         }
     }
     private var largest: some View {
-        Panel(title: "Start with the biggest locations", symbol: "magnifyingglass", tint: .blue) {
-            ForEach(measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }.prefix(6)) { item in
+        Panel(title: "Largest locations", symbol: "arrow.down.right.and.arrow.up.left") {
+            ForEach(measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }.prefix(5)) { item in
                 Button { open(item) } label: {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: item.profile.category.symbol).font(.title3).foregroundStyle(item.profile.category.tint).frame(width: 32, height: 32).background(item.profile.category.tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
-                        VStack(alignment: .leading, spacing: 4) { Text(item.profile.name).fontWeight(.medium).lineLimit(2); Text(item.profile.project ?? item.profile.associatedApp).font(.caption).foregroundStyle(.secondary); Text(item.observedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption2).foregroundStyle(.tertiary) }
-                        Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").monospacedDigit(); Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-                    }.padding(.vertical, 8).contentShape(Rectangle())
-                }.buttonStyle(.plain)
+                    HStack(spacing: 10) {
+                        Image(systemName: item.profile.category.symbol).foregroundStyle(item.profile.category.tint).frame(width: 22).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 1) { Text(item.profile.name).font(.callout).lineLimit(1); Text(item.profile.project ?? item.profile.associatedApp).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                        Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit()
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true)
+                    }.padding(.vertical, 1).contentShape(Rectangle())
+                }.buttonStyle(.plain).contextMenu { LocationActions(model: model, path: item.profile.path) }
             }
-            Text("Large does not mean unused. Open a location to understand its purpose and the cost of manual removal.").font(.caption).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Text("Large does not mean unused. Context Cleaner never deletes files. You decide, in Finder.").font(.caption2).foregroundStyle(.secondary)
         }
     }
 }

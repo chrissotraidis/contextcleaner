@@ -71,10 +71,10 @@ struct MainView: View {
     var header: some View {
         HStack(alignment: .center, spacing: 14) {
             if model.section == .overview, let icon = NSImage(named: "NSApplicationIcon") {
-                Image(nsImage: icon).resizable().frame(width: 54, height: 54)
+                Image(nsImage: icon).resizable().frame(width: 40, height: 40).accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.section == .overview ? "Understand your space." : model.section.rawValue).font(.largeTitle.weight(.semibold))
+                Text(model.section == .overview ? "Understand your space." : model.section.rawValue).font(.title.weight(.semibold))
                 Text(model.section.subtitle).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -85,7 +85,7 @@ struct MainView: View {
                     Text("Capacity checked \(v.date.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
                 }
             } else { CapsuleLabel(text: "Read-only by design", symbol: "lock.shield") }
-        }.padding(.horizontal, 22).padding(.vertical, 18)
+        }.padding(.horizontal, 22).padding(.top, 12).padding(.bottom, 10)
     }
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {

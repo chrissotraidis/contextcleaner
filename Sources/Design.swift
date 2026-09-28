@@ -4,7 +4,7 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview = "Overview", locations = "Folders", watching = "Watchlist", needsAttention = "Scan Issues", history = "Scan History"
+    case overview = "Overview", locations = "Folders", watching = "Watchlist", needsAttention = "Couldn't Scan", history = "Scan History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -17,11 +17,11 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .overview: return "Find large folders and see what has changed."
-        case .locations: return "Folder sizes, what they contain, and which apps use them."
-        case .watching: return "Folders to check again. These get priority in scheduled scans."
-        case .needsAttention: return "Scans that could not finish. Select a folder for the reason and next step."
-        case .history: return "A record of folder scans: what was checked, when, and the result."
+        case .overview: return "How full your disk is, and what's filling it."
+        case .locations: return "Every folder Context Cleaner knows, largest first."
+        case .watching: return "Folders you're keeping an eye on. Scheduled checks look at these first."
+        case .needsAttention: return "Folders a scan couldn't read, with a fix for each."
+        case .history: return "Each scan: what it checked, when, and what it found."
         }
     }
     /// Sidebar icons use a status hue only where the destination is itself a status.
@@ -33,13 +33,33 @@ enum LocationFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Saved sizes from your scans. Select a folder for details."
-        case .scanned: return "Folders with a complete saved size. Dates are shown in folder details."
-        case .unscanned: return "Folders found on your Mac that have not been scanned yet. This is not an error."
-        case .rebuildable: return "Caches and build output that a tool can recreate, with no process holding files open at scan time. Rebuildable is not the same as unused; review each before removing anything yourself."
-        case .growing: return "Locations that grew between two comparable scans and are not marked as expected."
-        case .reviewLater: return "Locations you asked to be reminded about later."
-        case .excluded: return "Locations you told Context Cleaner not to scan. Nothing here is measured."
+        case .all: return "Sizes from your latest scans."
+        case .scanned: return "Folders with a complete size."
+        case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
+        case .rebuildable: return "Caches and build files a tool can recreate. Check each before removing anything yourself."
+        case .growing: return "Grew between two scans and not marked as expected."
+        case .reviewLater: return "Folders you asked to come back to."
+        case .excluded: return "Folders you turned off. They aren't scanned."
+        }
+    }
+}
+
+extension MeasurementState {
+    /// Why a scan couldn't read a folder, in plain words.
+    var problem: String {
+        switch self {
+        case .inaccessible: return "macOS blocked access"
+        case .limited: return "Too large for the time limit"
+        case .missing: return "Folder no longer exists"
+        default: return "Scan couldn't finish"
+        }
+    }
+    var problemSymbol: String {
+        switch self {
+        case .inaccessible: return "lock"
+        case .limited: return "hourglass"
+        case .missing: return "questionmark.folder"
+        default: return "exclamationmark.triangle"
         }
     }
 }

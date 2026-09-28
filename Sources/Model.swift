@@ -13,24 +13,25 @@ struct FolderRow: Identifiable {
     var delta: Int64 { change.delta ?? Int64.min }
     var category: String { measurement.profile.category.displayName }
     var growing: Bool { (change.delta ?? 0) > 0 && (change.delta ?? 0) >= (policy.growthThresholdBytes ?? 0) && !policy.expected }
+    /// One plain word, shown only when it tells you something. Empty for an ordinary scanned folder.
     var status: String {
         if policy.excluded { return "Excluded" }
         if measurement.state == .pending { return "Not scanned" }
         if measurement.state != .measured {
             switch measurement.state {
-            case .inaccessible: return "Access needed"
-            case .limited: return "Scan limit reached"
-            case .missing: return "Not found"
+            case .inaccessible: return "Blocked"
+            case .limited: return "Too large"
+            case .missing: return "Missing"
             case .cancelled: return "Stopped"
-            default: return "Scan failed"
+            default: return "Failed"
             }
         }
         if (policy.reviewAfter ?? .distantPast) > Date() { return "Review later" }
         if policy.expected { return "Expected" }
-        if growing { return policy.autoWatched == true ? "Growing · watched" : "Growing" }
-        if !measurement.processes.isEmpty { return "Open handles" }
-        if policy.isWatched { return policy.autoWatched == true ? "Watching (auto)" : "Watching" }
-        return "Measured"
+        if growing { return "Growing" }
+        if policy.isWatched { return "Watching" }
+        if !measurement.processes.isEmpty { return "In use" }
+        return ""
     }
     /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
     var statusTint: Color {
@@ -62,7 +63,42 @@ struct FolderRow: Identifiable {
     @Published var search = ""
     @Published var categoryFilter: FolderCategory?
     @Published var volume = VolumeSnapshot.read()
-    func refreshVolume() { volume = VolumeSnapshot.read() }
+    /// Hourly disk-capacity readings for the Space used chart. Append-only.
+    @Published var capacity: [CapacityReading] = []
+    /// One-line result of the most recent scan, shown under the page header until dismissed.
+    @Published var lastResult: String?
+    func refreshVolume() { volume = VolumeSnapshot.read(); recordCapacityIfDue() }
+    /// Minimum spacing between stored capacity readings.
+    static let capacityInterval: TimeInterval = 55 * 60
+    /// Appends the current capacity reading when the previous one is at least 55 minutes older.
+    /// Reads no folders and removes nothing.
+    func recordCapacityIfDue() {
+        guard let store, let v = volume else { return }
+        if let last = capacity.last, v.date.timeIntervalSince(last.date) < Self.capacityInterval { return }
+        let reading = CapacityReading(date: v.date, total: v.total, free: v.free)
+        do { try store.appendCapacity(reading); capacity.append(reading) }
+        catch { self.error = "A disk-space reading could not be saved: \(error.localizedDescription)" }
+    }
+    private var usageCache: (key: String, value: [UsageReading]) = ("", [])
+    /// Used-space readings from scans, hourly checks and the live reading.
+    var usage: [UsageReading] {
+        let key = "\(recordsVersion)|\(capacity.count)|\(volume?.date.timeIntervalSince1970 ?? 0)"
+        if usageCache.key == key { return usageCache.value }
+        let value = usageReadings(records: records, capacity: capacity, current: volume)
+        usageCache = (key, value)
+        return value
+    }
+    /// Scanned folders that grew inside a span, excluding folders the user turned off.
+    func foldersThatGrew(from: Date, to: Date, limit: Int = 5) -> [FolderGrowth] {
+        refreshDerived()
+        let profiles = Dictionary(latest.map { ($0.profile.path, $0.profile) }, uniquingKeysWith: { a, _ in a })
+        return folderGrowth(history: derived.history, profile: { self.preferences.excluded($0) ? nil : profiles[$0] }, from: from, to: to, limit: limit)
+    }
+    func sparkline(_ path: String) -> [Double] { sparklineValues(history(path)) }
+    /// Opens a folder in the Folders list with the inspector showing it.
+    func open(_ path: String) {
+        categoryFilter = nil; search = ""; locationFilter = .all; section = .locations; selected = path
+    }
     @Published var running = false
     @Published var progress = "Ready"
     @Published var completed = 0
@@ -90,6 +126,7 @@ struct FolderRow: Identifiable {
             let legacy = URL(fileURLWithPath: home + "/Library/Application Support/SpaceCheck/history.json")
             if FileManager.default.fileExists(atPath: legacy.path) { _ = try storage.importLegacy(legacy, home: home) }
             records = storage.records(); preferences = storage.preferences()
+            capacity = storage.capacityReadings()
             discovery = storage.learnedDiscovery() ?? Discovery(profiles: [], notes: [])
             store = storage
             error = storage.warnings.isEmpty ? nil : storage.warnings.joined(separator: "\n")
@@ -98,6 +135,7 @@ struct FolderRow: Identifiable {
         for path in preferences.customRoots where saved[path] == nil { saved[path] = Classifier.profile(path: path, home: home, readMetadata: false) }
         for record in records { for item in record.measurements { saved[item.profile.path] = item.profile } }
         discovery = Discovery(profiles: saved.values.sorted { $0.path < $1.path }, notes: ["Showing saved locations. Discovery runs only when requested. Coverage is recognized development/cache locations and your selected roots, not the whole disk."])
+        recordCapacityIfDue()
     }
     // Derived state is rebuilt only when its inputs change; SwiftUI reads these many times per frame.
     private struct Derived { var key = ""; var latest: [FolderMeasurement] = []; var history: [String: [HistoryPoint]] = [:]; var growth: [String: GrowthSummary] = [:] }
@@ -342,7 +380,9 @@ struct FolderRow: Identifiable {
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
                 self.autoWatch(after: record)
-                self.running = false; self.progress = record.resultSummary
+                let grew = record.measurements.filter { $0.state == .measured && (self.growthSummary($0.profile.path).delta ?? 0) > 0 }.count
+                self.lastResult = scanOutcome(record, grew: grew)
+                self.running = false; self.progress = self.lastResult ?? record.resultSummary
             }
         }
     }
@@ -402,12 +442,12 @@ struct FolderRow: Identifiable {
         text += "| Location | Size | Change | Status | Owner |\n|---|---:|---:|---|---|\n"
         for row in listed {
             let change = row.change.delta.map { "\($0 >= 0 ? "+" : "−")\(byteLabel(abs($0)))" } ?? "—"
-            text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(change) | \(row.status) | \(row.app) |\n"
+            text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(change) | \(row.status.isEmpty ? "Scanned" : row.status) | \(row.app) |\n"
         }
         text += "\n"
         for row in listed {
             let p = row.measurement.profile
-            text += "## \(p.name)\n\n`\(p.path)`\n\n\(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status)\n\n\(p.explanation)\n\nBefore any manual change: \(p.consequence)\n\n"
+            text += "## \(p.name)\n\n`\(p.path)`\n\n\(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status.isEmpty ? "Scanned" : row.status)\n\n\(p.explanation)\n\nBefore any manual change: \(p.consequence)\n\n"
             for e in p.evidence { text += "- \(e.level.rawValue): \(e.label) — \(e.value)\n" }
             let policy = preferences.policy(p.path)
             if !policy.tags.isEmpty { text += "\nTags: \(policy.tags.joined(separator: ", "))\n" }

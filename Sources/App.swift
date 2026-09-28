@@ -8,17 +8,20 @@ struct TracePoint: Identifiable {
 }
 struct MainView: View {
     @ObservedObject var model: CleanerModel
-    @Environment(\.colorScheme) var colorScheme
     @State var sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)]
     var appearance: String { model.preferences.appearance ?? "System" }
     @State var simulatorSearch = ""
     @State var showingAccessHelp = false
+    @State var showInside = false
+    @State var showDetails = false
     let timer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
+    var busy: Bool { model.running || model.inspecting || model.discovering }
     var body: some View {
         NavigationSplitView {
             List(selection: Binding(get: { model.section }, set: { model.categoryFilter = nil; model.section = $0 })) {
                 ForEach(AppSection.allCases, id: \.self) { section in
-                    Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(section.tint ?? Color.primary) }.tag(section)
+                    let quiet = section == .needsAttention && model.attentionCount == 0
+                    Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(quiet ? Color.secondary : section.tint ?? Color.primary) }.tag(section)
                         .badge(section == .needsAttention ? model.attentionCount : 0)
                 }
             }.navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
@@ -28,6 +31,7 @@ struct MainView: View {
         } detail: {
             VStack(spacing: 0) {
                 header
+                scanBanner
                 if model.section == .overview { Dashboard(model: model) }
                 else if model.section == .history { scanHistory }
                 else {
@@ -35,7 +39,10 @@ struct MainView: View {
                     // so the header, table and inspector stay inside the visible area at any size.
                     GeometryReader { geometry in
                         HStack(spacing: 0) {
-                            VStack(spacing: 0) { filterBar; categoryBanner; folderTable }
+                            VStack(spacing: 0) {
+                                filterBar; categoryBanner
+                                if model.section == .needsAttention { issuesTable } else { folderTable }
+                            }
                             Divider()
                             inspector.frame(width: min(max(geometry.size.width * 0.36, 340), 520))
                         }
@@ -46,7 +53,8 @@ struct MainView: View {
         }
         .frame(minWidth: 1100, minHeight: 700)
         .preferredColorScheme(appearance == "Light" ? .light : appearance == "Dark" ? .dark : nil)
-        .onChange(of: model.selected) { _, _ in model.inspector = "Overview" }
+        .onChange(of: model.selected) { _, _ in model.inspector = "Overview"; showInside = false; showDetails = false }
+        .onChange(of: model.inspector) { _, value in if value == "Contents" { showInside = true } }
         .onChange(of: model.search) { _, value in
             if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil }
             model.retainVisibleSelection()
@@ -56,17 +64,21 @@ struct MainView: View {
         .onChange(of: model.categoryFilter) { _, _ in model.retainVisibleSelection() }
         .toolbar {
             ToolbarItemGroup {
-                Button { model.showingScanPlan = true } label: { Label("Scan Folders…", systemImage: "magnifyingglass").labelStyle(.titleAndIcon) }
-                    .buttonStyle(.borderedProminent).help("Choose what Context Cleaner will scan (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)
-                if model.running || model.discovering { Button("Stop Scan") { model.cancelWork() } }
+                if model.running || model.discovering {
+                    Button { model.cancelWork() } label: { Label("Stop Scan", systemImage: "stop.circle").labelStyle(.titleAndIcon) }
+                        .help("Stop after the folder being read now (Command-.)")
+                } else {
+                    Button { model.showingScanPlan = true } label: { Label("Scan Folders…", systemImage: "magnifyingglass").labelStyle(.titleAndIcon) }
+                        .buttonStyle(.borderedProminent).help("See what will be scanned, then start (Command-R)").disabled(model.inspecting || model.store == nil)
+                }
             }
             if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
             ToolbarItemGroup {
-                Button { model.exportReport() } label: { Label("Report…", systemImage: "doc.text").labelStyle(.titleAndIcon) }.help("Preview a local folder report before saving (Shift-Command-E)")
-                Button { model.toggleAppearance(current: colorScheme) } label: { Label(colorScheme == .dark ? "Switch to Light" : "Switch to Dark", systemImage: colorScheme == .dark ? "sun.max" : "moon") }.help("Toggle light and dark. Choose Match System in Settings.")
+                Button { model.exportReport() } label: { Label("Export Report…", systemImage: "square.and.arrow.up") }
+                    .help("Preview a Markdown report of the folders shown here, then save it (Shift-Command-E)")
             }
         }
-        .searchable(text: $model.search, prompt: "Search names, projects, apps, tags")
+        .searchable(text: $model.search, prompt: "Search folders, apps, projects, tags")
         .sheet(item: Binding(get: { model.editing.map { EditTarget(id: $0) } }, set: { model.editing = $0?.id })) { target in
             PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; model.editing = nil }
         }
@@ -76,198 +88,328 @@ struct MainView: View {
             ReportPreview(model: model, text: model.reportPreview ?? "")
         }
         .onReceive(timer) { _ in
+            model.refreshVolume()
             model.checkScheduledPass()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.cancellation.cancel(); model.inspectionCancellation.cancel() }
     }
     var header: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 12) {
             if model.section == .overview, let icon = NSImage(named: "NSApplicationIcon") {
-                Image(nsImage: icon).resizable().frame(width: 40, height: 40).accessibilityHidden(true)
+                Image(nsImage: icon).resizable().frame(width: 34, height: 34).accessibilityHidden(true)
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(model.section == .overview ? "Storage at a glance" : model.section.rawValue).font(.title.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.section.rawValue).font(.title2.weight(.semibold))
                 Text(model.section.subtitle).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
             if model.section != .overview, let v = model.volume {
-                VStack(alignment: .trailing, spacing: 5) {
-                    Text("\(byteLabel(v.free)) free / \(byteLabel(v.total))").font(.caption).monospacedDigit()
-                    ProportionBar(value: Double(v.used) / Double(v.total), tint: .indigo).frame(width: 180)
-                    Text("\((Double(v.used) / Double(v.total)).formatted(.percent.precision(.fractionLength(0)))) used · checked \(v.date.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
-                }
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("\(byteLabel(v.free)) free of \(byteLabel(v.total))").font(.caption).monospacedDigit()
+                    ProportionBar(value: Double(v.used) / Double(max(v.total, 1)), tint: .accentColor).frame(width: 160)
+                }.help("Checked \(v.date.formatted(date: .omitted, time: .shortened))")
             } else { CapsuleLabel(text: "Never deletes files", symbol: "lock.shield") }
-        }.padding(.horizontal, 22).padding(.top, 12).padding(.bottom, 10)
+        }.padding(.horizontal, 22).padding(.top, 10).padding(.bottom, 10)
+    }
+    /// Scope and progress while a scan runs, then a one-line result.
+    @ViewBuilder var scanBanner: some View {
+        if model.running || model.discovering {
+            HStack(spacing: 10) {
+                if model.running && model.targetCount > 0 {
+                    ProgressView(value: Double(model.completed), total: Double(max(model.targetCount, 1))).frame(width: 140)
+                    Text("Scanning \(model.completed) of \(model.targetCount) folders").font(.callout.weight(.medium)).monospacedDigit()
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Finding folders to scan…").font(.callout.weight(.medium))
+                }
+                Text(model.progress).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                Text("Reading sizes only").font(.caption).foregroundStyle(.secondary)
+                Button("Stop") { model.cancelWork() }.controlSize(.small)
+            }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.accentColor.opacity(0.08))
+        } else if let result = model.lastResult {
+            let stopped = result.hasPrefix("Stopped")
+            HStack(spacing: 10) {
+                Image(systemName: stopped ? "stop.circle" : "checkmark.circle.fill").foregroundStyle(stopped ? Color.growing : Color.accentColor).accessibilityHidden(true)
+                Text(result).font(.callout.weight(.medium))
+                Spacer()
+                if model.overview.growthCount > 0 { Button("Show Growing") { model.categoryFilter = nil; model.search = ""; model.section = .locations; model.locationFilter = .growing }.controlSize(.small) }
+                if model.attentionCount > 0 { Button("Show Problems") { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention }.controlSize(.small) }
+                Button { model.lastResult = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel("Dismiss scan result")
+            }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.secondary.opacity(0.08))
+        }
     }
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
             HStack(spacing: 12) {
-                Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).frame(width: 195)
+                Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).fixedSize()
+                Text(model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
-                Text(model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) matches in \(model.locationFilter.rawValue) · names, projects, apps and tags").font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 380, alignment: .trailing)
             }.padding(.horizontal, 16).padding(.bottom, 8)
         } else if !model.search.isEmpty {
-            Text("Matching “\(model.search)” in names, projects, apps and tags · \(model.rows.count) locations").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 8)
+            Text("\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
         }
         if let summary = model.selectionSummary {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.circle").foregroundStyle(Color.accentColor).accessibilityHidden(true)
                 Text("\(model.selection.count) selected · \(byteLabel(summary.bytes))").font(.callout.weight(.semibold)).monospacedDigit()
-                Text(summary.unmeasured > 0 ? "nested folders counted once · \(summary.unmeasured) not measured" : "nested folders counted once").font(.caption).foregroundStyle(.secondary)
+                Text(summary.unmeasured > 0 ? "folders inside others counted once · \(summary.unmeasured) not scanned" : "folders inside others counted once").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.controlSize(.small)
-                Button("Watch All") { for path in model.selection { model.policy(path) { $0.isWatched = true } } }.controlSize(.small)
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.controlSize(.small)
                 Button("Clear") { model.selection = [] }.controlSize(.small)
             }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
         }
     }
     @ViewBuilder var categoryBanner: some View {
         if let category = model.categoryFilter {
-            HStack(alignment: .top, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 Image(systemName: category.symbol).font(.title2).foregroundStyle(category.tint).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) { Text(category.displayName).font(.headline); Text(category.shortPurpose).font(.caption).foregroundStyle(.secondary) }
-                Spacer(); Button("Clear filter", systemImage: "xmark.circle") { model.categoryFilter = nil }.labelStyle(.iconOnly).buttonStyle(.borderless)
-            }.padding(14).background(category.tint.opacity(0.07))
+                VStack(alignment: .leading, spacing: 2) { Text(category.displayName).font(.headline); Text(category.shortPurpose).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                Spacer(); Button("Show All Folders") { model.categoryFilter = nil }.controlSize(.small)
+            }.padding(12).background(category.tint.opacity(0.08))
         }
     }
+    func selectedRow(_ id: String) -> Bool { model.selection.contains(id) }
     var folderTable: some View {
         Table(model.rows.sorted(using: sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
-                VStack(alignment: .leading, spacing: 3) {
-                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(model.selection.contains(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
+                VStack(alignment: .leading, spacing: 2) {
+                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
                     Text(row.app + " · " + row.category).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-            }.width(min: 190, ideal: 260)
-            TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").monospacedDigit() }.width(min: 100, ideal: 110)
-            TableColumn("Change", value: \.delta) { row in
-                Text(row.change.delta.map { "\($0 > 0 ? "+" : $0 < 0 ? "−" : "")\(byteLabel(abs($0)))" } ?? (row.measurement.state == .pending ? "—" : "First scan")).font(.caption).foregroundStyle((row.change.delta ?? 0) > 0 ? Color.growing : .secondary)
-            }.width(min: 100, ideal: 110)
-            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selection.contains(row.id) ? Color.white : row.statusTint) }.width(min: 85, ideal: 110)
+            }.width(min: 200, ideal: 280)
+            TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").font(.callout).monospacedDigit() }.width(min: 90, ideal: 100)
+            TableColumn("Trend", value: \.delta) { row in
+                let values = model.sparkline(row.id)
+                HStack(spacing: 8) {
+                    Sparkline(values: values, tint: selectedRow(row.id) ? .white : values.trendTint)
+                    if let delta = row.change.delta, delta != 0 {
+                        Text(signedBytes(delta)).font(.caption).monospacedDigit().foregroundStyle(selectedRow(row.id) ? Color.white : delta > 0 ? Color.growing : Color.stable)
+                    }
+                }.help(values.count > 1 ? "Size across the last \(values.count) comparable scans" : "Needs two scans to show a trend")
+            }.width(min: 120, ideal: 150)
+            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(selectedRow(row.id) ? Color.white : row.statusTint) }.width(min: 70, ideal: 90)
         }
         .contextMenu(forSelectionType: String.self) { paths in
             if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }
             else if let path = paths.first { LocationActions(model: model, path: path) }
         }
         .overlay {
-            if model.rows.isEmpty { ContentUnavailableView(model.section == .needsAttention ? "No scan issues" : "No matching folders", systemImage: model.section == .needsAttention ? "checkmark.circle" : "folder", description: Text(model.section == .needsAttention ? "Scans that need access or reach a limit will appear here." : "Try another filter or scan folders to update the list.")) }
+            if model.rows.isEmpty {
+                ContentUnavailableView(model.section == .watching ? "Nothing on your watchlist" : "No matching folders", systemImage: model.section == .watching ? "eye" : "folder",
+                    description: Text(model.section == .watching ? "Right-click any folder and choose Add to Watchlist. Folders that grow a lot are added for you." : "Try another filter, or scan to update the list."))
+            }
+        }
+    }
+    /// Folders a scan couldn't read, each with its reason and one fix.
+    var issuesTable: some View {
+        Table(model.rows.sorted(using: sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
+            TableColumn("Folder", value: \.name) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
+                    Text(row.app).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }.width(min: 190, ideal: 250)
+            TableColumn("Problem", value: \.status) { row in
+                Label(row.measurement.state.problem, systemImage: row.measurement.state.problemSymbol).font(.callout).foregroundStyle(selectedRow(row.id) ? Color.white : Color.attention)
+            }.width(min: 180, ideal: 220)
+            TableColumn("Fix") { row in fixButton(row) }.width(min: 130, ideal: 150)
+        }
+        .contextMenu(forSelectionType: String.self) { paths in
+            if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }
+            else if let path = paths.first { LocationActions(model: model, path: path) }
+        }
+        .overlay {
+            if model.rows.isEmpty {
+                ContentUnavailableView {
+                    Label("Nothing to fix", systemImage: "checkmark.circle")
+                } description: {
+                    Text("Every scanned folder was read completely. If macOS blocks a folder, or one is too large or goes missing, it shows up here with a fix.")
+                }
+            }
+        }
+    }
+    @ViewBuilder func fixButton(_ row: FolderRow) -> some View {
+        let path = row.id
+        switch row.measurement.state {
+        case .inaccessible: Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small)
+        case .limited: Button("Scan Subfolders") { model.selected = path; model.inspector = "Contents"; model.inspectChildren(row.measurement) }.controlSize(.small).disabled(busy)
+        case .missing: Button("Stop Checking") { model.policy(path) { $0.excluded = true } }.controlSize(.small).disabled(model.running || model.inspecting).help("Turns this folder off. You can turn it back on in Settings › Coverage.")
+        default: Button("Try Again") { model.selected = path; model.scan(selectedOnly: true) }.controlSize(.small).disabled(busy)
         }
     }
     var inspector: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 if let summary = model.selectionSummary {
-                    Text("\(model.selection.count) locations selected").font(.title3.weight(.semibold))
+                    Text("\(model.selection.count) folders selected").font(.headline)
                     Text(byteLabel(summary.bytes)).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
-                    Text(summary.unmeasured > 0 ? "Measured sizes added, nested folders counted once. \(summary.unmeasured) selected \(summary.unmeasured == 1 ? "location has" : "locations have") no size yet." : "Measured sizes added, nested folders counted once.").font(.caption).foregroundStyle(.secondary)
+                    Text(summary.unmeasured > 0 ? "Added together, counting folders inside others once. \(summary.unmeasured) not scanned yet." : "Added together, counting folders inside others once.").font(.caption).foregroundStyle(.secondary)
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
-                        HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.displayName).font(.caption); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
+                        HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.displayName).font(.callout); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.callout).monospacedDigit().foregroundStyle(.secondary) }
                     }
                     Divider()
                     ForEach(summary.items.sorted { ($0.allocatedBytes ?? -1) > ($1.allocatedBytes ?? -1) }.prefix(12), id: \.profile.path) { item in
-                        HStack { Text(item.profile.displayName).font(.caption).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.caption).monospacedDigit() }
+                        HStack { Text(item.profile.displayName).font(.callout).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit() }
                     }
                     if summary.items.count > 12 { Text("and \(summary.items.count - 12) more").font(.caption).foregroundStyle(.secondary) }
-                    HStack { Button("Reveal All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.frame(maxWidth: 110) }
+                    HStack { Button("Show All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.fixedSize() }
                     Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
                 } else if let item = model.chosen {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 46, height: 46).background(item.profile.category.tint.opacity(0.12), in: Circle()).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(item.profile.displayName).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                            Text(item.profile.project ?? item.profile.associatedApp).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(item.allocatedBytes.map(byteLabel) ?? "Size unknown").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
-                        Spacer()
-                        Button { model.policy(item.profile.path) { $0.isWatched.toggle() } } label: { Label(model.preferences.policy(item.profile.path).isWatched ? "Watching" : "Watch folder", systemImage: model.preferences.policy(item.profile.path).isWatched ? "eye.fill" : "eye") }.buttonStyle(.bordered)
-                    }
-                    if item.state != .pending {
-                        Text("\(item.state == .measured ? "Scanned" : "Last attempt") \(item.observedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Picker("Folder details", selection: $model.inspector) {
-                        ForEach(["Overview", "Contents", "History", "Evidence"], id: \.self) { Text($0 == "History" ? "Size history" : $0 == "Evidence" ? "Sources" : $0).tag($0) }
-                    }.pickerStyle(.segmented).labelsHidden()
-                    if item.state != .measured {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Label(item.state == .pending ? "Not scanned yet" : item.state == .limited ? "This scan reached its limit" : item.state == .missing ? "Folder not found" : item.state == .inaccessible ? "Permission needed" : "Scan could not finish",
-                                  systemImage: item.state == .pending ? "clock" : "exclamationmark.triangle")
-                                .font(.headline).foregroundStyle(item.state == .pending ? Color.secondary : .attention)
-                            Text(item.state == .pending ? "Scan this folder to check its size. Your files stay untouched." : item.state == .limited ? "There was too much to check in the allowed time. Try a smaller subfolder or change the limits in Settings." : item.state == .missing ? "It may have moved or been removed since it was found." : item.state == .inaccessible ? "macOS did not allow access to this folder." : "No complete size was saved. Earlier readings are still available.")
-                                .font(.callout).foregroundStyle(.secondary)
-                            if item.state == .inaccessible { Button("How to Allow Access…") { showingAccessHelp = true } }
-                            if item.state == .limited { Button("Browse Subfolders") { model.inspector = "Contents" } }
-                            if item.state != .pending, let reason = item.diagnostic { DisclosureGroup("Technical details") { Text(reason).font(.caption).textSelection(.enabled) }.font(.caption) }
-                        }.padding(14).background(.background.secondary)
-                    }
-                    switch model.inspector {
-                    case "Contents": contents(item)
-                    case "History": history(item)
-                    case "Evidence": evidence(item)
-                    default: overview(item)
-                    }
-                    Divider()
-                    DisclosureGroup("Folder path") { Text(item.profile.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.top, 5) }
-                    HStack {
-                        Button("Scan Folder", systemImage: "magnifyingglass") { model.scan(selectedOnly: true) }
-                            .buttonStyle(.borderedProminent).disabled(!model.canRescanSelection).help("Check only this folder; no files are changed")
-                        Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) }
-                        Menu { LocationActions(model: model, path: item.profile.path) } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 26).accessibilityLabel("Folder actions")
-                    }
-                    Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
+                    folderInspector(item)
                 } else if model.running, let path = model.selected {
                     ProgressView()
-                    Text("Measuring selected location…").font(.title3)
+                    Text("Scanning this folder…").font(.headline)
                     Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    Text(model.progress).font(.callout)
                 } else {
-                    Image(systemName: "folder.badge.questionmark").font(.largeTitle).foregroundStyle(Color.accentColor).accessibilityHidden(true)
-                    Text(model.section == .needsAttention && model.rows.isEmpty ? "No scan issues" : "Choose a folder").font(.title2)
-                    Text(model.section == .needsAttention && model.rows.isEmpty ? "Folders that have not been scanned yet are in Folders › Not scanned." : "See its size, what it contains, and how it has changed.").foregroundStyle(.secondary)
-                    Text("Right-click a folder to add notes, watch it or skip future scans.").font(.callout)
+                    listSummary
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-    func overview(_ item: FolderMeasurement) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+    /// With nothing selected, the inspector sums up the visible list.
+    @ViewBuilder var listSummary: some View {
+        let rows = model.rows
+        let measured = rows.filter { $0.measurement.state == .measured }.map(\.measurement)
+        let biggest = measured.max { ($0.allocatedBytes ?? 0) < ($1.allocatedBytes ?? 0) }
+        let growers = rows.filter { ($0.change.delta ?? 0) > 0 }.sorted { ($0.change.delta ?? 0) > ($1.change.delta ?? 0) }.prefix(3)
+        let pending = rows.filter { $0.measurement.state == .pending }.count
+        let title = model.section == .locations ? (model.categoryFilter?.displayName ?? (model.locationFilter == .all ? "All folders" : model.locationFilter.rawValue)) : model.section.rawValue
+        Text(title).font(.headline)
+        if model.section == .needsAttention && rows.isEmpty {
+            Label("Nothing to fix", systemImage: "checkmark.circle").font(.title2.weight(.semibold)).foregroundStyle(.secondary)
+            Text("Folders that haven't been scanned yet are in Folders › Not scanned. That isn't a problem.").font(.callout).foregroundStyle(.secondary)
+        } else if model.section == .needsAttention {
+            Text("\(rows.count) \(rows.count == 1 ? "folder" : "folders") couldn't be read").font(.title2.weight(.semibold))
+            Text("Each row says why and offers one fix. Nothing is changed until you choose it.").font(.callout).foregroundStyle(.secondary)
+        } else {
+            Text(byteLabel(uniqueAllocatedTotal(measured))).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
+            Text("in \(measured.count) scanned \(measured.count == 1 ? "folder" : "folders")\(pending > 0 ? " · \(pending) not scanned yet" : "")").font(.callout).foregroundStyle(.secondary)
+            if let biggest, let bytes = biggest.allocatedBytes {
+                Divider()
+                Text("Biggest").font(.headline)
+                summaryRow(biggest.profile, value: byteLabel(bytes), tint: .secondary)
+            }
+            if !growers.isEmpty {
+                Text("Grew since the scan before").font(.headline)
+                ForEach(Array(growers), id: \.id) { row in summaryRow(row.measurement.profile, value: signedBytes(row.change.delta ?? 0), tint: .growing) }
+            }
+        }
+        Divider()
+        Text("Select a folder to see what it is. ⌘-click or ⇧-click several to add their sizes.").font(.caption).foregroundStyle(.secondary)
+    }
+    func summaryRow(_ profile: FolderProfile, value: String, tint: Color) -> some View {
+        Button { model.selected = profile.path } label: {
             HStack(spacing: 8) {
-                if let workspace = item.profile.evidence.first(where: { $0.label == "Workspace" }) { Label(workspace.value, systemImage: "folder.badge.gearshape").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                if let device = item.profile.evidence.first(where: { $0.label == "Device name" }) { Label(device.value, systemImage: "iphone").font(.caption).foregroundStyle(.purple).lineLimit(1) }
+                Image(systemName: profile.category.symbol).foregroundStyle(profile.category.tint).frame(width: 18).accessibilityHidden(true)
+                Text(profile.displayName).lineLimit(1)
+                Spacer()
+                Text(value).monospacedDigit().foregroundStyle(tint)
+            }.font(.callout).contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+    /// Size, owner and one sentence first. Contents and evidence stay folded until asked for.
+    @ViewBuilder func folderInspector(_ item: FolderMeasurement) -> some View {
+        let path = item.profile.path
+        let policy = model.preferences.policy(path)
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 42, height: 42).background(item.profile.category.tint.opacity(0.12), in: Circle()).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.profile.displayName).font(.headline).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text((item.profile.project ?? item.profile.associatedApp) + " · " + item.profile.category.displayName).font(.caption).foregroundStyle(.secondary)
             }
-            if item.state != .pending { FolderTrend(path: item.profile.path, points: model.history(item.profile.path), change: model.growthSummary(item.profile.path), compact: true) }
+        }
+        HStack(alignment: .firstTextBaseline) {
+            Text(item.state == .pending ? "Not scanned" : item.allocatedBytes.map(byteLabel) ?? "Size unknown").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
+            Spacer()
+            Button { model.policy(path) { $0.isWatched.toggle() } } label: { Label(policy.isWatched ? "Watching" : "Watch", systemImage: policy.isWatched ? "eye.fill" : "eye") }
+                .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")
+        }
+        Text(item.profile.category.shortPurpose).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        HStack(spacing: 8) {
+            CapsuleLabel(text: item.profile.category.reproducible ? "Usually rebuildable" : "May hold personal files", symbol: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised", color: item.profile.category.reproducible ? .accentColor : .secondary)
+            if item.state == .measured { Text("Scanned \(item.observedAt.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary) }
+        }
+        if item.state != .measured && item.state != .pending {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised").foregroundStyle(item.profile.category.reproducible ? Color.accentColor : Color.secondary).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.profile.category.reproducible ? "Can usually be rebuilt" : "May contain personal files").font(.headline)
-                    Text(item.profile.consequence).font(.callout).fixedSize(horizontal: false, vertical: true)
+                Image(systemName: item.state.problemSymbol).foregroundStyle(Color.attention).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.state.problem).font(.headline)
+                    Text(item.state == .limited ? "It holds too much to read in the allowed time. Scan its subfolders instead." : item.state == .missing ? "It may have been moved or removed since it was found." : item.state == .inaccessible ? "macOS didn't allow Context Cleaner to read it." : "No complete size was saved. Earlier sizes are kept.").font(.callout).foregroundStyle(.secondary)
+                    if item.state == .inaccessible { Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small) }
+                    if item.state == .limited { Button("Scan Subfolders") { model.inspector = "Contents"; model.inspectChildren(item) }.controlSize(.small).disabled(busy) }
                 }
+            }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Color.attention.opacity(0.08))
+        }
+        if item.state != .pending { FolderTrend(points: model.history(path), change: model.growthSummary(path)).id(path) }
+        if policy.autoWatched == true {
+            HStack(spacing: 10) {
+                CapsuleLabel(text: "Watched for you" + (policy.autoWatchedBytes.map { " · grew \(byteLabel($0))" } ?? ""), symbol: "eye", color: .growing)
+                Button("Undo") { model.undoAutoWatch(path) }.controlSize(.small)
             }
-            DisclosureGroup("What’s in this folder?") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(item.profile.category.shortPurpose)
-                    Text(item.profile.explanation).foregroundStyle(.secondary)
-                    if item.profile.category == .simulator {
-                        Text("Simulators are virtual test devices, separate from physical iPhones and iPads. Their app data can include unique saves.").foregroundStyle(.secondary)
-                        Button("Explore devices and app data", systemImage: "square.stack.3d.up") { model.inspector = "Contents" }
+        }
+        if policy.expected { CapsuleLabel(text: "Growth is expected", symbol: "checkmark.circle", color: .stable) }
+        if !policy.tags.isEmpty || !policy.note.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                if !policy.tags.isEmpty { Text(policy.tags.map { "#" + $0 }.joined(separator: "  ")).font(.callout).foregroundStyle(Color.accentColor) }
+                if !policy.note.isEmpty { Text(policy.note).font(.callout).textSelection(.enabled) }
+            }
+        }
+        HStack {
+            Button("Scan Folder", systemImage: "magnifyingglass") { model.scan(selectedOnly: true) }
+                .buttonStyle(.borderedProminent).disabled(!model.canRescanSelection).help("Scan only this folder. Nothing is changed.")
+            Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+            Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("More actions for this folder")
+        }
+        Divider()
+        DisclosureGroup("What's inside", isExpanded: $showInside) { if showInside { contents(item).padding(.top, 8) } }.font(.headline)
+        DisclosureGroup("Details", isExpanded: $showDetails) { if showDetails { details(item).padding(.top, 8) } }.font(.headline)
+        Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
+    }
+    /// Evidence, path, handles and every saved size. Folded by default.
+    func details(_ item: FolderMeasurement) -> some View {
+        let points = model.history(item.profile.path).filter { $0.state != .cancelled }
+        return VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("About this folder").font(.headline)
+                Text(item.profile.explanation).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text("Before you remove anything: " + item.profile.consequence).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Where it is").font(.headline)
+                Text(item.profile.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                if item.fileCount > 0 { Text("\(item.fileCount.formatted()) files" + (item.latestModifiedAt.map { " · last changed \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "")).font(.caption).foregroundStyle(.secondary) }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("How we know").font(.headline)
+                Text("A known location suggests who uses a folder. It doesn't prove which app wrote to it.").font(.caption).foregroundStyle(.secondary)
+                ForEach(item.profile.evidence) { e in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(e.label).font(.callout.weight(.medium))
+                        Spacer()
+                        Text(e.level.rawValue).font(.caption).foregroundStyle(e.level == .observed ? Color.accentColor : .secondary)
                     }
-                    if item.fileCount > 0 { LabeledContent("Files", value: item.fileCount.formatted()) }
-                    if let modified = item.latestModifiedAt { LabeledContent("Latest change", value: modified.formatted(date: .abbreviated, time: .shortened)) }
-                    Text(item.activityCheckAvailable ? "\(Set(item.processes.map(\.pid)).count) processes had open handles at scan time. Not proof of writing or inactivity." : "Process activity was not captured. Rescan to check open handles.").foregroundStyle(.secondary)
-                    if let diagnostic = item.diagnostic { Text(diagnostic).textSelection(.enabled).foregroundStyle(.secondary) }
-                }.font(.caption).padding(.top, 6)
-            }
-            let policy = model.preferences.policy(item.profile.path)
-            if !policy.tags.isEmpty { Text("Tags: " + policy.tags.joined(separator: ", ")).font(.callout) }
-            if !policy.note.isEmpty { Text(policy.note).font(.callout).textSelection(.enabled) }
-            if policy.expected { CapsuleLabel(text: "Growth marked as expected", symbol: "checkmark.circle", color: .stable) }
-            if policy.autoWatched == true {
-                HStack(spacing: 10) {
-                    CapsuleLabel(text: "Added to Watching automatically" + (policy.autoWatchedBytes.map { " · grew \(byteLabel($0))" } ?? ""), symbol: "eye", color: .growing)
-                    Button("Undo") { model.undoAutoWatch(item.profile.path) }.controlSize(.small)
+                    Text(e.value).font(.callout).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(3).help(e.source)
                 }
-                Text("It grew between two comparable scans. Watchlist folders get priority in scheduled scans. Mark growth as expected to stop this.").font(.caption).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Apps using it at scan time").font(.headline)
+                if !item.activityCheckAvailable { Text("Not checked in this scan.").font(.callout).foregroundStyle(.secondary) }
+                else if item.processes.isEmpty { Text("None seen when the scan started. That doesn't prove it's unused.").font(.callout).foregroundStyle(.secondary) }
+                ForEach(Array(Set(item.processes.map(\.command))).sorted().prefix(8), id: \.self) { Text($0).font(.callout) }
+            }
+            if !points.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Every saved size").font(.headline)
+                    ForEach(points.reversed().prefix(12)) { point in
+                        HStack { Text(point.date.formatted(date: .abbreviated, time: .shortened)); Spacer(); Text(point.bytes.map(byteLabel) ?? point.state.problem).monospacedDigit() }.font(.caption)
+                    }
+                    if points.count > 12 { Text("and \(points.count - 12) earlier").font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+            if let diagnostic = item.diagnostic, item.state != .pending {
+                DisclosureGroup("Technical note") { Text(diagnostic).font(.caption).textSelection(.enabled) }.font(.callout)
             }
         }
     }
@@ -325,64 +467,6 @@ struct MainView: View {
             }
         }
     }
-    func trace(_ points: [HistoryPoint]) -> [TracePoint] {
-        var result: [TracePoint] = [], segment = 0, scope: String?
-        for point in points {
-            guard let bytes = point.bytes else { segment += 1; scope = nil; continue }
-            if let scope, scope != point.scopeID { segment += 1 }
-            scope = point.scopeID
-            result.append(TracePoint(id: point.id, date: point.date, bytes: bytes, segment: segment))
-        }
-        return result
-    }
-    func history(_ item: FolderMeasurement) -> some View {
-        let points = model.history(item.profile.path)
-        let summary = model.growthSummary(item.profile.path)
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("Measured history").font(.headline)
-            if points.isEmpty { Text("No saved measurements for this location. Rescan it to establish a baseline.") }
-            else {
-                Chart(trace(points)) { point in
-                    LineMark(x: .value("Observed", point.date), y: .value("GiB", Double(point.bytes) / 1_073_741_824), series: .value("Comparable series", point.segment)).foregroundStyle(Color.accentColor)
-                    PointMark(x: .value("Observed", point.date), y: .value("GiB", Double(point.bytes) / 1_073_741_824)).foregroundStyle(Color.accentColor)
-                }.chartYAxisLabel("GiB").frame(height: 170).accessibilityLabel("Folder size over recorded observations; detailed values below")
-                if points.count == 1 { Text("One observation. No earlier growth is known.").font(.caption).foregroundStyle(.secondary) }
-                if let delta = summary.delta, let interval = summary.interval {
-                    Text("\(delta > 0 ? "+" : delta < 0 ? "−" : "")\(byteLabel(abs(delta))) over \(elapsedLabel(interval))").font(.headline)
-                    if let rate = summary.bytesPerDay { Text("Net rate for this interval: \(rate > 0 ? "+" : rate < 0 ? "−" : "")\(byteLabel(Int64(abs(rate))))/day. Not a forecast.").font(.caption).foregroundStyle(.secondary) }
-                }
-                ForEach(points.reversed()) { point in
-                    HStack { Text(point.date.formatted(date: .abbreviated, time: .shortened)); Spacer(); Text(point.bytes.map(byteLabel) ?? point.state.rawValue) }.font(.caption)
-                }
-                Text("Lines connect comparable measured endpoints. Changes between scans are unknown. Scope changes and failed observations break the series.").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-    func evidence(_ item: FolderMeasurement) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("What we know, and how").font(.headline)
-            Text("Association identifies a likely purpose or owner. It does not establish which process wrote the data.").font(.caption).foregroundStyle(.secondary)
-            ForEach(item.profile.evidence) { e in
-                VStack(alignment: .leading, spacing: 9) {
-                    HStack {
-                        Text(e.label).font(.headline)
-                        Spacer()
-                        CapsuleLabel(text: e.level.rawValue, symbol: e.level == .observed ? "checkmark.circle" : e.level == .inferred ? "link" : "questionmark.circle", color: e.level == .observed ? .accentColor : e.level == .inferred ? .blue : .secondary)
-                    }
-                    Text(e.value).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    DisclosureGroup("How we know") { Text(e.source).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 5) }
-                }.padding(14).background(.background.secondary)
-            }
-            DisclosureGroup("Processes with open handles · \(Set(item.processes.map(\.pid)).count)") {
-                VStack(alignment: .leading, spacing: 8) {
-                    if !item.activityCheckAvailable { Text("Not captured for this observation. Rescan to check current handles.") }
-                    else if item.processes.isEmpty { Text("None detected at scan start. This is not proof of inactivity.") }
-                    ForEach(Array(item.processes.prefix(30).enumerated()), id: \.offset) { _, p in Text("\(p.command) · PID \(p.pid)\n\(p.access)\n\(p.path)").textSelection(.enabled) }
-                    if item.processes.count > 30 { Text("Showing 30 of \(item.processes.count) handle observations.") }
-                }.font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-            }
-        }
-    }
     /// Saved scan outcomes, with the scanned objects named before technical details.
     var scanHistory: some View {
         let records = model.records.sorted { $0.finishedAt > $1.finishedAt }
@@ -424,23 +508,13 @@ struct MainView: View {
     var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
-            if model.discovering { HStack { ProgressView().controlSize(.small); Text(model.progress).font(.caption).textSelection(.enabled) } }
-            if model.running {
-                HStack {
-                    if model.targetCount > 0 {
-                        ProgressView(value: Double(model.completed), total: Double(model.targetCount)).frame(width: 120)
-                        Text("\(model.completed) of \(model.targetCount) folders checked · \(model.progress)").lineLimit(1).truncationMode(.middle)
-                    } else { ProgressView().controlSize(.small); Text(model.progress).lineLimit(1).truncationMode(.middle) }
-                }.font(.caption)
-            } else if !model.discovering && model.progress != "Ready" { Text(model.progress).font(.caption).foregroundStyle(.secondary) }
-            if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled) }
-            HStack {
-                Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking priority locations daily while open." : "Checking priority locations weekly while open.").font(.caption).foregroundStyle(.secondary)
+            if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled).lineLimit(3) }
+            HStack(spacing: 6) {
+                Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking watched and growing folders daily while open." : "Checking watched and growing folders weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
                 Spacer()
-                Text("\(model.discovery.profiles.count) folders · \(model.records.count) saved scans").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.discovery.profiles.count) folders known · \(model.records.count) scans saved").font(.caption).foregroundStyle(.secondary)
             }
-            if model.section == .locations { Text("Saved folder sizes are estimates. Context Cleaner never deletes files.").font(.caption2).foregroundStyle(.secondary) }
         }.padding(.horizontal, 16).padding(.bottom, 10)
     }
 }
@@ -492,28 +566,31 @@ struct PolicyEditor: View {
             .commands {
                 CommandGroup(replacing: .newItem) {}
                 CommandGroup(after: .importExport) {
-                    Button("Add Location…") { model.addRoot() }.keyboardShortcut("o", modifiers: [.command, .shift])
+                    Button("Add Folder to Scan…") { model.addRoot() }.keyboardShortcut("o", modifiers: [.command, .shift])
                     Button("Export Report…") { model.exportReport() }.keyboardShortcut("e", modifiers: [.command, .shift])
                 }
                 CommandGroup(after: .sidebar) {
-                    Button(model.effectiveDarkAppearance ? "Switch to Light Appearance" : "Switch to Dark Appearance") { model.toggleAppearance() }
+                    Picker("Appearance", selection: Binding(get: { model.preferences.appearance ?? "System" }, set: { model.setAppearance($0) })) {
+                        Text("Match System").tag("System"); Text("Light").tag("Light"); Text("Dark").tag("Dark")
+                    }
+                    Button(model.effectiveDarkAppearance ? "Use Light Appearance" : "Use Dark Appearance") { model.toggleAppearance() }
                         .keyboardShortcut("l", modifiers: [.command, .shift])
                 }
                 CommandMenu("Scan") {
                     Button("Scan Folders…") { model.showingScanPlan = true }.keyboardShortcut("r").disabled(model.running || model.inspecting || model.discovering)
                     Button("Scan This Folder") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(!model.canRescanSelection)
-                    Button("Scan Watched Locations") { model.scan(watchedOnly: true) }.disabled(model.running || model.inspecting || model.discovering)
-                    Button("Rediscover Locations") { model.discover() }.disabled(model.running || model.inspecting || model.discovering)
+                    Button("Scan Watchlist") { model.scan(watchedOnly: true) }.disabled(model.running || model.inspecting || model.discovering)
+                    Button("Look for New Folders") { model.discover() }.disabled(model.running || model.inspecting || model.discovering)
                     Divider()
-                    Button("Cancel") { model.cancelWork() }.keyboardShortcut(".").disabled(!(model.running || model.discovering))
+                    Button("Stop Scan") { model.cancelWork() }.keyboardShortcut(".").disabled(!(model.running || model.discovering))
                 }
-                CommandMenu("Location") {
+                CommandMenu("Folder") {
                     if model.selection.count > 1 {
                         SelectionActions(model: model, paths: Array(model.selection).sorted())
                     } else if let path = model.selected {
                         LocationActions(model: model, path: path)
                     } else {
-                        Text("Select a location first")
+                        Text("Select a folder first")
                     }
                     Divider()
                     Button("Tags and Notes…") { if let path = model.selected { model.editing = path } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(model.selection.count != 1)
@@ -526,22 +603,25 @@ struct PolicyEditor: View {
 struct AccessHelp: View {
     @Environment(\.dismiss) var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Label("Understanding access problems", systemImage: "lock.open").font(.title2)
-            Text("A folder can be unreadable because of macOS privacy controls, file permissions, a disconnected volume or an I/O error. The scan’s diagnostic is the best starting point.")
-            Text("For protected folders on your Mac:").font(.headline)
-            Text("1. Open System Settings → Privacy & Security → Full Disk Access.\n2. Add the Context Cleaner app you are actually running and enable it.\n3. Quit and reopen Context Cleaner, then rescan the selected folder.")
-            Text("Access is your choice. You can instead exclude the folder from scanning. Context Cleaner does not change permissions or use administrator commands.").font(.callout).foregroundStyle(.secondary)
-            Text("When testing a new development build, macOS may require approving that particular build again.").font(.caption).foregroundStyle(.secondary)
-            Divider()
-            Text("Scanning allowances").font(.headline)
-            Text("Priority checks: 10 seconds or 100,000 entries per location, up to 90 seconds of measurement per pass. Manual defaults: 120 seconds or 1,000,000 entries per location, up to 15 minutes per pass. A slow filesystem call can delay stopping.").font(.caption).foregroundStyle(.secondary)
-            Text("An incomplete scan never supplies a complete size. Choose a smaller child folder to investigate large locations. Daily checks run only while this app is open and record attempts so failures do not trigger rapid retries.").font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Let Context Cleaner read a blocked folder", systemImage: "lock.open").font(.title2.weight(.semibold))
+            Text("macOS protects some folders. To let Context Cleaner read their sizes:").font(.callout)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("1. Open Privacy & Security › Full Disk Access.")
+                Text("2. Turn on Context Cleaner. If it isn't listed, add it with the + button.")
+                Text("3. Quit and reopen Context Cleaner, then scan the folder again.")
+            }.font(.callout)
+            Text("This is your choice. You can also turn the folder off instead. Context Cleaner never changes permissions itself.").font(.caption).foregroundStyle(.secondary)
+            Text("Each new test build may need to be allowed again.").font(.caption).foregroundStyle(.secondary)
             HStack {
-                Button("Reveal this app in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
-                Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Show This App in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
+                Spacer()
+                Button("Open Privacy Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+                }
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-        }.padding(26).frame(width: 560)
+        }.padding(24).frame(width: 540)
     }
 }
 
@@ -551,12 +631,12 @@ struct ReportPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Export report").font(.title2.weight(.semibold))
-            Text("Local Markdown report for \(model.rows.count) \(model.rows.count == 1 ? "folder" : "folders"). Includes sizes, changes, paths, explanations and your notes. Preview it below, then save a new file. Nothing is uploaded.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file contains every location." : text
+            Text("A Markdown file listing the \(model.rows.count) \(model.rows.count == 1 ? "folder" : "folders") shown in \(model.section == .overview || model.section == .history ? "Folders" : model.section.rawValue): sizes, changes, paths, what each holds and your notes. It stays on your Mac.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file contains every folder." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 .background(.background.secondary)
             HStack {
-                Text("\(text.utf8.count.formatted()) bytes").font(.caption).foregroundStyle(.secondary)
+                Text(ByteCountFormatter.string(fromByteCount: Int64(text.utf8.count), countStyle: .file)).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
                 Button("Cancel") { model.reportPreview = nil }.keyboardShortcut(.cancelAction)

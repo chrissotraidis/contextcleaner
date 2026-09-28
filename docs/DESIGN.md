@@ -1,6 +1,82 @@
 # Context Cleaner design system
 
-Source of truth for every screen. Grounded in Apple's Human Interface Guidelines for macOS (Designing for macOS, Sidebars, Panels, Toolbars, Color) and the Liquid Glass adoption guidance. When code and this document disagree, fix the code.
+Source of truth for every screen. Grounded in Apple's Human Interface Guidelines for macOS (sidebars, toolbars, charts, color, writing) and the Liquid Glass adoption guidance. When code and this document disagree, fix the code.
+
+## 0.9 spec — calm, visual, obvious
+
+Written from an audit of every 0.8 screen, sheet, menu and Settings tab (dark and light, 1103 × 752 and 1480 × 920 points) plus the user's 2026-09-28 screenshots. It supersedes every earlier rule below where they conflict.
+
+### What the audit found
+
+- The storage chart plotted **free** space, so filling the disk drew a falling line that read like a burndown chart. Readings came only from scans, so points bunched together with long flat bridges between them.
+- Overview stacked five blocks of equal weight: drive card, chart, four count tiles, categories and largest folders. Nothing said "look here first", and the compact window scrolled.
+- Report and the appearance toggle shared one toolbar capsule, so they looked like related commands.
+- Folders repeated "First scan" and "Measured" on nearly every row. These words told you nothing.
+- Scan Issues read like a warning even when empty, and rows did not say what to do.
+- Coverage was one long form of 26 paths with sentences under each. It scrolled several screens.
+- Text sizes drifted between headline, callout, caption and caption2 with no rule.
+
+### Screen by screen
+
+| Screen | Question it answers | Look here first | One action | Hidden until asked |
+|---|---|---|---|---|
+| Overview | Is my disk filling up, and what's using it? | Space used chart with the change for the chosen range | Scan | Caveats (info popover), minor categories (More) |
+| Space used chart | What happened to my disk this week? | Headline change ("+148 GB used in 7 days") | Pick a range or drag across a span | Exact reading (hover), what grew (span) |
+| Folders | Which folders are large or growing? | Size column, sorted largest first | Select a folder | Status words (shown only when they matter) |
+| Folder inspector | What is this folder and is it growing? | Size and one sentence about it | Show in Finder | Sources, path, processes, history table (Details) |
+| No folder selected | What does this list add up to? | Total of the visible list | Select the biggest | — |
+| Watchlist | What am I keeping an eye on? | Trend per folder | Add from Folders | — |
+| Couldn't Scan | What couldn't be read, and how do I fix it? | Plain reason on each row | The row's fix button | Technical diagnostic (inspector Details) |
+| Scan History | What was checked and when? | Folder name and result | Expand a row | Measurements, disk space at the time |
+| Scan sheet | What will a scan read? | The app names that will be checked | Start Scan | Exact paths (disclosure) |
+| Report sheet | What will the file contain? | One-line description | Save | Full Markdown (scroll) |
+| Settings › General | How does the app look and when does it check? | Appearance | Scheduled checks | — |
+| Settings › Scanning | How far does a scan go? | One plain sentence | Leave defaults | Limits (Advanced) |
+| Settings › Coverage | Where does the app look? | Group rows with on/off counts | Toggle a group or row | Path and description (expand or hover) |
+
+### Type scale
+
+Five sizes, always used the same way. No fixed point sizes; system text styles only.
+
+| Role | Style |
+|---|---|
+| Page title | `.title2` semibold |
+| Hero number | `.largeTitle` rounded semibold, monospaced digits |
+| Section heading | `.headline` |
+| Body and row text | `.callout` |
+| Secondary, captions, axis labels | `.caption` (never `.caption2`) |
+
+### Spacing
+
+- Page padding 22 points horizontally. Space between blocks 16. Inside a panel 16 padding and 12 between items.
+- Rows: 6 points vertical padding. Sparklines 64 × 18 points.
+- One panel style (`Panel`), one background (`.background.secondary`), no borders.
+
+### Color
+
+- Accent color: selection, primary actions and the used-space area.
+- Orange (`Color.growing`) marks growth: "more space used", growing folders and positive daily bars.
+- Green (`Color.stable`) marks space given back: negative daily bars and expected growth.
+- Red (`Color.attention`) appears only when something couldn't be scanned. An empty Couldn't Scan list shows no red anywhere.
+- Category hues are unchanged from 0.8 and appear only in icons, bars and dots.
+
+### Chart rules
+
+- Show **used** space, filling upward, under a dashed capacity ceiling. The band between the line and the ceiling is free space.
+- Even time axis with real labels: hours for 24h, weekdays for 7 days, dates for 30 days. The axis depends on the chosen range and the latest reading, never on redraw time.
+- The vertical axis starts below the lowest reading so change is visible. It's labelled with real sizes, and the ceiling is always shown.
+- Gaps longer than a range-specific limit break the line. Nothing fills them in.
+- The headline states the change in words, with a subject and a time.
+
+### Voice
+
+Short, human and specific. Every number gets a subject and a time. No paragraph longer than two lines by default; anything longer goes behind a disclosure or popover. Commands are verbs in Title Case. The deletion sentence stays verbatim: **"Context Cleaner never deletes files. You decide, in Finder."**
+
+---
+
+## Archive: 0.7–0.8 rules
+
+Kept for provenance. Superseded by the 0.9 spec above where they conflict.
 
 ## Principles, in order
 

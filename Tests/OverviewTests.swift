@@ -23,15 +23,22 @@ import Foundation
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let morning = Date(timeIntervalSince1970: 1_790_582_400)
         let start = calendar.startOfDay(for: morning)
-        check(freeSpaceWindow(at: start.addingTimeInterval(60), calendar: calendar) == freeSpaceWindow(at: start.addingTimeInterval(40_000), calendar: calendar), "redraws within a calendar day retain the exact time axis")
-        let window = freeSpaceWindow(at: start, calendar: calendar)
-        check(window.upperBound.timeIntervalSince(window.lowerBound) == 7 * 86400, "free-space chart covers seven complete calendar days")
+        check(UsageRange.week.window(endingAt: start.addingTimeInterval(60), calendar: calendar) == UsageRange.week.window(endingAt: start.addingTimeInterval(40_000), calendar: calendar), "redraws within a calendar day keep the 7-day axis fixed")
+        let week = UsageRange.week.window(endingAt: start, calendar: calendar)
+        check(week.upperBound.timeIntervalSince(week.lowerBound) == 7 * 86400 && week.upperBound == start.addingTimeInterval(86400), "7-day range is seven whole days ending tonight")
+        let month = UsageRange.month.window(endingAt: start, calendar: calendar)
+        check(month.upperBound.timeIntervalSince(month.lowerBound) == 30 * 86400, "30-day range covers thirty whole days")
+        let day = UsageRange.day.window(endingAt: start.addingTimeInterval(3700), calendar: calendar)
+        check(day.upperBound == start.addingTimeInterval(7200) && day.lowerBound == start.addingTimeInterval(7200 - 86400), "24-hour range ends at the next whole hour")
+        check(UsageRange.day.window(endingAt: start.addingTimeInterval(3601), calendar: calendar) == day, "24-hour axis is stable within an hour")
         let gib: Int64 = 1_073_741_824
-        let axis = freeSpaceRange([200*gib, 240*gib])
-        check(freeSpaceRange([220*gib], preserving: axis) == axis, "new points inside the axis cannot shrink or shift it")
-        let expanded = freeSpaceRange([100*gib], preserving: axis)
-        check(expanded.lowerBound < axis.lowerBound && expanded.upperBound == axis.upperBound, "out-of-range observations expand only the necessary bound")
-        check(freeSpaceRange([], preserving: axis) == axis, "missing observations cannot reset the axis")
+        func reading(_ id: String, _ seconds: TimeInterval, used: Int64, total: Int64 = 4000) -> UsageReading {
+            UsageReading(id: id, date: start.addingTimeInterval(seconds), used: used * gib, total: total * gib, isCurrent: false)
+        }
+        let fullAxis = usageAxis([reading("a", 0, used: 3380, total: 3720), reading("b", 60, used: 3530, total: 3720)])
+        check(fullAxis.upperBound == 3720 && fullAxis.lowerBound < 3380 && fullAxis.lowerBound > 0, "a nearly full disk zooms the axis but still shows the capacity ceiling")
+        check(usageAxis([reading("a", 0, used: 1000), reading("b", 60, used: 1200)]).lowerBound == 0, "a half-empty disk starts the axis at zero")
+        check(usageAxis([]) == 0...1, "no readings produce a neutral axis")
         func record(_ id: String, _ measurements: [FolderMeasurement]) -> ScanRecord {
             ScanRecord(id: id, startedAt: start, finishedAt: start, scope: "fixture", complete: true, measurements: measurements, discoveryNotes: [])
         }
@@ -46,15 +53,38 @@ import Foundation
         var sampleA = before; sampleA.freeBytes = 250*gib; sampleA.finishedAt = start
         var sampleB = after; sampleB.freeBytes = 220*gib; sampleB.finishedAt = start.addingTimeInterval(3600)
         let live = VolumeSnapshot(date: start.addingTimeInterval(7200), total: 4000*gib, free: 125*gib)
-        let readings = freeSpaceReadings([sampleB, sampleA], current: live)
-        check(readings.map(\.bytes) == [250*gib,220*gib,125*gib] && readings.last!.isCurrent, "chart includes the same latest capacity reading as the storage card")
-        check(readingTimeRange(readings).lowerBound < start && readingTimeRange(readings).upperBound > live.date, "time bounds include both endpoint readings with visible padding")
-        check(readingTimeRange(readings).upperBound.timeIntervalSince(readingTimeRange(readings).lowerBound) < 3*3600, "a few hours of readings are not compressed into an empty week")
-        sampleA.finishedAt = start.addingTimeInterval(-8*86400)
-        check(freeSpaceReadings([sampleA, sampleB], current: live).count == 2, "free-space history retains only readings in its recent window")
-        sampleB.finishedAt = live.date
-        check(freeSpaceReadings([sampleB], current: live).count == 1, "current reading replaces a duplicate timestamp")
-        check(freeSpaceReadings([], current: nil).isEmpty, "empty history never invents a reading")
+        let hourly = [CapacityReading(date: start.addingTimeInterval(1800), total: 4000*gib, free: 240*gib)]
+        let usage = usageReadings(records: [sampleB, sampleA], capacity: hourly, current: live)
+        check(usage.map(\.used) == [3750*gib, 3760*gib, 3780*gib, 3875*gib] && usage.last!.isCurrent, "used space combines scans, hourly readings and the live reading in time order")
+        check(usageReadings(records: [sampleA], capacity: [CapacityReading(date: live.date, total: 4000*gib, free: 1*gib)], current: live).last!.used == live.used, "the live reading wins over a duplicate timestamp")
+        check(usageReadings(records: [], capacity: [], current: nil).isEmpty, "empty history never invents a reading")
+        let spaced = [reading("a", 0, used: 10), reading("b", 3600, used: 11), reading("c", 36000, used: 12), reading("d", -90000, used: 9)]
+        let series = usageSeries(spaced.sorted { $0.date < $1.date }, in: start...start.addingTimeInterval(86400), gapLimit: UsageRange.day.gapLimit)
+        check(series.map(\.segment) == [0, 0, 1], "a gap longer than the range limit breaks the line; readings outside the window are left out")
+        check(usageChange(usage, from: start, to: live.date)?.delta == 125*gib, "a span reports used space gained between its first and last readings")
+        check(usageChange([reading("a", 0, used: 1)], from: start, to: live.date) == nil, "one reading cannot describe a change")
+        let hourReadings = [reading("h0", 0, used: 100), reading("h0b", 1800, used: 110), reading("h1", 5400, used: 130), reading("h3", 12600, used: 150)]
+        let buckets = usageBuckets(hourReadings, window: start...start.addingTimeInterval(4*3600), component: .hour, calendar: calendar)
+        check(buckets.map { $0.delta.map { $0 / gib } } == [10, 20, nil, nil], "per-hour change uses the previous reading only when it is recent; empty hours stay empty")
+        func itemAt(_ path: String, _ bytes: Int64, _ seconds: TimeInterval) -> FolderMeasurement {
+            var m = item(path, path.hasSuffix("build") ? .buildOutput : .workspace, bytes); m.observedAt = start.addingTimeInterval(seconds); return m
+        }
+        let early = record("early", [itemAt("/fixture/work", 100, 0), itemAt("/fixture/work/build", 90, 0), itemAt("/fixture/cache", 25, 0)])
+        let late = record("late", [itemAt("/fixture/work", 150, 3600), itemAt("/fixture/work/build", 140, 3600), itemAt("/fixture/cache", 10, 3600)])
+        let names = Dictionary((early.measurements + late.measurements).map { ($0.profile.path, $0.profile) }, uniquingKeysWith: { a, _ in a })
+        let grew = folderGrowth(history: historyIndex([early, late]), profile: { names[$0] }, from: start.addingTimeInterval(-60), to: start.addingTimeInterval(7200))
+        check(grew.map(\.path) == ["/fixture/work"] && grew.first?.delta == 50, "what grew lists growing folders once, under their outermost parent, and omits shrinking ones")
+        let stale = record("stale", [itemAt("/fixture/work", 100, -3 * 86400)])
+        check(folderGrowth(history: historyIndex([stale, late]), profile: { names[$0] }, from: start, to: start.addingTimeInterval(7200)).isEmpty, "a baseline from days before the span is not treated as growth inside it")
+        let sparkPoints = [10, 20].map { HistoryPoint(recordID: "r\($0)", path: "/p", date: start.addingTimeInterval(Double($0)), bytes: Int64($0), state: .measured, scopeID: "s") }
+            + [HistoryPoint(recordID: "fail", path: "/p", date: start.addingTimeInterval(25), bytes: nil, state: .failed, scopeID: "s")]
+            + [30, 40].map { HistoryPoint(recordID: "r\($0)", path: "/p", date: start.addingTimeInterval(Double($0)), bytes: Int64($0), state: .measured, scopeID: "s") }
+            + [HistoryPoint(recordID: "stop", path: "/p", date: start.addingTimeInterval(50), bytes: nil, state: .cancelled, scopeID: "s")]
+        check(sparklineValues(sparkPoints) == [30, 40], "sparklines show the latest comparable run and ignore stopped scans")
+        var outcome = record("outcome", [cache, a, child, item("/fixture/locked", .appData, nil, .inaccessible)])
+        check(scanOutcome(outcome, grew: 2) == "Scanned 3 folders · 2 grew · 1 couldn't be read", "scan result names folders scanned, grown and unreadable")
+        outcome.complete = false; outcome.requestedCount = 9
+        check(scanOutcome(outcome, grew: 0) == "Stopped after 3 of 9 folders", "a stopped scan says how far it got")
         let single = record("single", [cache])
         check(single.folderSummary == cache.profile.displayName, "single-folder scan history identifies the folder")
         var stopped = single; stopped.complete = false; stopped.requestedCount = 4

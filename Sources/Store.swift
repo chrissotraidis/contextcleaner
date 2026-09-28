@@ -36,7 +36,7 @@ final class AppendStore {
     private(set) var warnings: [String] = []
     init(root: URL) throws {
         self.root = root
-        for folder in ["scans", "preferences", "imports", "discoveries"] {
+        for folder in ["scans", "preferences", "imports", "discoveries", "capacity"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
     }
@@ -76,6 +76,17 @@ final class AppendStore {
     func save(_ preferences: Preferences) throws {
         let event = PreferencesEvent(date: Date(), id: UUID().uuidString, value: preferences)
         try writeNew(encoder.encode(event), to: root.appendingPathComponent("preferences/\(event.id).json"))
+    }
+    /// Appends a new file per reading. Earlier readings are never rewritten or removed.
+    func appendCapacity(_ reading: CapacityReading) throws {
+        let stamp = Int64(reading.date.timeIntervalSince1970 * 1000)
+        try writeNew(encoder.encode(reading), to: root.appendingPathComponent("capacity/\(stamp)-\(UUID().uuidString).json"))
+    }
+    func capacityReadings() -> [CapacityReading] {
+        files("capacity").compactMap { url -> CapacityReading? in
+            do { return try JSONDecoder().decode(CapacityReading.self, from: Data(contentsOf: url)) }
+            catch { warnings.append("Unreadable capacity reading preserved: \(url.lastPathComponent)"); return nil }
+        }.sorted { $0.date < $1.date }
     }
     func importLegacy(_ source: URL, home: String) throws -> Int {
         let data = try Data(contentsOf: source), sourceDigest = digest(data)

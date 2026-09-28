@@ -2,7 +2,6 @@ import SwiftUI
 import Charts
 import AppKit
 
-
 extension FolderCategory {
     var symbol: String {
         switch self {
@@ -22,18 +21,18 @@ extension FolderCategory {
     }
     var shortPurpose: String {
         switch self {
-        case .simulator: return "Virtual iPhones and iPads used to test apps. Each device can hold installed apps, databases, photos and saves."
-        case .workspace: return "Project working folders. Source, build results, private inputs and diagnostics can coexist here."
-        case .packageCache: return "Previously downloaded dependencies, reused to make future commands faster."
+        case .simulator: return "Virtual iPhones and iPads used to test apps. Each can hold apps, photos and saves."
+        case .workspace: return "Project working folders. Source, build results and private inputs can sit side by side."
+        case .packageCache: return "Downloaded dependencies, kept so future installs are faster."
         case .installCache: return "Reusable data from installing apps on physical devices."
-        case .buildOutput: return "Generated compiler output and indexes. Usually reproducible, but rebuilding takes time."
-        case .debugSymbols: return "Files used to debug specific devices and interpret crash reports."
-        case .backup: return "Recovery copies that may hold the only version of unfinished work."
-        case .history: return "Saved conversations and records of previous work."
+        case .buildOutput: return "Compiler output and indexes. Usually rebuildable, but rebuilding takes time."
+        case .debugSymbols: return "Files used to debug specific devices and read crash reports."
+        case .backup: return "Recovery copies that may hold the only copy of unfinished work."
+        case .history: return "Saved conversations and records of earlier work."
         case .model: return "Downloaded AI models and datasets used by local tools."
-        case .appData: return "Application libraries, settings, databases and saves. Size alone does not make them disposable."
-        case .download: return "Downloaded installers, documents and other files. Some may be unique."
-        case .unknown: return "A location whose purpose has not yet been established."
+        case .appData: return "App libraries, settings, databases and saves. Being large doesn't make them disposable."
+        case .download: return "Installers, documents and other downloads. Some may be the only copy."
+        case .unknown: return "A folder whose purpose isn't known yet."
         }
     }
 }
@@ -55,239 +54,429 @@ struct ProportionBar: View {
         }.frame(height: 7).accessibilityHidden(true)
     }
 }
-struct FolderTrend: View {
-    let path: String
-    let points: [HistoryPoint]
-    let change: GrowthSummary
-    var compact = false
-    @State private var selectedDate: Date?
-    private var series: [TracePoint] {
-        var out: [TracePoint] = [], segment = 0, scope: String?
-        for point in points {
-            guard let bytes = point.bytes else { segment += 1; scope = nil; continue }
-            if let scope, scope != point.scopeID { segment += 1 }; scope = point.scopeID
-            out.append(TracePoint(id: point.id, date: point.date, bytes: bytes, segment: segment))
-        }
-        return out
-    }
-    private var picked: TracePoint? {
-        guard let selectedDate else { return nil }
-        return series.min { abs($0.date.timeIntervalSince(selectedDate)) < abs($1.date.timeIntervalSince(selectedDate)) }
-    }
+/// A tiny trend line drawn as a path, so long tables stay fast.
+struct Sparkline: View {
+    let values: [Double]
+    var tint: Color = .secondary
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Size over time").font(.headline)
-                Spacer()
-                Text("\(series.count) \(series.count == 1 ? "observation" : "observations")").font(.caption).foregroundStyle(.secondary)
-            }
-            if series.isEmpty {
-                Text("Scan this folder to start its timeline.").foregroundStyle(.secondary)
-            } else if series.count == 1, let first = series.first {
-                Text("First reading: \(byteLabel(first.bytes)) on \(first.date.formatted(date: .abbreviated, time: .shortened)).").font(.callout)
-                Text("Scan this folder again to see how its size changes.").font(.caption).foregroundStyle(.secondary)
-            } else {
-                Chart(series) { p in
-                    LineMark(x: .value("Date", p.date), y: .value("GiB", Double(p.bytes) / 1_073_741_824), series: .value("Comparable scope", p.segment)).foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.5))
-                    PointMark(x: .value("Date", p.date), y: .value("GiB", Double(p.bytes) / 1_073_741_824)).foregroundStyle(Color.accentColor).symbolSize(35)
-                    if let picked, picked.id == p.id {
-                        RuleMark(x: .value("Selected", picked.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3]))
+        GeometryReader { geo in
+            if values.count > 1, let low = values.min(), let high = values.max() {
+                let flat = high - low < max(high * 0.0005, 1)
+                Path { path in
+                    for (index, value) in values.enumerated() {
+                        let x = geo.size.width * CGFloat(index) / CGFloat(values.count - 1)
+                        let y = flat ? geo.size.height / 2 : geo.size.height * (1 - CGFloat((value - low) / (high - low)))
+                        if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
-                }.chartXSelection(value: $selectedDate).chartYAxisLabel("GiB").frame(height: compact ? 105 : 170)
-                    .accessibilityLabel("Recorded folder sizes. Gaps and changed scan scope break the line.")
-                if let picked { Text("\(picked.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(picked.bytes))").font(.caption).monospacedDigit() }
-                else { Text(series.count < 2 ? "First measurement. Rescan to see a change; earlier growth is unknown." : "Hover or drag across the chart to inspect an observation.").font(.caption).foregroundStyle(.secondary) }
-                if let delta = change.delta, let interval = change.interval {
-                    Label("\(delta > 0 ? "+" : delta < 0 ? "−" : "")\(byteLabel(abs(delta))) over \(elapsedLabel(interval))", systemImage: delta > 0 ? "arrow.up.right" : delta < 0 ? "arrow.down.right" : "equal").font(.caption.weight(.semibold)).foregroundStyle(delta > 0 ? Color.growing : Color.accentColor)
-                } else if series.count > 1 { Text("No comparable recent pair. Scan scope changes and failed observations break the comparison.").font(.caption).foregroundStyle(.secondary) }
+                }.stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
+            }
+        }.frame(width: 64, height: 18).accessibilityHidden(true)
+    }
+}
+extension Array where Element == Double {
+    /// Orange when the latest value is noticeably above the first, otherwise quiet.
+    var trendTint: Color {
+        guard let first, let last, count > 1 else { return .secondary }
+        return last - first > Swift.max(first * 0.01, 1_048_576) ? .growing : .secondary
+    }
+}
+let gibibyte = 1_073_741_824.0
+func signedBytes(_ delta: Int64) -> String { (delta > 0 ? "+" : delta < 0 ? "−" : "") + byteLabel(abs(delta)) }
+extension View {
+    /// Reports the date under the pointer while hovering a chart's plot area.
+    func chartHover(_ date: Binding<Date?>) -> some View {
+        chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            guard let frame = proxy.plotFrame else { return }
+                            let plot = geometry[frame]
+                            date.wrappedValue = plot.contains(location) ? proxy.value(atX: location.x - plot.minX, as: Date.self) : nil
+                        case .ended: date.wrappedValue = nil
+                        }
+                    }
             }
         }
     }
 }
+
+/// A folder's size over time in the inspector.
+struct FolderTrend: View {
+    let points: [HistoryPoint]
+    let change: GrowthSummary
+    @State private var hover: Date?
+    private var series: [TracePoint] {
+        var out: [TracePoint] = [], segment = 0, scope: String?
+        for point in points where point.state != .cancelled {
+            guard let bytes = point.bytes, point.state == .measured else { segment += 1; scope = nil; continue }
+            if let scope, scope != point.scopeID { segment += 1 }
+            scope = point.scopeID
+            out.append(TracePoint(id: point.id, date: point.date, bytes: bytes, segment: segment))
+        }
+        return out
+    }
+    var body: some View {
+        let series = self.series
+        if let first = series.first, series.count == 1 {
+            Text("First scanned \(first.date.formatted(date: .abbreviated, time: .shortened)) at \(byteLabel(first.bytes)). Scan again to see how it changes.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else if let first = series.first {
+            let picked = hover.flatMap { date in series.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) } }
+            let top = Double(series.map(\.bytes).max() ?? 1) / gibibyte
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Size over time").font(.headline)
+                    Spacer()
+                    if let delta = change.delta, let interval = change.interval {
+                        Text("\(signedBytes(delta)) in \(elapsedLabel(interval))").font(.callout.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(delta > 0 ? Color.growing : delta < 0 ? Color.stable : .secondary)
+                    }
+                }
+                Chart {
+                    ForEach(series) { point in
+                        AreaMark(x: .value("Date", point.date), yStart: .value("Zero", 0), yEnd: .value("Size", Double(point.bytes) / gibibyte), series: .value("Run", point.segment))
+                            .foregroundStyle(LinearGradient(colors: [Color.accentColor.opacity(0.35), Color.accentColor.opacity(0.05)], startPoint: .top, endPoint: .bottom))
+                        LineMark(x: .value("Date", point.date), y: .value("Size", Double(point.bytes) / gibibyte), series: .value("Run", point.segment))
+                            .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2))
+                        if series.count <= 30 { PointMark(x: .value("Date", point.date), y: .value("Size", Double(point.bytes) / gibibyte)).foregroundStyle(Color.accentColor).symbolSize(18) }
+                    }
+                    if let picked { RuleMark(x: .value("Selected", picked.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3])) }
+                }
+                .chartYScale(domain: 0...max(top * 1.1, 0.001))
+                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))) } } } }
+                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+                .chartHover($hover)
+                .frame(height: 110)
+                .accessibilityLabel("Folder size from \(byteLabel(first.bytes)) to \(byteLabel(series.last!.bytes)) across \(series.count) scans")
+                Text(picked.map { "\($0.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel($0.bytes))" } ?? "\(series.count) scans since \(first.date.formatted(date: .abbreviated, time: .omitted)). Gaps mean the scan scope changed or a scan failed.")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(2)
+            }
+        }
+    }
+}
+
+/// Used space over time, filling upward under the disk's capacity.
+struct UsageChart: View {
+    @ObservedObject var model: CleanerModel
+    @State private var range: UsageRange = .week
+    @State private var perBucket = false
+    @State private var hover: Date?
+    @State private var span: ClosedRange<Date>?
+    var body: some View {
+        let readings = model.usage
+        let window = range.window(endingAt: readings.last?.date ?? Date())
+        let points = usageSeries(readings, in: window, gapLimit: range.gapLimit)
+        let active = span ?? window
+        let change = usageChange(readings, from: active.lowerBound, to: active.upperBound)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                headline(change)
+                Spacer(minLength: 8)
+                Picker("Range", selection: $range) { ForEach(UsageRange.allCases) { Text($0.rawValue).tag($0) } }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+            }
+            Group {
+                if perBucket { bucketChart(readings, window: window) }
+                else if points.count < 2 { emptyChart }
+                else { levelChart(points, window: window) }
+            }.frame(height: 136)
+            HStack(spacing: 10) {
+                Picker("Chart", selection: $perBucket) { Text("Space used").tag(false); Text("Change per \(range.bucketName)").tag(true) }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+                Spacer()
+                if span != nil { Button("Clear Selection") { span = nil }.controlSize(.small) }
+                else if !perBucket { Text("Drag across the chart to compare two times").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+            }
+            grew(from: active.lowerBound, to: active.upperBound)
+        }
+        .onChange(of: range) { _, _ in span = nil; hover = nil }
+        .onChange(of: perBucket) { _, _ in span = nil; hover = nil }
+    }
+    @ViewBuilder private func headline(_ change: UsageChange?) -> some View {
+        let when = span.map { "between \($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) and \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" } ?? range.phrase
+        VStack(alignment: .leading, spacing: 2) {
+            if let change {
+                let delta = change.delta
+                (Text(delta == 0 ? "No change" : signedBytes(delta)).foregroundColor(delta > 0 ? .growing : delta < 0 ? .stable : .primary)
+                 + Text(delta > 0 ? " more space used " : delta < 0 ? " of space freed " : " in used space ").foregroundColor(.primary)
+                 + Text(when).foregroundColor(.secondary))
+                    .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            } else {
+                Text("Not enough readings " + when).font(.title2.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            Text(detail(change)).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+        }.accessibilityElement(children: .combine)
+    }
+    private func detail(_ change: UsageChange?) -> String {
+        if let hover {
+            if perBucket {
+                let bucket = usageBuckets(model.usage, window: range.window(endingAt: model.usage.last?.date ?? Date()), component: range.bucket).first { $0.start <= hover && hover < $0.end }
+                guard let bucket else { return " " }
+                let label = bucket.start.formatted(range == .day ? .dateTime.weekday(.abbreviated).hour() : .dateTime.weekday(.wide).month(.abbreviated).day())
+                return label + " · " + (bucket.delta.map { signedBytes($0) + " used" } ?? "no readings")
+            }
+            if let reading = model.usage.min(by: { abs($0.date.timeIntervalSince(hover)) < abs($1.date.timeIntervalSince(hover)) }) {
+                return "\(reading.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(reading.used)) used · \(byteLabel(reading.free)) free"
+            }
+        }
+        guard let change else { return "Context Cleaner notes disk space every hour while it's open, and at every scan." }
+        return "\(byteLabel(change.from.used)) on \(change.from.date.formatted(.dateTime.month(.abbreviated).day().hour().minute())) → \(byteLabel(change.to.used)) on \(change.to.date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
+    }
+    private var xStride: (Calendar.Component, Int) { range == .day ? (.hour, 6) : range == .week ? (.day, 1) : (.day, 5) }
+    private var xFormat: Date.FormatStyle { range == .day ? .dateTime.hour() : range == .week ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day() }
+    private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
+        let axis = usageAxis(points.map(\.reading))
+        let capacity = axis.upperBound
+        let step = niceStep((axis.upperBound - axis.lowerBound) / 4)
+        let ticks = stride(from: axis.lowerBound, through: axis.upperBound - step * 0.5, by: step).map { $0 } + [axis.upperBound]
+        let picked = hover.flatMap { date in points.min { abs($0.reading.date.timeIntervalSince(date)) < abs($1.reading.date.timeIntervalSince(date)) } }
+        return Chart {
+            if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.12)) }
+            ForEach(points) { point in
+                let used = Double(point.reading.used) / gibibyte
+                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Floor", axis.lowerBound), yEnd: .value("Used", used), series: .value("Series", "used-\(point.segment)"))
+                    .foregroundStyle(LinearGradient(colors: [Color.accentColor.opacity(0.45), Color.accentColor.opacity(0.10)], startPoint: .top, endPoint: .bottom))
+                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Used", used), yEnd: .value("Capacity", Double(point.reading.total) / gibibyte), series: .value("Series", "free-\(point.segment)"))
+                    .foregroundStyle(Color.secondary.opacity(0.10))
+                LineMark(x: .value("Time", point.reading.date), y: .value("Used", used), series: .value("Series", "line-\(point.segment)"))
+                    .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2, lineJoin: .round))
+            }
+            RuleMark(y: .value("Capacity", capacity)).foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .annotation(position: .bottom, alignment: .trailing) { Text("Capacity").font(.caption).foregroundStyle(.secondary) }
+            if let last = points.last { PointMark(x: .value("Time", last.reading.date), y: .value("Used", Double(last.reading.used) / gibibyte)).foregroundStyle(Color.accentColor).symbolSize(40) }
+            if let picked {
+                RuleMark(x: .value("Reading", picked.reading.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3]))
+                PointMark(x: .value("Reading", picked.reading.date), y: .value("Used", Double(picked.reading.used) / gibibyte)).foregroundStyle(Color.accentColor).symbolSize(70)
+            }
+        }
+        .chartXScale(domain: window)
+        .chartYScale(domain: axis)
+        .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisGridLine(); AxisValueLabel(format: xFormat) } }
+        .chartYAxis { AxisMarks(position: .leading, values: ticks) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))) } } } }
+        .chartOverlay { proxy in interactionLayer(proxy) }
+        .accessibilityLabel("Used disk space \(range.phrase). \(points.count) readings. The dashed line is capacity.")
+    }
+    private func bucketChart(_ readings: [UsageReading], window: ClosedRange<Date>) -> some View {
+        let buckets = usageBuckets(readings, window: window, component: range.bucket).filter { $0.delta != nil }
+        return Group {
+            if buckets.isEmpty {
+                placeholder("No complete \(range.bucketName)s of readings yet. They build up while the app is open.")
+            } else {
+                Chart {
+                    ForEach(buckets) { bucket in
+                        BarMark(x: .value("When", bucket.start, unit: range.bucket), y: .value("Change", Double(bucket.delta!) / gibibyte))
+                            .foregroundStyle(bucket.delta! > 0 ? Color.growing : Color.stable)
+                            .opacity(hover.map { bucket.start <= $0 && $0 < bucket.end } ?? true ? 1 : 0.45)
+                    }
+                    RuleMark(y: .value("No change", 0)).foregroundStyle(.secondary)
+                }
+                .chartXScale(domain: window)
+                .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisGridLine(); AxisValueLabel(format: xFormat) } }
+                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))) } } } }
+                .chartHover($hover)
+                .accessibilityLabel("Change in used space per \(range.bucketName). Orange bars used more space, green bars freed space.")
+            }
+        }
+    }
+    private var emptyChart: some View { placeholder("Not enough readings yet. Context Cleaner notes your disk space every hour while it's open, and at every scan.") }
+    private func placeholder(_ text: String) -> some View {
+        Text(text).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.secondary.opacity(0.06))
+    }
+    /// Hover shows a reading; dragging selects a span; a click clears it.
+    private func interactionLayer(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geometry in
+            Rectangle().fill(.clear).contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        guard let frame = proxy.plotFrame else { return }
+                        let plot = geometry[frame]
+                        hover = plot.contains(location) ? proxy.value(atX: location.x - plot.minX, as: Date.self) : nil
+                    case .ended: hover = nil
+                    }
+                }
+                .gesture(DragGesture(minimumDistance: 0).onEnded { value in
+                    guard let frame = proxy.plotFrame else { return }
+                    let plot = geometry[frame]
+                    guard abs(value.translation.width) > 6,
+                          let a: Date = proxy.value(atX: min(max(value.startLocation.x, plot.minX), plot.maxX) - plot.minX),
+                          let b: Date = proxy.value(atX: min(max(value.location.x, plot.minX), plot.maxX) - plot.minX) else { span = nil; return }
+                    span = min(a, b)...max(a, b)
+                })
+        }
+    }
+    @ViewBuilder private func grew(from: Date, to: Date) -> some View {
+        let grown = model.foldersThatGrew(from: from, to: to, limit: 3)
+        HStack(spacing: 8) {
+            Text("Grew most:").font(.caption).foregroundStyle(.secondary)
+            if grown.isEmpty { Text("no scanned folder grew in this span").font(.caption).foregroundStyle(.secondary) }
+            ForEach(grown) { item in
+                Button { model.open(item.path) } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(item.category.tint).frame(width: 7, height: 7)
+                        Text(item.name).lineLimit(1)
+                        Text("+" + byteLabel(item.delta)).foregroundStyle(Color.growing).monospacedDigit()
+                    }.font(.caption).padding(.horizontal, 8).padding(.vertical, 3).background(Color.secondary.opacity(0.12), in: Capsule())
+                }.buttonStyle(.plain).help("Show this folder")
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
 struct Dashboard: View {
     @ObservedObject var model: CleanerModel
-    @State private var selectedDate: Date?
+    @State private var hovered: FolderCategory?
     @State private var showingCaveats = false
     private var groups: [StorageGroup] { model.overview.groups }
     private var measured: [FolderMeasurement] { model.overview.measuredBySize }
     private var total: Int64 { model.overview.total }
-    private var readings: [FreeSpaceReading] { freeSpaceReadings(model.records, current: model.volume) }
     private func show(_ category: FolderCategory? = nil, filter: LocationFilter = .all) {
         model.categoryFilter = category; model.search = ""; model.section = .locations
         model.locationFilter = filter; model.selected = nil; model.inspector = "Overview"
     }
-    private func open(_ item: FolderMeasurement) {
-        show(); model.selected = item.profile.path
-    }
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 6) {
-                    if let scan = model.lastScan {
-                        Text("Last scan: " + scan.folderSummary + " · " + scan.finishedAt.formatted(date: .abbreviated, time: .shortened)).lineLimit(1)
-                    } else { Text("Start a scan to find your largest folders.") }
-                    Spacer()
-                    Button("What gets scanned?") { model.showingScanPlan = true }.buttonStyle(.link)
-                }.font(.caption).foregroundStyle(.secondary)
-                HStack(alignment: .top, spacing: 16) {
-                    driveCard.frame(maxWidth: .infinity)
-                    freeSpaceChart.frame(maxWidth: .infinity)
-                }.frame(height: 214)
-                HStack(spacing: 10) {
-                    metric("Scanned", value: measured.count, symbol: "folder", tint: .accentColor) { show(filter: .scanned) }
-                    metric("Not scanned", value: model.overview.pendingCount, symbol: "clock", tint: .secondary) { show(filter: .unscanned) }
-                    metric("Growing", value: model.overview.growthCount, symbol: "chart.line.uptrend.xyaxis", tint: .growing) { show(filter: .growing) }
-                    metric("Scan issues", value: model.attentionCount, symbol: "exclamationmark.triangle", tint: model.attentionCount > 0 ? .attention : .secondary) { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention }
-                }
+            VStack(alignment: .leading, spacing: 14) {
+                hero
+                statusLine
                 HStack(alignment: .top, spacing: 16) {
                     categories.frame(maxWidth: .infinity)
                     largest.frame(maxWidth: .infinity)
                 }
-            }.padding(.horizontal, 22).padding(.bottom, 14)
+            }.padding(.horizontal, 22).padding(.bottom, 16)
         }.scrollBounceBehavior(.basedOnSize)
     }
-    private func metric(_ title: String, value: Int, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
-                Text(value.formatted()).font(.title3.weight(.semibold)).monospacedDigit()
-                Text(title).font(.caption).lineLimit(1)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true)
-            }.padding(10).background(.background.secondary)
-        }.buttonStyle(.plain).accessibilityLabel("\(value) folders · \(title)")
+    private var hero: some View {
+        HStack(alignment: .top, spacing: 22) {
+            capacity.frame(width: 190)
+            Divider()
+            UsageChart(model: model)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
     }
-    private var driveCard: some View {
-        Panel(title: "Storage on your Mac", symbol: "internaldrive", minimumHeight: 214) {
-            if let v = model.volume {
-                HStack(spacing: 18) {
-                    ZStack {
-                        Chart {
-                            SectorMark(angle: .value("Used", v.used), innerRadius: .ratio(0.80), angularInset: 2).foregroundStyle(Color.secondary.opacity(0.22))
-                            SectorMark(angle: .value("Free", v.free), innerRadius: .ratio(0.80), angularInset: 2).foregroundStyle(Color.accentColor)
-                        }.chartLegend(.hidden)
-                        VStack(spacing: 2) {
-                            Text((Double(v.used) / Double(v.total)).formatted(.percent.precision(.fractionLength(0)))).font(.title2.weight(.semibold))
-                            Text("used").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.frame(width: 96, height: 96).accessibilityElement(children: .ignore).accessibilityLabel("\(byteLabel(v.used)) used of \(byteLabel(v.total))")
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(byteLabel(v.free) + " free").font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
-                        Text("of \(byteLabel(v.total)) total").font(.callout).foregroundStyle(.secondary)
-                        Text("Checked \(v.date.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+    @ViewBuilder private var capacity: some View {
+        if let v = model.volume {
+            let fraction = Double(v.used) / Double(max(v.total, 1))
+            VStack(alignment: .leading, spacing: 10) {
+                ZStack {
+                    Chart {
+                        SectorMark(angle: .value("Used", v.used), innerRadius: .ratio(0.78), angularInset: 1.5).foregroundStyle(Color.accentColor)
+                        SectorMark(angle: .value("Free", v.free), innerRadius: .ratio(0.78), angularInset: 1.5).foregroundStyle(Color.secondary.opacity(0.22))
+                    }.chartLegend(.hidden)
+                    VStack(spacing: 0) {
+                        Text(fraction.formatted(.percent.precision(.fractionLength(0)))).font(.title2.weight(.semibold)).monospacedDigit()
+                        Text("used").font(.caption).foregroundStyle(.secondary)
                     }
+                }.frame(width: 104, height: 104).accessibilityElement(children: .ignore).accessibilityLabel("\(byteLabel(v.used)) used of \(byteLabel(v.total))")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(byteLabel(v.free)).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
+                    Text("free of \(byteLabel(v.total))").font(.callout).foregroundStyle(.secondary)
                 }
-                HStack {
-                    Text("Volume containing your home folder").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Refresh", systemImage: "arrow.clockwise") { model.refreshVolume() }.controlSize(.small).help("Check disk capacity without scanning folders")
+                HStack(spacing: 6) {
+                    Text("Checked \(v.date.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                    Button { model.refreshVolume() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless).controlSize(.small)
+                        .help("Check disk space now. Doesn't scan folders.").accessibilityLabel("Check disk space now")
                 }
-            } else { Text("Storage information is unavailable."); Button("Try Again") { model.refreshVolume() } }
-        }
-    }
-    private var freeSpaceChart: some View {
-        Panel(title: "Free space over time", symbol: "chart.xyaxis.line") {
-            let points = readings
-            if let first = points.first, let last = points.last, points.count > 1 {
-                let change = last.bytes - first.bytes
-                let picked = selectedDate.flatMap { date in points.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) } }
-                Text(picked.map { byteLabel($0.bytes) + " free · " + $0.date.formatted(date: .abbreviated, time: .shortened) }
-                     ?? (change == 0 ? "No change in free space" : byteLabel(abs(change)) + (change < 0 ? " less free space" : " more free space")))
-                    .font(.callout.weight(.medium)).foregroundStyle(picked == nil && change < 0 ? Color.growing : .primary).lineLimit(1).minimumScaleFactor(0.8)
-                Chart(points) { point in
-                    LineMark(x: .value("Time", point.date), y: .value("GiB free", Double(point.bytes) / 1_073_741_824)).foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2))
-                    PointMark(x: .value("Time", point.date), y: .value("GiB free", Double(point.bytes) / 1_073_741_824)).foregroundStyle(Color.accentColor).symbolSize(point.isCurrent ? 50 : 22)
-                    if let picked, picked.id == point.id { RuleMark(x: .value("Reading", point.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3])) }
-                }.chartXScale(domain: readingTimeRange(points)).chartXSelection(value: $selectedDate)
-                    .chartYScale(domain: 0...max(50, ceil(Double(points.map(\.bytes).max() ?? 0) / 1_073_741_824 / 50) * 50))
-                    .chartOverlay { proxy in
-                        GeometryReader { geometry in
-                            Rectangle().fill(.clear).contentShape(Rectangle()).onTapGesture { location in
-                                guard let frame = proxy.plotFrame else { return }
-                                let plot = geometry[frame]
-                                if plot.contains(location) { selectedDate = proxy.value(atX: location.x - plot.minX) }
-                            }
-                        }
-                    }
-                    .chartXAxis(.hidden).chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
-                    .chartYAxisLabel("GiB free").frame(height: 78)
-                    .accessibilityLabel("\(byteLabel(first.bytes)) free on \(first.date.formatted()), \(byteLabel(last.bytes)) free on \(last.date.formatted()). Readings, not continuous monitoring.")
-                HStack {
-                    Text(first.date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
-                    Spacer()
-                    Text(last.date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))
-                }.font(.caption2).foregroundStyle(.secondary)
-                HStack {
-                    Text("Saved scans + latest reading · whole disk").foregroundStyle(.secondary).lineLimit(1)
-                    Spacer(minLength: 4)
-                    if picked != nil { Button("Show change") { selectedDate = nil }.buttonStyle(.link) }
-                }.font(.caption2)
-            } else {
-                Text("Scan a folder to start recording free-space history.").font(.callout).foregroundStyle(.secondary)
-                Text("There are no earlier scan readings yet.").font(.caption)
             }
+        } else {
+            VStack(alignment: .leading, spacing: 8) { Text("Disk space is unavailable.").font(.callout); Button("Try Again") { model.refreshVolume() } }
         }
+    }
+    private var statusLine: some View {
+        HStack(spacing: 6) {
+            link("\(measured.count) scanned", tint: .primary) { show(filter: .scanned) }
+            if model.overview.pendingCount > 0 { dot; link("\(model.overview.pendingCount) not scanned yet", tint: .secondary) { show(filter: .unscanned) } }
+            if model.overview.growthCount > 0 { dot; link("\(model.overview.growthCount) growing", tint: .growing) { show(filter: .growing) } }
+            dot
+            if model.attentionCount > 0 { link("\(model.attentionCount) couldn't be scanned", tint: .attention) { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention } }
+            else { Text("nothing needs attention").foregroundStyle(.secondary) }
+            Spacer()
+            if let scan = model.lastScan { Text("Last scan \(scan.finishedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary) }
+            Button("What gets scanned?") { model.showingScanPlan = true }.buttonStyle(.link)
+        }.font(.callout).lineLimit(1)
+    }
+    private var dot: some View { Text("·").foregroundStyle(.tertiary) }
+    private func link(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Text(title).foregroundStyle(tint).underline(false) }.buttonStyle(.plain).onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
     }
     private var categories: some View {
-        Panel(title: "What’s taking up space", symbol: "square.stack.3d.up") {
+        Panel(title: "What's taking space", symbol: "square.stack.3d.up") {
             HStack(alignment: .firstTextBaseline) {
                 Text(byteLabel(total)).font(.title2.weight(.semibold)).monospacedDigit()
                 Text("in scanned folders").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button { showingCaveats.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(.borderless).accessibilityLabel("About these folder totals")
+                Button { showingCaveats.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(.borderless).accessibilityLabel("About these totals")
                     .popover(isPresented: $showingCaveats) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("Folder totals, not your entire disk").font(.headline)
-                            Text("The latest saved size of each folder. A parent and its subfolders are counted once. Some sizes come from older scans.")
-                            Text("Shared APFS storage means deleting a folder yourself may free less space than its listed size. These are estimates, not cleanup promises.")
-                        }.padding(18).frame(width: 320)
+                            Text("Scanned folders, not your whole disk").font(.headline)
+                            Text("The latest size of each scanned folder. Folders inside other folders are counted once.")
+                            Text("Removing a folder yourself may free less than its size, because APFS shares storage between files.")
+                        }.font(.callout).padding(18).frame(width: 320)
                     }
             }
             GeometryReader { geo in
-                HStack(spacing: 0) {
+                let gaps = CGFloat(max(groups.count - 1, 0)) * 2
+                HStack(spacing: 2) {
                     ForEach(groups) { group in
-                        Rectangle().fill(group.category.tint).frame(width: geo.size.width * Double(group.bytes) / Double(max(total, 1)))
-                            .help(group.category.displayName + " · " + byteLabel(group.bytes))
+                        Rectangle().fill(group.category.tint.opacity(hovered == nil || hovered == group.category ? 1 : 0.28))
+                            .frame(width: max(2, (geo.size.width - gaps) * Double(group.bytes) / Double(max(total, 1))))
+                            .onHover { inside in hovered = inside ? group.category : (hovered == group.category ? nil : hovered) }
+                            .onTapGesture { show(group.category) }
+                            .accessibilityLabel(group.category.displayName + " " + byteLabel(group.bytes))
                     }
-                }.clipShape(Capsule())
-            }.frame(height: 12).accessibilityHidden(true)
+                }.clipShape(RoundedRectangle(cornerRadius: 5))
+            }.frame(height: 18)
+            Group {
+                if let hovered, let group = groups.first(where: { $0.category == hovered }) {
+                    Text("\(group.category.displayName) · \(byteLabel(group.bytes)) · \((Double(group.bytes) / Double(max(total, 1))).formatted(.percent.precision(.fractionLength(0)))) · click to see its folders")
+                } else { Text("Point at a color to see what it is. Click to list its folders.") }
+            }.font(.caption).foregroundStyle(.secondary).lineLimit(1)
             ForEach(groups.prefix(5)) { group in categoryRow(group) }
             if groups.count > 5 {
-                Menu("\(groups.count - 5) more types") {
+                Menu("\(groups.count - 5) more") {
                     ForEach(groups.dropFirst(5)) { group in Button(group.category.displayName + " · " + byteLabel(group.bytes)) { show(group.category) } }
-                }.menuStyle(.borderlessButton).frame(maxWidth: .infinity, alignment: .leading).font(.caption)
+                }.menuStyle(.borderlessButton).fixedSize().font(.callout)
             }
-            if groups.isEmpty { Text("Scan folders to see a breakdown.").foregroundStyle(.secondary) }
+            if groups.isEmpty { Text("Scan folders to see what's taking space.").font(.callout).foregroundStyle(.secondary) }
         }
     }
     private func categoryRow(_ group: StorageGroup) -> some View {
         Button { show(group.category) } label: {
             HStack {
-                Circle().fill(group.category.tint).frame(width: 8, height: 8).accessibilityHidden(true)
+                Circle().fill(group.category.tint).frame(width: 9, height: 9).accessibilityHidden(true)
                 Text(group.category.displayName)
                 Spacer()
                 Text(byteLabel(group.bytes)).monospacedDigit().foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true)
-            }.font(.callout).contentShape(Rectangle())
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+            }.font(.callout).padding(.vertical, 3).padding(.horizontal, 6)
+                .background(hovered == group.category ? group.category.tint.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain).help(group.category.shortPurpose)
+            .onHover { inside in hovered = inside ? group.category : (hovered == group.category ? nil : hovered) }
     }
     private var largest: some View {
-        Panel(title: "Your largest folders", symbol: "folder") {
-            ForEach(measured.prefix(4)) { item in
-                Button { open(item) } label: {
+        Panel(title: "Largest folders", symbol: "folder") {
+            ForEach(measured.prefix(6)) { item in
+                let values = model.sparkline(item.profile.path)
+                Button { model.open(item.profile.path) } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: item.profile.category.symbol).foregroundStyle(item.profile.category.tint).frame(width: 22).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
+                        Image(systemName: item.profile.category.symbol).foregroundStyle(item.profile.category.tint).frame(width: 20).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 1) {
                             Text(item.profile.displayName).font(.callout).lineLimit(1)
                             Text(item.profile.category.displayName).font(.caption).foregroundStyle(.secondary)
                         }
-                        Spacer()
-                        Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit()
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary).accessibilityHidden(true)
-                    }.padding(.vertical, 3).contentShape(Rectangle())
+                        Spacer(minLength: 8)
+                        Sparkline(values: values, tint: values.trendTint)
+                        Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit().frame(minWidth: 78, alignment: .trailing)
+                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+                    }.padding(.vertical, 2).contentShape(Rectangle())
                 }.buttonStyle(.plain).contextMenu { LocationActions(model: model, path: item.profile.path) }
             }
-            Button("See all folders") { show() }.buttonStyle(.link).font(.caption)
+            if measured.isEmpty { Text("Scan folders to see the largest ones here.").font(.callout).foregroundStyle(.secondary) }
+            Button("See all folders") { show() }.buttonStyle(.link).font(.callout)
         }
     }
 }

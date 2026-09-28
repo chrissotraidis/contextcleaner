@@ -122,6 +122,28 @@ import Foundation
         watchModel.records = [ScanRecord(id: "issue-test", startedAt: t1, finishedAt: t1, scope: "fixture", complete: false, measurements: [failed, stoppedFolder], discoveryNotes: [])]
         watchModel.section = .needsAttention
         check(watchModel.attentionCount == 1 && watchModel.rows.map(\.id) == [steady.path], "scan issues include access failures but not pending or user-stopped folders")
+        // Hourly capacity readings: a timestamp and two numbers, appended, never removed.
+        let capacityModel = CleanerModel(home: home, dataRoot: storage.root)
+        let startCount = capacityModel.capacity.count
+        let base = Date(timeIntervalSince1970: 2_000_000_000)
+        capacityModel.volume = VolumeSnapshot(date: base, total: 1_000, free: 400)
+        capacityModel.recordCapacityIfDue()
+        check(capacityModel.capacity.last == CapacityReading(date: base, total: 1_000, free: 400) && capacityModel.capacity.count == startCount + 1, "a capacity reading stores its time, total and free space")
+        capacityModel.volume = VolumeSnapshot(date: base.addingTimeInterval(600), total: 1_000, free: 390)
+        capacityModel.recordCapacityIfDue()
+        check(capacityModel.capacity.count == startCount + 1, "a second reading within the hour is not stored")
+        capacityModel.volume = VolumeSnapshot(date: base.addingTimeInterval(CleanerModel.capacityInterval), total: 1_000, free: 380)
+        capacityModel.recordCapacityIfDue()
+        check(capacityModel.capacity.count == startCount + 2, "the next reading is stored about an hour later")
+        let capacityFiles = try FileManager.default.contentsOfDirectory(atPath: storage.root.appendingPathComponent("capacity").path)
+        check(capacityFiles.count == capacityModel.capacity.count, "each reading is its own new file and none is removed")
+        let capacityRestart = CleanerModel(home: home, dataRoot: storage.root)
+        check(capacityRestart.capacity == capacityModel.capacity, "readings reload after a restart without being rewritten")
+        check(capacityRestart.usage.contains { $0.date == base && $0.used == 600 }, "stored readings appear on the Space used chart")
+        capacityRestart.volume = VolumeSnapshot(date: base.addingTimeInterval(7200), total: 1_000, free: 350)
+        capacityRestart.lastResult = nil
+        capacityRestart.open(grower.path)
+        check(capacityRestart.section == .locations && capacityRestart.selected == grower.path && capacityRestart.locationFilter == .all, "opening a folder from Overview shows it selected in Folders")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

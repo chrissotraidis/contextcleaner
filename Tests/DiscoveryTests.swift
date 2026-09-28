@@ -27,7 +27,10 @@ import Foundation
         check(reloaded.selection.isEmpty && reloaded.selected == nil && !reloaded.canRescanSelection, "switching views clears hidden selection and disables rescan")
         reloaded.search = ""
         reloaded.section = .needsAttention
-        check(reloaded.rows.count == 3, "unmeasured locations are discoverable in Needs Attention")
+        check(reloaded.rows.isEmpty && reloaded.attentionCount == 0, "unscanned folders are not scan errors")
+        check(reloaded.overview.pendingCount == 3, "unscanned folders have a separate overview count")
+        reloaded.section = .locations; reloaded.locationFilter = .unscanned
+        check(reloaded.rows.count == 3, "unscanned folders remain available in their own filter")
         reloaded.policy(selected) { $0.excluded = true; $0.note = "Fixture exclusion" }
         check(!reloaded.rows.contains { $0.id == selected }, "exclusion still governs persisted discovery")
         let second = CleanerModel(home: home, dataRoot: storage.root)
@@ -114,6 +117,11 @@ import Foundation
         check(!legacyWatch.watched && !legacyWatch.recurring, "Stop Watching clears both legacy and current watch flags")
         legacyWatch.isWatched = true
         check(legacyWatch.watched && !legacyWatch.recurring, "new watch choices use one canonical stored flag")
+        var failed = measure(steady, 0, t1); failed.state = .inaccessible; failed.allocatedBytes = nil
+        var stoppedFolder = measure(expected, 0, t1); stoppedFolder.state = .cancelled; stoppedFolder.allocatedBytes = nil
+        watchModel.records = [ScanRecord(id: "issue-test", startedAt: t1, finishedAt: t1, scope: "fixture", complete: false, measurements: [failed, stoppedFolder], discoveryNotes: [])]
+        watchModel.section = .needsAttention
+        check(watchModel.attentionCount == 1 && watchModel.rows.map(\.id) == [steady.path], "scan issues include access failures but not pending or user-stopped folders")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

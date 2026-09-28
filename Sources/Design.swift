@@ -4,7 +4,7 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview = "Overview", locations = "Locations", watching = "Watching", needsAttention = "Needs Attention", history = "History"
+    case overview = "Overview", locations = "Folders", watching = "Watchlist", needsAttention = "Scan Issues", history = "Scan History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -17,11 +17,11 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .overview: return "See what takes space, what changes, and what it belongs to."
-        case .locations: return "Every place this app measures. Select a row to see its story."
-        case .watching: return "Locations you watch, plus ones that keep growing. Checked first on every scan."
-        case .needsAttention: return "Could not be measured completely. Each row says why and what to do."
-        case .history: return "Every scan, newest first, with what changed."
+        case .overview: return "Find large folders and see what has changed."
+        case .locations: return "Folder sizes, what they contain, and which apps use them."
+        case .watching: return "Folders to check again. These get priority in scheduled scans."
+        case .needsAttention: return "Scans that could not finish. Select a folder for the reason and next step."
+        case .history: return "A record of folder scans: what was checked, when, and the result."
         }
     }
     /// Sidebar icons use a status hue only where the destination is itself a status.
@@ -29,11 +29,13 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", rebuildable = "Rebuildable", growing = "Growing", reviewLater = "Review later", excluded = "Excluded"
+    case all = "All", scanned = "Scanned", unscanned = "Not scanned", rebuildable = "Caches & builds", growing = "Growing", reviewLater = "Review later", excluded = "Excluded"
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Every measured or discovered location that is not excluded."
+        case .all: return "Saved sizes from your scans. Select a folder for details."
+        case .scanned: return "Folders with a complete saved size. Dates are shown in folder details."
+        case .unscanned: return "Folders found on your Mac that have not been scanned yet. This is not an error."
         case .rebuildable: return "Caches and build output that a tool can recreate, with no process holding files open at scan time. Rebuildable is not the same as unused; review each before removing anything yourself."
         case .growing: return "Locations that grew between two comparable scans and are not marked as expected."
         case .reviewLater: return "Locations you asked to be reminded about later."
@@ -75,12 +77,13 @@ struct Panel<Content: View>: View {
     var title: String
     var symbol: String
     var tint: Color = .accentColor
+    var minimumHeight: CGFloat? = nil
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Label { Text(title).foregroundStyle(.primary) } icon: { Image(systemName: symbol).foregroundStyle(tint) }.font(.headline)
             content
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(16).frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .topLeading)
             .background(.background.secondary)
     }
 }
@@ -92,10 +95,10 @@ struct LocationActions: View {
     var body: some View {
         let policy = model.preferences.policy(path)
         let busy = model.running || model.inspecting || model.discovering
-        Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-        Button("Rescan This Folder") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
+        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+        Button("Scan This Folder") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
-        Button(policy.isWatched ? "Stop Watching" : "Watch") { model.policy(path) { $0.isWatched.toggle() } }
+        Button(policy.isWatched ? "Remove from Watchlist" : "Add to Watchlist") { model.policy(path) { $0.isWatched.toggle() } }
         Button(policy.expected ? "Growth Is Not Expected" : "Growth Is Expected") { model.policy(path) { $0.expected.toggle() } }
         Button("Review Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
         Button("Tags and Notes…") { model.editing = path }

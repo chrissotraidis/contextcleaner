@@ -22,6 +22,22 @@ enum FolderCategory: String, Codable, CaseIterable {
     case simulator = "Simulator data", debugSymbols = "Debugging symbols", workspace = "Mixed workspace"
     case backup = "Recovery backup", history = "Conversation history", model = "Model library"
     case appData = "Application data", download = "Downloads", unknown = "Unclassified"
+    var displayName: String {
+        switch self {
+        case .workspace: return "Project files"
+        case .appData: return "App libraries"
+        case .simulator: return "Test devices"
+        case .backup: return "Recovery copies"
+        case .installCache: return "Device install cache"
+        case .buildOutput: return "Build files"
+        case .model: return "AI models"
+        case .history: return "Chat history"
+        case .packageCache: return "Package downloads"
+        case .debugSymbols: return "Debug files"
+        case .download: return "Downloads"
+        case .unknown: return "Other files"
+        }
+    }
     var reproducible: Bool { [.packageCache, .buildOutput, .installCache].contains(self) }
 }
 enum EvidenceLevel: String, Codable { case observed = "Observed", inferred = "Inferred", unknown = "Unknown" }
@@ -33,6 +49,10 @@ struct Evidence: Codable, Hashable, Identifiable {
     var source: String
 }
 struct FolderProfile: Codable, Identifiable {
+    var displayName: String {
+        if ["build", "work", "generated"].contains(name), let project { return project + " · " + name }
+        return name
+    }
     var id: String { path }
     var path: String
     var name: String

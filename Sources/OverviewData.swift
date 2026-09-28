@@ -45,3 +45,51 @@ func freeSpaceRange(_ bytes: [Int64], preserving previous: ClosedRange<Double>? 
     let upper = max(lower + 20, ceil(maximum / 10) * 10 + 10)
     return min(previous?.lowerBound ?? lower, lower)...max(previous?.upperBound ?? upper, upper)
 }
+
+struct FreeSpaceReading: Identifiable {
+    let id: String
+    let date: Date
+    let bytes: Int64
+    let isCurrent: Bool
+}
+/// Include the same capacity reading displayed by the drive card. No synthetic history.
+func freeSpaceReadings(_ records: [ScanRecord], current: VolumeSnapshot?) -> [FreeSpaceReading] {
+    var points = records.compactMap { record -> FreeSpaceReading? in
+        guard let bytes = record.freeBytes, bytes >= 0 else { return nil }
+        return FreeSpaceReading(id: record.id, date: record.finishedAt, bytes: bytes, isCurrent: false)
+    }
+    if let current {
+        points.removeAll { $0.date == current.date }
+        points.append(FreeSpaceReading(id: "current", date: current.date, bytes: current.free, isCurrent: true))
+    }
+    points.sort { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+    guard let end = points.last?.date else { return [] }
+    return points.filter { $0.date >= end.addingTimeInterval(-7 * 86400) }
+}
+func readingTimeRange(_ readings: [FreeSpaceReading]) -> ClosedRange<Date> {
+    guard let first = readings.first?.date, let last = readings.last?.date else {
+        return Date(timeIntervalSince1970: 0)...Date(timeIntervalSince1970: 3600)
+    }
+    // Domains depend only on actual readings, never on a ticking Date() during redraw.
+    let padding = max(60, last.timeIntervalSince(first) * 0.04)
+    return first.addingTimeInterval(-padding)...last.addingTimeInterval(padding)
+}
+extension ScanRecord {
+    var folderSummary: String {
+        if measurements.count == 1 { return measurements[0].profile.displayName }
+        if scope.hasPrefix("Priority") { return "Scheduled folder check" }
+        if scope == "Watched locations" { return "Watchlist scan" }
+        if scope == "Immediate children" { return "Subfolder scan" }
+        if scope == "Simulator apps and data" { return "Test device scan" }
+        if legacySource != nil || scope.hasPrefix("Imported") { return "Imported folder scan" }
+        return "Folder scan"
+    }
+    var resultSummary: String {
+        let measured = measurements.filter { $0.state == .measured }.count
+        let issues = measurements.filter { [.inaccessible, .limited, .missing, .failed].contains($0.state) }.count
+        let target = requestedCount ?? measurements.count
+        if !complete { return "Stopped · \(measured) of \(target) folders scanned" }
+        if issues > 0 { return "\(measured) scanned · \(issues) with issues" }
+        return measured == 1 ? "1 folder scanned" : "\(measured) folders scanned"
+    }
+}

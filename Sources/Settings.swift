@@ -41,14 +41,14 @@ struct ScanningSettings: View {
                 Text("Checks run only while the app is open. Watched and growing locations go first, then the oldest measurements. Each attempt is recorded before it starts, so a failed check does not retry every few minutes.").font(.caption).foregroundStyle(.secondary)
                 if let last = model.preferences.lastScheduledAttempt { Text("Last attempt \(last.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
             }
-            Section("Allowances for Scan Now") {
+            Section("Scan limits") {
                 Picker("Time per location", selection: Binding(get: { model.preferences.perLocationSeconds ?? 120 }, set: { value in model.updatePreferences { $0.perLocationSeconds = value } })) {
                     Text("30 seconds").tag(30); Text("1 minute").tag(60); Text("2 minutes").tag(120); Text("5 minutes").tag(300); Text("15 minutes").tag(900)
                 }
                 Picker("Entries per location", selection: Binding(get: { model.preferences.perLocationEntries ?? 1_000_000 }, set: { value in model.updatePreferences { $0.perLocationEntries = value } })) {
                     Text("100 thousand").tag(100_000); Text("500 thousand").tag(500_000); Text("1 million").tag(1_000_000); Text("5 million").tag(5_000_000)
                 }
-                Text("When a location exceeds its allowance the scan stops for that location, withholds the partial size and lists it under Needs Attention. Measure a smaller child folder instead.").font(.caption).foregroundStyle(.secondary)
+                Text("When a location exceeds its allowance the scan stops for that location, withholds the partial size and lists it under Scan Issues. Measure a smaller child folder instead.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Now") {
                 HStack {
@@ -57,7 +57,7 @@ struct ScanningSettings: View {
                     Spacer()
                     Button("About access…") { showingAccessHelp = true }
                 }.disabled(model.running || model.inspecting || model.discovering)
-                if let last = model.preferences.lastDiscovery { Text("Locations were last rediscovered \(last.formatted(date: .abbreviated, time: .shortened)). Scan Now rediscovers included locations; scheduled checks rediscover weekly.").font(.caption).foregroundStyle(.secondary) }
+                if let last = model.preferences.lastDiscovery { Text("Locations were last rediscovered \(last.formatted(date: .abbreviated, time: .shortened)). Scan Folders looks for included folders again; scheduled checks rediscover weekly.").font(.caption).foregroundStyle(.secondary) }
             }
         }.formStyle(.grouped).padding(.top, 4)
         .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
@@ -95,7 +95,7 @@ struct CoverageSettings: View {
                 }
             }
             Section("Folders you added") {
-                if model.preferences.customRoots.isEmpty { Text("None yet. Added folders are measured with every Scan Now.").foregroundStyle(.secondary) }
+                if model.preferences.customRoots.isEmpty { Text("None yet. Added folders are measured when you choose Scan Folders.").foregroundStyle(.secondary) }
                 ForEach(model.preferences.customRoots, id: \.self) { path in
                     HStack { Text(path).font(.callout).lineLimit(1).truncationMode(.middle); Spacer(); Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) } }
                 }
@@ -120,5 +120,39 @@ struct CoverageSettings: View {
                 Dictionary(uniqueKeysWithValues: Coverage.entries.map { ($0.id, Coverage.presence($0, home: home)) })
             }.value
         }
+    }
+}
+
+struct ScanPlanView: View {
+    @ObservedObject var model: CleanerModel
+    @Environment(\.dismiss) private var dismiss
+    private var included: [CoverageEntry] { Coverage.entries.filter { !model.preferences.excluded($0.path(home: model.home)) } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("Scan your folders", systemImage: "magnifyingglass").font(.title2.weight(.semibold))
+            Text("Check folder sizes and save a new reading. No files are changed or deleted.").font(.callout).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Known app and developer folders", systemImage: "app.badge.checkmark").font(.headline)
+                Text(Array(Set(included.map { $0.writer == "You" ? "Downloads" : $0.writer == "Your projects" ? "Project build folders" : $0.writer })).sorted().joined(separator: ", ")).font(.callout).foregroundStyle(.secondary)
+                Text("Folders that exist on this Mac will be checked. Exclusions are respected.").font(.caption).foregroundStyle(.secondary)
+                DisclosureGroup("See included paths") {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(included) { entry in Text("~/" + entry.relativePath).font(.caption).textSelection(.enabled) }
+                            ForEach(model.preferences.customRoots.filter { !model.preferences.excluded($0) }, id: \.self) { path in Text(path).font(.caption).textSelection(.enabled) }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 150)
+                }.font(.caption)
+                if model.preferences.customRoots.contains(where: { !model.preferences.excluded($0) }) { Text("Plus folders you added in Settings.").font(.caption) }
+            }.padding(16).background(.background.secondary)
+            Text("This checks selected parts of your Mac, not the entire disk. Large folders may reach a scan limit; you can stop at any time.").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                SettingsLink { Text("Scan Settings…") }
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Start Scan", systemImage: "magnifyingglass") { model.showingScanPlan = false; model.scan() }
+                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.running || model.inspecting || model.discovering || model.store == nil)
+            }
+        }.padding(24).frame(width: 540)
     }
 }

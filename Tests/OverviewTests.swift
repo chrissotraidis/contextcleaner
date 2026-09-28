@@ -43,6 +43,25 @@ import Foundation
         let failedParent = record("partial", [item("/fixture/work", .workspace, nil, .failed), item("/fixture/work/build", .buildOutput, 120)])
         check(scanDelta(failedParent, previous: before)?.grew.first?.delta == 30, "an incomparable parent cannot hide a comparable child change")
         check(scanDelta(record("missing", [item("/fixture/other", .workspace, 200)]), previous: before) == nil, "disjoint scan coverage does not claim zero growth")
+        var sampleA = before; sampleA.freeBytes = 250*gib; sampleA.finishedAt = start
+        var sampleB = after; sampleB.freeBytes = 220*gib; sampleB.finishedAt = start.addingTimeInterval(3600)
+        let live = VolumeSnapshot(date: start.addingTimeInterval(7200), total: 4000*gib, free: 125*gib)
+        let readings = freeSpaceReadings([sampleB, sampleA], current: live)
+        check(readings.map(\.bytes) == [250*gib,220*gib,125*gib] && readings.last!.isCurrent, "chart includes the same latest capacity reading as the storage card")
+        check(readingTimeRange(readings).lowerBound < start && readingTimeRange(readings).upperBound > live.date, "time bounds include both endpoint readings with visible padding")
+        check(readingTimeRange(readings).upperBound.timeIntervalSince(readingTimeRange(readings).lowerBound) < 3*3600, "a few hours of readings are not compressed into an empty week")
+        sampleA.finishedAt = start.addingTimeInterval(-8*86400)
+        check(freeSpaceReadings([sampleA, sampleB], current: live).count == 2, "free-space history retains only readings in its recent window")
+        sampleB.finishedAt = live.date
+        check(freeSpaceReadings([sampleB], current: live).count == 1, "current reading replaces a duplicate timestamp")
+        check(freeSpaceReadings([], current: nil).isEmpty, "empty history never invents a reading")
+        let single = record("single", [cache])
+        check(single.folderSummary == cache.profile.displayName, "single-folder scan history identifies the folder")
+        var stopped = single; stopped.complete = false; stopped.requestedCount = 4
+        check(stopped.resultSummary == "Stopped · 1 of 4 folders scanned", "stopped history distinguishes scanned folders from requested coverage")
+        let workspace = FolderProfile(path: "/fixture/project/build", name: "build", category: .workspace, project: "Project A", associatedApp: "Compiler", explanation: "", consequence: "", evidence: [])
+        check(workspace.displayName == "Project A · build", "generic build folders identify their project")
+        check(FolderCategory.workspace.rawValue == "Mixed workspace" && FolderCategory.workspace.displayName == "Project files", "plain labels preserve stored category identifiers")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

@@ -7,16 +7,24 @@ struct FolderRow: Identifiable {
     var measurement: FolderMeasurement
     var policy: LocationPolicy
     var change: GrowthSummary
-    var name: String { measurement.profile.name }
+    var name: String { measurement.profile.displayName }
     var app: String { measurement.profile.project ?? measurement.profile.associatedApp }
     var bytes: Int64 { measurement.allocatedBytes ?? -1 }
     var delta: Int64 { change.delta ?? Int64.min }
-    var category: String { measurement.profile.category.rawValue }
+    var category: String { measurement.profile.category.displayName }
     var growing: Bool { (change.delta ?? 0) > 0 && (change.delta ?? 0) >= (policy.growthThresholdBytes ?? 0) && !policy.expected }
     var status: String {
         if policy.excluded { return "Excluded" }
         if measurement.state == .pending { return "Not scanned" }
-        if measurement.state != .measured { return measurement.state.rawValue.capitalized }
+        if measurement.state != .measured {
+            switch measurement.state {
+            case .inaccessible: return "Access needed"
+            case .limited: return "Scan limit reached"
+            case .missing: return "Not found"
+            case .cancelled: return "Stopped"
+            default: return "Scan failed"
+            }
+        }
         if (policy.reviewAfter ?? .distantPast) > Date() { return "Review later" }
         if policy.expected { return "Expected" }
         if growing { return policy.autoWatched == true ? "Growing · watched" : "Growing" }
@@ -27,6 +35,7 @@ struct FolderRow: Identifiable {
     /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
     var statusTint: Color {
         if policy.excluded { return .secondary }
+        if [.pending, .cancelled, .excluded].contains(measurement.state) { return .secondary }
         if measurement.state != .measured { return .attention }
         if growing { return .growing }
         if policy.expected { return .stable }
@@ -116,7 +125,7 @@ struct FolderRow: Identifiable {
     }
     var latest: [FolderMeasurement] { refreshDerived(); return derived.latest }
     /// Everything the Overview needs, computed once per change of records or preferences.
-    struct OverviewSnapshot { var groups: [StorageGroup] = []; var total: Int64 = 0; var measuredBySize: [FolderMeasurement] = []; var growthCount = 0; var watchingCount = 0; var attentionCount = 0 }
+    struct OverviewSnapshot { var groups: [StorageGroup] = []; var total: Int64 = 0; var measuredBySize: [FolderMeasurement] = []; var growthCount = 0; var watchingCount = 0; var attentionCount = 0; var pendingCount = 0 }
     private var overviewCache: (key: String, validUntil: Date, value: OverviewSnapshot) = ("", .distantPast, OverviewSnapshot())
     var overview: OverviewSnapshot {
         let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
@@ -135,9 +144,9 @@ struct FolderRow: Identifiable {
         var attention = Set<String>()
         for item in current where !excluded(item.profile.path) && [.inaccessible, .limited, .missing, .failed].contains(item.state) { attention.insert(item.profile.path) }
         let known = Set(current.map { $0.profile.path })
-        for profile in discovery.profiles where !known.contains(profile.path) && !excluded(profile.path) { attention.insert(profile.path) }
+        let pendingCount = discovery.profiles.filter { !known.contains($0.path) && !excluded($0.path) }.count
         let watching = preferences.locations.filter { ($0.value.isWatched) && !excluded($0.key) }.count
-        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count)
+        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count, pendingCount: pendingCount)
         overviewCache = (key, nextReviewDeadline, snapshot)
         return snapshot
     }
@@ -168,12 +177,14 @@ struct FolderRow: Identifiable {
                 switch locationFilter {
                 case .excluded: return row.policy.excluded
                 case .all: return !preferences.excluded(p.path)
+                case .scanned: return !preferences.excluded(p.path) && row.measurement.state == .measured
+                case .unscanned: return !preferences.excluded(p.path) && row.measurement.state == .pending
                 case .growing: return !preferences.excluded(p.path) && (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
                 case .reviewLater: return !preferences.excluded(p.path) && (row.policy.reviewAfter ?? .distantPast) > Date()
                 case .rebuildable: return !preferences.excluded(p.path) && p.category.reproducible && row.measurement.state == .measured && row.measurement.activityCheckAvailable && row.measurement.processes.isEmpty && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
                 }
             case .watching: return !preferences.excluded(p.path) && (row.policy.isWatched)
-            case .needsAttention: return !preferences.excluded(p.path) && [.inaccessible, .limited, .missing, .failed, .pending].contains(row.measurement.state)
+            case .needsAttention: return !preferences.excluded(p.path) && [.inaccessible, .limited, .missing, .failed].contains(row.measurement.state)
             default: return !preferences.excluded(p.path)
             }
         }
@@ -317,7 +328,7 @@ struct FolderRow: Identifiable {
             DispatchQueue.main.async {
                 if !selectedOnly && !watchedOnly { self.acceptDiscovery(found) }
                 if rediscovered { self.recordDiscovery() }
-                self.targetCount = profiles.count; self.progress = "Checking process handles…"
+                self.targetCount = profiles.count; self.progress = "Preparing the folder scan…"
             }
             guard !profiles.isEmpty else {
                 DispatchQueue.main.async { self.error = "No included locations match this scan. Add a location or change your filters."; self.running = false }
@@ -331,7 +342,7 @@ struct FolderRow: Identifiable {
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
                 self.autoWatch(after: record)
-                self.running = false; self.progress = record.complete ? "Scan complete" : "Scan preserved; open Needs Attention for incomplete locations"
+                self.running = false; self.progress = record.resultSummary
             }
         }
     }
@@ -379,11 +390,12 @@ struct FolderRow: Identifiable {
             } catch { DispatchQueue.main.async { self.error = "Device metadata could not be read: \(error.localizedDescription)"; self.identifyingDevices = false } }
         }
     }
+    @Published var showingScanPlan = false
     @Published var reportPreview: String?
     /// Builds the Markdown report for the current view: every visible location, largest first.
     func buildReport() -> String {
         let stamp = Date().formatted(date: .long, time: .shortened)
-        var text = "# Context Cleaner report\n\n\(stamp) · \(section.rawValue)\(section == .locations ? " · \(locationFilter.rawValue)" : "")\(search.isEmpty ? "" : " · matching “\(search)”")\n\n"
+        var text = "# Context Cleaner report\n\n\(stamp) · \(section == .overview || section == .history ? "All included folders" : section.rawValue)\(section == .locations ? " · \(locationFilter.rawValue)" : "")\(search.isEmpty ? "" : " · matching “\(search)”")\n\n"
         if let v = volume { text += "Home volume: \(byteLabel(v.free)) free of \(byteLabel(v.total)) (checked \(v.date.formatted(date: .omitted, time: .shortened))).\n\n" }
         text += "Context Cleaner never deletes files. Sizes are allocated-space estimates from the latest saved scan of each location; nested folders may overlap, and APFS shared blocks mean none of this is guaranteed reclaimable space.\n\n"
         let listed = rows.sorted(by: { $0.bytes > $1.bytes })

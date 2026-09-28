@@ -15,16 +15,16 @@ Source of truth for every screen. Grounded in Apple's Human Interface Guidelines
 | Destination | Purpose | Contents |
 |---|---|---|
 | Overview | Where does the space go, right now | Capacity, free-space trend, category breakdown, largest locations. Fits one screen at minimum window size. |
-| Locations | Everything the app measures | Table with one filter row: All · Rebuildable · Growing · Review later · Excluded. Inspector for the selection. |
-| Watching | What you care about | Watched locations plus locations that keep growing. Checked first on every scan. |
-| Needs Attention | What could not be measured | Unreadable, limited, missing or unmeasured. Sidebar badge shows the count. Red is used here and only here for status. |
-| History | What has changed | Timeline of scans, newest first, with per-scan deltas. |
+| Folders | What each folder contains and uses | Table with a compact filter menu: All, Scanned, Not scanned, Caches & builds, Growing, Review later, Excluded. Inspector for the selection. |
+| Watchlist | What you care about | Watched folders plus significant measured growers. Prioritized by scheduled checks. |
+| Scan Issues | What could not be scanned | Access problems, scan limits, missing folders and failures. Unscanned folders are neutral and live in Folders. |
+| Scan History | What was checked and when | Named folders and outcomes, newest first; sizes and comparisons expand on demand. |
 
-Retired as destinations: Candidates (now the Rebuildable filter), Recurring (folded into Watching), Review Later and Excluded (filters), Growing (filter plus the orange status color), Scanned Locations (renamed Locations).
+Retired destinations: Candidates, Recurring, Review Later, Excluded and Growing. These belong in filters or the Watchlist.
 
 ## Color
 
-- **Selection and primary actions** use the system accent color. The app never overrides the accent and never tints sidebar icons except Needs Attention.
+- **Selection and primary actions** use the system accent color. The app never overrides the accent and never tints sidebar icons except Scan Issues.
 - **Status colors** are reserved and never used as category hues: red `Color.attention` (cannot measure, error), orange `Color.growing` (grew between comparable scans), green `Color.stable` (expected growth, stable).
 - **Category hues**, one each, used for icons, bars and chart segments only: package cache teal · installation cache cyan · build output blue · debugging symbols indigo · simulator purple · mixed workspace brown · recovery backup orchid · conversation history mint · model library yellow · downloads khaki · application data gray · unclassified secondary.
 - Text is always the system label colors. Colored text is limited to status words.
@@ -38,7 +38,7 @@ Retired as destinations: Candidates (now the Rebuildable filter), Recurring (fol
 ## Actions
 
 - One context menu (`LocationActions`) for every representation of a location: table row, overview card, inspector. Same items, same order, same wording.
-- Toolbar: Scan Now and Rescan This Folder share a group. A system ToolbarSpacer separates Export Report and appearance on macOS 26+. Search stays separate. Add Location is in the File menu and Coverage settings. Everything in the toolbar also exists in the menu bar with a shortcut.
+- Toolbar: Scan Folders opens the scope preview; Start Scan begins it. Report opens a local preview. Appearance toggles light/dark. Scan Folder belongs in the inspector and context menu. Search names its fields. Add Folder is in the File menu and Coverage settings. Menu shortcuts mirror frequent commands.
 - Wording: sentence case for descriptions, Title Case for commands. Commands are verbs ("Watch", "Exclude from Scans"); descriptions state facts ("Grew 2.1 GiB since Sep 27").
 
 ## Copy rules
@@ -53,3 +53,14 @@ Retired as destinations: Candidates (now the Rebuildable filter), Recurring (fol
 - [Apple WWDC25: Build a SwiftUI app with the new design](https://developer.apple.com/videos/play/wwdc2025/323/)
 
 Use the native toolbar material and grouping. Keep content backgrounds quiet; applying glass to every content panel obscures hierarchy. macOS 14–15 retains the standard toolbar fallback.
+
+
+## 0.8 clarity rules (supersede earlier labels)
+
+- Name the object before the mechanism: Folders, Watchlist, Scan Issues, Scan History. A history entry names the folder that was checked. Use Project files and Test devices in presentation; preserve stored category IDs.
+- Separate unknown from wrong. Not scanned is a neutral folder filter/count; only access, scan limits, missing paths and actual failures belong in Scan Issues.
+- One action at each level: Scan Folders opens a scope preview; Start Scan executes it. Scan Folder checks the selected folder. Show in Finder reveals it. Report previews a local file before saving.
+- A number needs a subject and time. Disk capacity and its graph use the same latest reading. Fit the graph to actual sample dates; label units and state that these are discrete readings. Domains only change when readings change. Zero is the chart's vertical baseline.
+- Reveal explanation when needed. Default folder details show size, purpose and one next action. No empty chart on a never-scanned folder. History is a compact outcome list with expandable details.
+- Use normal words: folders rather than locations, scanned rather than measured, storage on your Mac rather than home volume, scan issues rather than needs attention. Commands state their object.
+- Keep system typography, controls and materials. Preserve the Blue C icon and category palette. Red marks failures, not the existence of personal files.

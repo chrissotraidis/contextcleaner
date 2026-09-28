@@ -56,13 +56,13 @@ struct MainView: View {
         .onChange(of: model.categoryFilter) { _, _ in model.retainVisibleSelection() }
         .toolbar {
             ToolbarItemGroup {
-                Button { model.scan() } label: { Label("Scan Now", systemImage: "arrow.clockwise").labelStyle(.titleAndIcon) }.help("Measure every known and added location (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)
-                Button { model.scan(selectedOnly: true) } label: { Label("Rescan This Folder", systemImage: "arrow.clockwise.circle") }.help("Measure only the selected folder (Shift-Command-R)").disabled(!model.canRescanSelection)
-                if model.running || model.discovering { Button(model.discovering ? "Cancel Discovery" : "Cancel Scan") { model.cancelWork() } }
+                Button { model.showingScanPlan = true } label: { Label("Scan Folders…", systemImage: "magnifyingglass").labelStyle(.titleAndIcon) }
+                    .buttonStyle(.borderedProminent).help("Choose what Context Cleaner will scan (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)
+                if model.running || model.discovering { Button("Stop Scan") { model.cancelWork() } }
             }
             if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
             ToolbarItemGroup {
-                Button { model.exportReport() } label: { Label("Export Report", systemImage: "square.and.arrow.up") }.help("Preview and export locations in the current view (Shift-Command-E)")
+                Button { model.exportReport() } label: { Label("Report…", systemImage: "doc.text").labelStyle(.titleAndIcon) }.help("Preview a local folder report before saving (Shift-Command-E)")
                 Button { model.toggleAppearance(current: colorScheme) } label: { Label(colorScheme == .dark ? "Switch to Light" : "Switch to Dark", systemImage: colorScheme == .dark ? "sun.max" : "moon") }.help("Toggle light and dark. Choose Match System in Settings.")
             }
         }
@@ -70,6 +70,7 @@ struct MainView: View {
         .sheet(item: Binding(get: { model.editing.map { EditTarget(id: $0) } }, set: { model.editing = $0?.id })) { target in
             PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; model.editing = nil }
         }
+        .sheet(isPresented: $model.showingScanPlan) { ScanPlanView(model: model) }
         .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
         .sheet(isPresented: Binding(get: { model.reportPreview != nil }, set: { if !$0 { model.reportPreview = nil } })) {
             ReportPreview(model: model, text: model.reportPreview ?? "")
@@ -85,7 +86,7 @@ struct MainView: View {
                 Image(nsImage: icon).resizable().frame(width: 40, height: 40).accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.section == .overview ? "Understand your space." : model.section.rawValue).font(.title.weight(.semibold))
+                Text(model.section == .overview ? "Storage at a glance" : model.section.rawValue).font(.title.weight(.semibold))
                 Text(model.section.subtitle).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -93,17 +94,17 @@ struct MainView: View {
                 VStack(alignment: .trailing, spacing: 5) {
                     Text("\(byteLabel(v.free)) free / \(byteLabel(v.total))").font(.caption).monospacedDigit()
                     ProportionBar(value: Double(v.used) / Double(v.total), tint: .indigo).frame(width: 180)
-                    Text("Capacity checked \(v.date.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
+                    Text("\((Double(v.used) / Double(v.total)).formatted(.percent.precision(.fractionLength(0)))) used · checked \(v.date.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.secondary)
                 }
-            } else { CapsuleLabel(text: "Read-only by design", symbol: "lock.shield") }
+            } else { CapsuleLabel(text: "Never deletes files", symbol: "lock.shield") }
         }.padding(.horizontal, 22).padding(.top, 12).padding(.bottom, 10)
     }
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
             HStack(spacing: 12) {
-                Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 520)
+                Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).frame(width: 195)
                 Spacer()
-                Text(model.search.isEmpty ? model.locationFilter.explanation : "Matching “\(model.search)” in names, projects, apps and tags · \(model.rows.count) of \(model.locationFilter.rawValue.lowercased() == "all" ? "all" : model.locationFilter.rawValue.lowercased()) locations").font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 380, alignment: .trailing)
+                Text(model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) matches in \(model.locationFilter.rawValue) · names, projects, apps and tags").font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 380, alignment: .trailing)
             }.padding(.horizontal, 16).padding(.bottom, 8)
         } else if !model.search.isEmpty {
             Text("Matching “\(model.search)” in names, projects, apps and tags · \(model.rows.count) locations").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 8)
@@ -124,7 +125,7 @@ struct MainView: View {
         if let category = model.categoryFilter {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: category.symbol).font(.title2).foregroundStyle(category.tint).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) { Text(category.rawValue).font(.headline); Text(category.shortPurpose).font(.caption).foregroundStyle(.secondary) }
+                VStack(alignment: .leading, spacing: 4) { Text(category.displayName).font(.headline); Text(category.shortPurpose).font(.caption).foregroundStyle(.secondary) }
                 Spacer(); Button("Clear filter", systemImage: "xmark.circle") { model.categoryFilter = nil }.labelStyle(.iconOnly).buttonStyle(.borderless)
             }.padding(14).background(category.tint.opacity(0.07))
         }
@@ -139,7 +140,7 @@ struct MainView: View {
             }.width(min: 190, ideal: 260)
             TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").monospacedDigit() }.width(min: 100, ideal: 110)
             TableColumn("Change", value: \.delta) { row in
-                Text(row.change.delta.map { "\($0 > 0 ? "+" : $0 < 0 ? "−" : "")\(byteLabel(abs($0)))" } ?? "No baseline").font(.caption).foregroundStyle((row.change.delta ?? 0) > 0 ? Color.growing : .secondary)
+                Text(row.change.delta.map { "\($0 > 0 ? "+" : $0 < 0 ? "−" : "")\(byteLabel(abs($0)))" } ?? (row.measurement.state == .pending ? "—" : "First scan")).font(.caption).foregroundStyle((row.change.delta ?? 0) > 0 ? Color.growing : .secondary)
             }.width(min: 100, ideal: 110)
             TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selection.contains(row.id) ? Color.white : row.statusTint) }.width(min: 85, ideal: 110)
         }
@@ -148,7 +149,7 @@ struct MainView: View {
             else if let path = paths.first { LocationActions(model: model, path: path) }
         }
         .overlay {
-            if model.rows.isEmpty { ContentUnavailableView("No matching locations", systemImage: "folder", description: Text("Change the filter, add a location, or run a scan. Excluded folders have their own section.")) }
+            if model.rows.isEmpty { ContentUnavailableView(model.section == .needsAttention ? "No scan issues" : "No matching folders", systemImage: model.section == .needsAttention ? "checkmark.circle" : "folder", description: Text(model.section == .needsAttention ? "Scans that need access or reach a limit will appear here." : "Try another filter or scan folders to update the list.")) }
         }
     }
     var inspector: some View {
@@ -160,11 +161,11 @@ struct MainView: View {
                     Text(summary.unmeasured > 0 ? "Measured sizes added, nested folders counted once. \(summary.unmeasured) selected \(summary.unmeasured == 1 ? "location has" : "locations have") no size yet." : "Measured sizes added, nested folders counted once.").font(.caption).foregroundStyle(.secondary)
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
-                        HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.rawValue).font(.caption); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
+                        HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.displayName).font(.caption); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
                     }
                     Divider()
                     ForEach(summary.items.sorted { ($0.allocatedBytes ?? -1) > ($1.allocatedBytes ?? -1) }.prefix(12), id: \.profile.path) { item in
-                        HStack { Text(item.profile.name).font(.caption).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.caption).monospacedDigit() }
+                        HStack { Text(item.profile.displayName).font(.caption).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.caption).monospacedDigit() }
                     }
                     if summary.items.count > 12 { Text("and \(summary.items.count - 12) more").font(.caption).foregroundStyle(.secondary) }
                     HStack { Button("Reveal All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.frame(maxWidth: 110) }
@@ -173,27 +174,32 @@ struct MainView: View {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 46, height: 46).background(item.profile.category.tint.opacity(0.12), in: Circle()).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(item.profile.name).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            Text(item.profile.displayName).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                             Text(item.profile.project ?? item.profile.associatedApp).font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     HStack(alignment: .firstTextBaseline) {
-                        Text(item.allocatedBytes.map(byteLabel) ?? "Not measured").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
+                        Text(item.allocatedBytes.map(byteLabel) ?? "Size unknown").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                         Spacer()
-                        Button { model.policy(item.profile.path) { $0.isWatched.toggle() } } label: { Label(model.preferences.policy(item.profile.path).isWatched ? "Watching" : "Watch", systemImage: model.preferences.policy(item.profile.path).isWatched ? "eye.fill" : "eye") }.buttonStyle(.bordered)
+                        Button { model.policy(item.profile.path) { $0.isWatched.toggle() } } label: { Label(model.preferences.policy(item.profile.path).isWatched ? "Watching" : "Watch folder", systemImage: model.preferences.policy(item.profile.path).isWatched ? "eye.fill" : "eye") }.buttonStyle(.bordered)
                     }
-                    Text(item.state == .pending ? "Not scanned yet" : "\(item.state == .measured ? "Measured" : "Attempted") \(item.observedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                    if item.state != .pending {
+                        Text("\(item.state == .measured ? "Scanned" : "Last attempt") \(item.observedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Folder details", selection: $model.inspector) {
-                        ForEach(["Overview", "Contents", "History", "Evidence"], id: \.self) { Text($0).tag($0) }
+                        ForEach(["Overview", "Contents", "History", "Evidence"], id: \.self) { Text($0 == "History" ? "Size history" : $0 == "Evidence" ? "Sources" : $0).tag($0) }
                     }.pickerStyle(.segmented).labelsHidden()
                     if item.state != .measured {
-                        Panel(title: item.state == .pending ? "Ready to measure" : item.state == .limited ? "Scan allowance reached" : item.state == .missing ? "Location not found" : "This measurement is incomplete", symbol: "exclamationmark.circle", tint: .attention) {
-                            Text(item.diagnostic ?? item.state.rawValue.capitalized).font(.callout).textSelection(.enabled)
-                            if item.state != .pending { Text("Earlier observations stay in History. This attempt is not treated as a zero-size folder or as measured growth.").font(.caption).foregroundStyle(.secondary) }
-                            Button(item.state == .pending ? "Measure this location" : "Retry selected location", systemImage: "arrow.clockwise") { model.scan(selectedOnly: true) }.disabled(model.running || model.inspecting || model.preferences.excluded(item.profile.path))
-                            if item.state == .inaccessible { Button("Access help…", systemImage: "lock.open") { showingAccessHelp = true } }
-                            if item.state == .limited { Button("Explore smaller child folders") { model.inspector = "Contents" } }
-                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(item.state == .pending ? "Not scanned yet" : item.state == .limited ? "This scan reached its limit" : item.state == .missing ? "Folder not found" : item.state == .inaccessible ? "Permission needed" : "Scan could not finish",
+                                  systemImage: item.state == .pending ? "clock" : "exclamationmark.triangle")
+                                .font(.headline).foregroundStyle(item.state == .pending ? Color.secondary : .attention)
+                            Text(item.state == .pending ? "Scan this folder to check its size. Your files stay untouched." : item.state == .limited ? "There was too much to check in the allowed time. Try a smaller subfolder or change the limits in Settings." : item.state == .missing ? "It may have moved or been removed since it was found." : item.state == .inaccessible ? "macOS did not allow access to this folder." : "No complete size was saved. Earlier readings are still available.")
+                                .font(.callout).foregroundStyle(.secondary)
+                            if item.state == .inaccessible { Button("How to Allow Access…") { showingAccessHelp = true } }
+                            if item.state == .limited { Button("Browse Subfolders") { model.inspector = "Contents" } }
+                            if item.state != .pending, let reason = item.diagnostic { DisclosureGroup("Technical details") { Text(reason).font(.caption).textSelection(.enabled) }.font(.caption) }
+                        }.padding(14).background(.background.secondary)
                     }
                     switch model.inspector {
                     case "Contents": contents(item)
@@ -204,12 +210,10 @@ struct MainView: View {
                     Divider()
                     DisclosureGroup("Folder path") { Text(item.profile.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.top, 5) }
                     HStack {
-                        Button("Reveal in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) }.buttonStyle(.borderedProminent)
-                        Button("Rescan") { model.scan(selectedOnly: true) }.help("Rescan only this folder (Shift-Command-R)").disabled(model.running || model.preferences.excluded(item.profile.path))
-                    }
-                    HStack {
-                        Button("Tags & notes…") { model.editing = item.profile.path }
-                        Menu("More") { LocationActions(model: model, path: item.profile.path) }.frame(maxWidth: 110)
+                        Button("Scan Folder", systemImage: "magnifyingglass") { model.scan(selectedOnly: true) }
+                            .buttonStyle(.borderedProminent).disabled(!model.canRescanSelection).help("Check only this folder; no files are changed")
+                        Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) }
+                        Menu { LocationActions(model: model, path: item.profile.path) } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).frame(width: 26).accessibilityLabel("Folder actions")
                     }
                     Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
                 } else if model.running, let path = model.selected {
@@ -219,10 +223,9 @@ struct MainView: View {
                     Text(model.progress).font(.callout)
                 } else {
                     Image(systemName: "folder.badge.questionmark").font(.largeTitle).foregroundStyle(Color.accentColor).accessibilityHidden(true)
-                    Text("Choose a location").font(.title2)
-                    Text("Inspect its purpose, history, associated tools and the evidence behind each conclusion.").foregroundStyle(.secondary)
-                    Text("A cache stores reusable output so work does not need to be repeated. Rebuildable does not mean unused or free of consequences.")
-                    Text("Right-click a row to watch, tag, mark expected growth or exclude it from scanning.").font(.callout)
+                    Text(model.section == .needsAttention && model.rows.isEmpty ? "No scan issues" : "Choose a folder").font(.title2)
+                    Text(model.section == .needsAttention && model.rows.isEmpty ? "Folders that have not been scanned yet are in Folders › Not scanned." : "See its size, what it contains, and how it has changed.").foregroundStyle(.secondary)
+                    Text("Right-click a folder to add notes, watch it or skip future scans.").font(.callout)
                 }
             }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -233,15 +236,15 @@ struct MainView: View {
                 if let workspace = item.profile.evidence.first(where: { $0.label == "Workspace" }) { Label(workspace.value, systemImage: "folder.badge.gearshape").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 if let device = item.profile.evidence.first(where: { $0.label == "Device name" }) { Label(device.value, systemImage: "iphone").font(.caption).foregroundStyle(.purple).lineLimit(1) }
             }
-            FolderTrend(path: item.profile.path, points: model.history(item.profile.path), change: model.growthSummary(item.profile.path), compact: true)
+            if item.state != .pending { FolderTrend(path: item.profile.path, points: model.history(item.profile.path), change: model.growthSummary(item.profile.path), compact: true) }
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised").foregroundStyle(item.profile.category.reproducible ? Color.accentColor : Color.attention).accessibilityHidden(true)
+                Image(systemName: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised").foregroundStyle(item.profile.category.reproducible ? Color.accentColor : Color.secondary).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.profile.category.reproducible ? "Usually rebuildable" : "May hold unique data").font(.headline)
+                    Text(item.profile.category.reproducible ? "Can usually be rebuilt" : "May contain personal files").font(.headline)
                     Text(item.profile.consequence).font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
             }
-            DisclosureGroup("What lives here and why it matters") {
+            DisclosureGroup("What’s in this folder?") {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(item.profile.category.shortPurpose)
                     Text(item.profile.explanation).foregroundStyle(.secondary)
@@ -264,7 +267,7 @@ struct MainView: View {
                     CapsuleLabel(text: "Added to Watching automatically" + (policy.autoWatchedBytes.map { " · grew \(byteLabel($0))" } ?? ""), symbol: "eye", color: .growing)
                     Button("Undo") { model.undoAutoWatch(item.profile.path) }.controlSize(.small)
                 }
-                Text("It grew between two comparable scans. Watched locations are checked first on every scan. Mark growth as expected to stop this.").font(.caption).foregroundStyle(.secondary)
+                Text("It grew between two comparable scans. Watchlist folders get priority in scheduled scans. Mark growth as expected to stop this.").font(.caption).foregroundStyle(.secondary)
             }
         }
     }
@@ -380,72 +383,64 @@ struct MainView: View {
             }
         }
     }
-    /// Timeline of scans, newest first, with what changed against the previous scan of the same scope.
+    /// Saved scan outcomes, with the scanned objects named before technical details.
     var scanHistory: some View {
         let records = model.records.sorted { $0.finishedAt > $1.finishedAt }
         return List {
             ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
                 let previous = records.dropFirst(index + 1).first { $0.scope == record.scope && $0.complete }
                 let changes = scanDelta(record, previous: previous)
-                HStack(alignment: .top, spacing: 14) {
-                    VStack(spacing: 0) {
-                        Circle().fill(record.complete ? Color.accentColor : Color.growing).frame(width: 10, height: 10)
-                        Rectangle().fill(.quaternary).frame(width: 2).frame(maxHeight: .infinity)
-                    }.frame(width: 10).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(record.finishedAt.formatted(date: .abbreviated, time: .shortened)).font(.headline)
-                            Text(record.scope).font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            if let free = record.freeBytes { Text("\(byteLabel(free)) free").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
-                        }
-                        HStack(spacing: 14) {
-                            Label("\(record.measurements.filter { $0.state == .measured }.count) measured", systemImage: "folder").font(.caption)
-                            let failed = record.measurements.filter { ![.measured, .cancelled, .excluded].contains($0.state) }.count
-                            if failed > 0 { Label("\(failed) could not be measured", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(Color.attention) }
-                            if !record.complete { Label(record.stopReason ?? "Stopped early", systemImage: "stop.circle").font(.caption).foregroundStyle(Color.growing) }
-                            Text("\(elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt)))").font(.caption).foregroundStyle(.tertiary)
-                        }
+                DisclosureGroup {
+                    VStack(alignment: .leading, spacing: 10) {
                         if let changes {
-                            if changes.grew.isEmpty && changes.shrank.isEmpty { Text("No net size change across comparable locations.").font(.caption).foregroundStyle(.secondary) }
-                            else {
-                                HStack(alignment: .top, spacing: 18) {
-                                    if !changes.grew.isEmpty {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("Grew · +\(byteLabel(changes.grew.reduce(0) { $0 + $1.delta }))").font(.caption.weight(.semibold)).foregroundStyle(Color.growing)
-                                            ForEach(changes.grew.prefix(4), id: \.path) { Text("\($0.name) +\(byteLabel($0.delta))").font(.caption).lineLimit(1) }
-                                            if changes.grew.count > 4 { Text("and \(changes.grew.count - 4) more").font(.caption2).foregroundStyle(.secondary) }
-                                        }
-                                    }
-                                    if !changes.shrank.isEmpty {
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text("Shrank · −\(byteLabel(changes.shrank.reduce(0) { $0 + abs($1.delta) }))").font(.caption.weight(.semibold)).foregroundStyle(Color.stable)
-                                            ForEach(changes.shrank.prefix(4), id: \.path) { Text("\($0.name) −\(byteLabel(abs($0.delta)))").font(.caption).lineLimit(1) }
-                                            if changes.shrank.count > 4 { Text("and \(changes.shrank.count - 4) more").font(.caption2).foregroundStyle(.secondary) }
-                                        }
-                                    }
-                                }
-                            }
-                        } else { Text("Nothing comparable in an earlier \(record.scope.lowercased()) scan.").font(.caption).foregroundStyle(.secondary) }
-                        DisclosureGroup("Coverage notes") { ForEach(Array(record.discoveryNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) } }.font(.caption)
-                    }.padding(.bottom, 10)
+                            let delta = changes.grew.reduce(Int64(0)) { $0 + $1.delta } + changes.shrank.reduce(Int64(0)) { $0 + $1.delta }
+                            Text(delta == 0 ? "No overall size change in folders checked in both scans." : byteLabel(abs(delta)) + (delta > 0 ? " larger" : " smaller") + " across folders checked in both scans.").font(.callout)
+                        } else { Text("No earlier scan of the same folders to compare yet.").font(.callout).foregroundStyle(.secondary) }
+                        ForEach(record.measurements) { item in
+                            HStack(alignment: .top) {
+                                Text(item.profile.displayName).lineLimit(1).help(item.profile.path)
+                                Spacer()
+                                Text(item.state == .measured ? item.allocatedBytes.map(byteLabel) ?? "Unknown size" : item.state == .cancelled ? "Stopped" : item.state.rawValue.capitalized).foregroundStyle(.secondary)
+                            }.font(.caption)
+                        }
+                        if let free = record.freeBytes { Text("Disk space at the time: " + byteLabel(free) + " free").font(.caption).foregroundStyle(.secondary) }
+                        Text("Scan duration: " + elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt))).font(.caption).foregroundStyle(.secondary)
+                        if !record.discoveryNotes.isEmpty { DisclosureGroup("Scan details") { ForEach(Array(record.discoveryNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).textSelection(.enabled) } }.font(.caption) }
+                    }.padding(.vertical, 8)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: record.complete ? "checkmark.circle" : "stop.circle").foregroundStyle(record.complete ? Color.accentColor : .growing).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(record.folderSummary).font(.headline).lineLimit(1)
+                            Text(record.resultSummary).font(.callout).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(record.finishedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical, 6)
                 }
             }
-        }.overlay { if records.isEmpty { ContentUnavailableView("No scans yet", systemImage: "clock", description: Text("Scan Now records the first entry.")) } }
+        }.overlay { if records.isEmpty { ContentUnavailableView("No scans yet", systemImage: "clock", description: Text("Completed and stopped folder scans will appear here.")) } }
     }
     var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
             if model.discovering { HStack { ProgressView().controlSize(.small); Text(model.progress).font(.caption).textSelection(.enabled) } }
-            if model.running { ProgressView(value: Double(model.completed), total: Double(max(model.targetCount, 1))); Text("\(model.completed)/\(model.targetCount) · \(model.progress)").font(.caption) }
+            if model.running {
+                HStack {
+                    if model.targetCount > 0 {
+                        ProgressView(value: Double(model.completed), total: Double(model.targetCount)).frame(width: 120)
+                        Text("\(model.completed) of \(model.targetCount) folders checked · \(model.progress)").lineLimit(1).truncationMode(.middle)
+                    } else { ProgressView().controlSize(.small); Text(model.progress).lineLimit(1).truncationMode(.middle) }
+                }.font(.caption)
+            } else if !model.discovering && model.progress != "Ready" { Text(model.progress).font(.caption).foregroundStyle(.secondary) }
             if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled) }
             HStack {
                 Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking priority locations daily while open." : "Checking priority locations weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
                 Spacer()
-                Text("\(model.discovery.profiles.count) known/selected locations · \(model.records.count) preserved scans").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.discovery.profiles.count) folders · \(model.records.count) saved scans").font(.caption).foregroundStyle(.secondary)
             }
-            if model.section == .locations { Text("Coverage: known tool locations plus folders you add. Sizes are estimates, never a promise of reclaimable space.").font(.caption2).foregroundStyle(.secondary) }
+            if model.section == .locations { Text("Saved folder sizes are estimates. Context Cleaner never deletes files.").font(.caption2).foregroundStyle(.secondary) }
         }.padding(.horizontal, 16).padding(.bottom, 10)
     }
 }
@@ -505,8 +500,8 @@ struct PolicyEditor: View {
                         .keyboardShortcut("l", modifiers: [.command, .shift])
                 }
                 CommandMenu("Scan") {
-                    Button("Scan Now") { model.scan() }.keyboardShortcut("r").disabled(model.running || model.inspecting || model.discovering)
-                    Button("Rescan This Folder") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(!model.canRescanSelection)
+                    Button("Scan Folders…") { model.showingScanPlan = true }.keyboardShortcut("r").disabled(model.running || model.inspecting || model.discovering)
+                    Button("Scan This Folder") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(!model.canRescanSelection)
                     Button("Scan Watched Locations") { model.scan(watchedOnly: true) }.disabled(model.running || model.inspecting || model.discovering)
                     Button("Rediscover Locations") { model.discover() }.disabled(model.running || model.inspecting || model.discovering)
                     Divider()
@@ -556,7 +551,7 @@ struct ReportPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Export report").font(.title2.weight(.semibold))
-            Text("Markdown, \(model.rows.count) locations from the current view, largest first: a summary table, then one section per location with size, status, what lives there, what to consider before any manual change, evidence and your tags and notes. Nothing is sent anywhere; you choose where the file goes.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Local Markdown report for \(model.rows.count) \(model.rows.count == 1 ? "folder" : "folders"). Includes sizes, changes, paths, explanations and your notes. Preview it below, then save a new file. Nothing is uploaded.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file contains every location." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 .background(.background.secondary)

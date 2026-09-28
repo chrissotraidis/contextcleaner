@@ -336,7 +336,7 @@ struct FolderRow: Identifiable {
     func addRoot() {
         guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-        panel.message = "Choose a location to inspect. Context Cleaner never deletes its contents."
+        panel.message = "Choose a folder to scan. Context Cleaner only reads its size and never changes it."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         var next = preferences
         if !next.customRoots.contains(url.path) { next.customRoots.append(url.path) }

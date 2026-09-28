@@ -202,7 +202,9 @@ func sparklineValues(_ points: [HistoryPoint], limit: Int = 12) -> [Double] {
 func scanOutcome(_ record: ScanRecord, grew: Int) -> String {
     let measured = record.measurements.filter { $0.state == .measured }.count
     let issues = record.measurements.filter { [.inaccessible, .limited, .missing, .failed].contains($0.state) }.count
-    if !record.complete { return "Stopped after \(measured) of \(record.requestedCount ?? record.measurements.count) folders" }
+    let target = record.requestedCount ?? record.measurements.count
+    if !record.complete && record.wasStopped { return "Stopped after \(measured) of \(target) \(target == 1 ? "folder" : "folders")" }
+    if measured == 0 && issues > 0 { return issues == 1 ? "1 folder couldn't be read" : "\(issues) folders couldn't be read" }
     var parts = [measured == 1 ? "Scanned 1 folder" : "Scanned \(measured) folders"]
     if grew > 0 { parts.append("\(grew) grew") }
     if issues > 0 { parts.append("\(issues) couldn't be read") }
@@ -222,8 +224,13 @@ extension ScanRecord {
         let measured = measurements.filter { $0.state == .measured }.count
         let issues = measurements.filter { [.inaccessible, .limited, .missing, .failed].contains($0.state) }.count
         let target = requestedCount ?? measurements.count
-        if !complete { return "Stopped · \(measured) of \(target) \(target == 1 ? "folder" : "folders") scanned" }
+        if !complete && wasStopped { return "Stopped · \(measured) of \(target) \(target == 1 ? "folder" : "folders") scanned" }
+        if measured == 0 && issues > 0 { return issues == 1 ? "1 folder couldn't be read" : "\(issues) folders couldn't be read" }
         if issues > 0 { return "\(measured) scanned · \(issues) with issues" }
         return measured == 1 ? "1 folder scanned" : "\(measured) folders scanned"
+    }
+    /// True when the user stopped the scan, as opposed to folders that couldn't be read.
+    var wasStopped: Bool {
+        measurements.contains { $0.state == .cancelled } || measurements.count < (requestedCount ?? measurements.count)
     }
 }

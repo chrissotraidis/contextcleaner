@@ -64,6 +64,12 @@ extension MeasurementState {
     }
 }
 
+extension FolderMeasurement {
+    /// Ordinary file permissions ("Permission denied") need a different fix from macOS privacy protection ("Operation not permitted").
+    var permissionDenied: Bool { state == .inaccessible && ((diagnostic ?? "").contains("Permission denied") || (diagnostic ?? "").contains("error 13")) }
+    var problem: String { permissionDenied ? "No permission to read it" : state.problem }
+}
+
 extension Color {
     /// Reserved status colors. Never used as category hues.
     static let attention = Color.red

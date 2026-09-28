@@ -23,6 +23,7 @@ struct MainView: View {
                     let quiet = section == .needsAttention && model.attentionCount == 0
                     Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(quiet ? Color.secondary : section.tint ?? Color.primary) }.tag(section)
                         .badge(section == .needsAttention ? model.attentionCount : 0)
+                        .accessibilityLabel(section == .needsAttention && model.attentionCount > 0 ? "\(section.rawValue), \(model.attentionCount) \(model.attentionCount == 1 ? "folder" : "folders")" : section.rawValue)
                 }
             }.navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
             .safeAreaInset(edge: .bottom) {
@@ -117,7 +118,7 @@ struct MainView: View {
             HStack(spacing: 10) {
                 if model.running && model.targetCount > 0 {
                     ProgressView(value: Double(model.completed), total: Double(max(model.targetCount, 1))).frame(width: 140)
-                    Text("Scanning \(model.completed) of \(model.targetCount) folders").font(.callout.weight(.medium)).monospacedDigit()
+                    Text("Scanning \(model.completed) of \(model.targetCount) \(model.targetCount == 1 ? "folder" : "folders")").font(.callout.weight(.medium)).monospacedDigit()
                 } else {
                     ProgressView().controlSize(.small)
                     Text("Finding folders to scan…").font(.callout.weight(.medium))
@@ -129,8 +130,9 @@ struct MainView: View {
             }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.accentColor.opacity(0.08))
         } else if let result = model.lastResult {
             let stopped = result.hasPrefix("Stopped")
+            let unreadable = result.contains("couldn't be read")
             HStack(spacing: 10) {
-                Image(systemName: stopped ? "stop.circle" : "checkmark.circle.fill").foregroundStyle(stopped ? Color.growing : Color.accentColor).accessibilityHidden(true)
+                Image(systemName: stopped ? "stop.circle" : unreadable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").foregroundStyle(stopped ? Color.growing : unreadable ? Color.attention : Color.accentColor).accessibilityHidden(true)
                 Text(result).font(.callout.weight(.medium))
                 Spacer()
                 if model.overview.growthCount > 0 { Button("Show Growing") { model.categoryFilter = nil; model.search = ""; model.section = .locations; model.locationFilter = .growing }.controlSize(.small) }
@@ -212,7 +214,7 @@ struct MainView: View {
                 }
             }.width(min: 160, ideal: 210)
             TableColumn("Problem", value: \.status) { row in
-                Label(row.measurement.state.problem, systemImage: row.measurement.state.problemSymbol).font(.callout).foregroundStyle(selectedRow(row.id) ? Color.white : Color.attention)
+                Label(row.measurement.problem, systemImage: row.measurement.state.problemSymbol).font(.callout).foregroundStyle(selectedRow(row.id) ? Color.white : Color.attention)
             }.width(min: 150, ideal: 190)
             TableColumn("Fix") { row in fixButton(row) }.width(min: 110, ideal: 130)
         }
@@ -233,6 +235,8 @@ struct MainView: View {
     @ViewBuilder func fixButton(_ row: FolderRow) -> some View {
         let path = row.id
         switch row.measurement.state {
+        case .inaccessible where row.measurement.permissionDenied:
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }.controlSize(.small).help("Check the folder's permissions with Get Info")
         case .inaccessible: Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small)
         case .limited: Button("Scan Subfolders") { model.selected = path; model.inspector = "Contents"; model.inspectChildren(row.measurement) }.controlSize(.small).disabled(busy)
         case .missing: Button("Stop Checking") { model.policy(path) { $0.excluded = true } }.controlSize(.small).disabled(model.running || model.inspecting).help("Turns this folder off. You can turn it back on in Settings › Coverage.")
@@ -339,9 +343,9 @@ struct MainView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: item.state.problemSymbol).foregroundStyle(Color.attention).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(item.state.problem).font(.headline)
-                    Text(item.state == .limited ? "It holds too much to read in the allowed time. Scan its subfolders instead." : item.state == .missing ? "It may have been moved or removed since it was found." : item.state == .inaccessible ? "macOS didn't allow Context Cleaner to read it." : "No complete size was saved. Earlier sizes are kept.").font(.callout).foregroundStyle(.secondary)
-                    if item.state == .inaccessible { Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small) }
+                    Text(item.problem).font(.headline)
+                    Text(item.state == .limited ? "It holds too much to read in the allowed time. Scan its subfolders instead." : item.state == .missing ? "It may have been moved or removed since it was found." : item.permissionDenied ? "Its file permissions don't let you read it. Get Info in Finder shows who can." : item.state == .inaccessible ? "macOS didn't allow Context Cleaner to read it." : "No complete size was saved. Earlier sizes are kept.").font(.callout).foregroundStyle(.secondary)
+                    if item.state == .inaccessible && !item.permissionDenied { Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small) }
                     if item.state == .limited { Button("Scan Subfolders") { model.inspector = "Contents"; model.inspectChildren(item) }.controlSize(.small).disabled(busy) }
                 }
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Color.attention.opacity(0.08))

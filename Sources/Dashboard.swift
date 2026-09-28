@@ -120,7 +120,7 @@ struct FolderTrend: View {
     var body: some View {
         let series = self.series
         if let first = series.first, series.count == 1 {
-            Text("First scanned \(first.date.formatted(date: .abbreviated, time: .shortened)) at \(byteLabel(first.bytes)). Scan again to see how it changes.")
+            Text("One scan so far (\(first.date.formatted(date: .abbreviated, time: .omitted))). Scan again later to see how it changes.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else if let first = series.first {
             let picked = hover.flatMap { date in series.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) } }
@@ -195,16 +195,14 @@ struct UsageChart: View {
         .onChange(of: perBucket) { _, _ in span = nil; hover = nil }
     }
     @ViewBuilder private func headline(_ change: UsageChange?) -> some View {
-        let when = span.map { "between \($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) and \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" } ?? range.phrase
         VStack(alignment: .leading, spacing: 2) {
             if let change {
                 let delta = change.delta
                 (Text(delta == 0 ? "No change" : signedBytes(delta)).foregroundColor(delta > 0 ? .growing : delta < 0 ? .stable : .primary)
-                 + Text(delta > 0 ? " more space used " : delta < 0 ? " of space freed " : " in used space ").foregroundColor(.primary)
-                 + Text(when).foregroundColor(.secondary))
+                 + Text(delta > 0 ? " more space used" : delta < 0 ? " of space freed" : " in used space").foregroundColor(.primary))
                     .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             } else {
-                Text("Not enough readings " + when).font(.title2.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+                Text(span == nil ? "Not enough readings yet" : "No readings in this span").font(.title2.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
             }
             Text(detail(change)).font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
         }.accessibilityElement(children: .combine)
@@ -221,8 +219,9 @@ struct UsageChart: View {
                 return "\(reading.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(reading.used)) used · \(byteLabel(reading.free)) free"
             }
         }
-        guard let change else { return "Context Cleaner notes disk space every hour while it's open, and at every scan." }
-        return "\(byteLabel(change.from.used)) on \(change.from.date.formatted(.dateTime.month(.abbreviated).day().hour().minute())) → \(byteLabel(change.to.used)) on \(change.to.date.formatted(.dateTime.month(.abbreviated).day().hour().minute()))"
+        let when = span.map { "\($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) – \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" } ?? "Last " + range.rawValue
+        guard let change else { return when + (span == nil ? " · Disk space is noted every hour while the app is open" : " · Drag across the blue area instead") }
+        return "\(when) · \(byteLabel(change.from.used)) → \(byteLabel(change.to.used)) used · point at the chart for any reading"
     }
     private var xStride: (Calendar.Component, Int) { range == .day ? (.hour, 6) : range == .week ? (.day, 1) : (.day, 5) }
     private var xFormat: Date.FormatStyle { range == .day ? .dateTime.hour() : range == .week ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day() }
@@ -270,7 +269,7 @@ struct UsageChart: View {
                             .foregroundStyle(bucket.delta! > 0 ? Color.growing : Color.stable)
                             .opacity(hover.map { bucket.start <= $0 && $0 < bucket.end } ?? true ? 1 : 0.45)
                     }
-                    RuleMark(y: .value("No change", 0)).foregroundStyle(.secondary)
+                    RuleMark(y: .value("No change", 0)).foregroundStyle(Color.secondary)
                 }
                 .chartXScale(domain: window)
                 .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisGridLine(); AxisValueLabel(format: xFormat) } }
@@ -311,8 +310,11 @@ struct UsageChart: View {
     @ViewBuilder private func grew(from: Date, to: Date) -> some View {
         let grown = model.foldersThatGrew(from: from, to: to, limit: 3)
         HStack(spacing: 8) {
-            Text("Grew most:").font(.caption).foregroundStyle(.secondary)
-            if grown.isEmpty { Text("no scanned folder grew in this span").font(.caption).foregroundStyle(.secondary) }
+            if grown.isEmpty {
+                Label("Folders scanned twice in this span will show here if they grew.", systemImage: "folder.badge.questionmark").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Grew most:").font(.caption).foregroundStyle(.secondary)
+            }
             ForEach(grown) { item in
                 Button { model.open(item.path) } label: {
                     HStack(spacing: 5) {

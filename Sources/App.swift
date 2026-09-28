@@ -177,18 +177,19 @@ struct MainView: View {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
                     Text(row.app + " · " + row.category).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-            }.width(min: 200, ideal: 280)
-            TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").font(.callout).monospacedDigit() }.width(min: 90, ideal: 100)
+            }.width(min: 170, ideal: 230)
+            TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").font(.callout).monospacedDigit() }.width(min: 80, ideal: 90)
             TableColumn("Trend", value: \.delta) { row in
                 let values = model.sparkline(row.id)
                 HStack(spacing: 8) {
-                    Sparkline(values: values, tint: selectedRow(row.id) ? .white : values.trendTint)
+                    if values.count > 1 { Sparkline(values: values, tint: selectedRow(row.id) ? .white : values.trendTint) }
+                    else { Text(row.measurement.state == .measured ? "1 scan" : "—").font(.caption).foregroundStyle(selectedRow(row.id) ? Color.white : Color.secondary.opacity(0.6)) }
                     if let delta = row.change.delta, delta != 0 {
                         Text(signedBytes(delta)).font(.caption).monospacedDigit().foregroundStyle(selectedRow(row.id) ? Color.white : delta > 0 ? Color.growing : Color.stable)
                     }
                 }.help(values.count > 1 ? "Size across the last \(values.count) comparable scans" : "Needs two scans to show a trend")
-            }.width(min: 120, ideal: 150)
-            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(selectedRow(row.id) ? Color.white : row.statusTint) }.width(min: 70, ideal: 90)
+            }.width(min: 90, ideal: 120)
+            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(selectedRow(row.id) ? Color.white : row.statusTint) }.width(min: 60, ideal: 80)
         }
         .contextMenu(forSelectionType: String.self) { paths in
             if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }
@@ -209,11 +210,11 @@ struct MainView: View {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
                     Text(row.app).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-            }.width(min: 190, ideal: 250)
+            }.width(min: 160, ideal: 210)
             TableColumn("Problem", value: \.status) { row in
                 Label(row.measurement.state.problem, systemImage: row.measurement.state.problemSymbol).font(.callout).foregroundStyle(selectedRow(row.id) ? Color.white : Color.attention)
-            }.width(min: 180, ideal: 220)
-            TableColumn("Fix") { row in fixButton(row) }.width(min: 130, ideal: 150)
+            }.width(min: 150, ideal: 190)
+            TableColumn("Fix") { row in fixButton(row) }.width(min: 110, ideal: 130)
         }
         .contextMenu(forSelectionType: String.self) { paths in
             if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }
@@ -278,8 +279,8 @@ struct MainView: View {
         let title = model.section == .locations ? (model.categoryFilter?.displayName ?? (model.locationFilter == .all ? "All folders" : model.locationFilter.rawValue)) : model.section.rawValue
         Text(title).font(.headline)
         if model.section == .needsAttention && rows.isEmpty {
-            Label("Nothing to fix", systemImage: "checkmark.circle").font(.title2.weight(.semibold)).foregroundStyle(.secondary)
-            Text("Folders that haven't been scanned yet are in Folders › Not scanned. That isn't a problem.").font(.callout).foregroundStyle(.secondary)
+            Text("Folders that haven't been scanned yet aren't problems. They're listed in Folders.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Button("Show Folders Not Scanned Yet") { model.section = .locations; model.locationFilter = .unscanned }.controlSize(.small)
         } else if model.section == .needsAttention {
             Text("\(rows.count) \(rows.count == 1 ? "folder" : "folders") couldn't be read").font(.title2.weight(.semibold))
             Text("Each row says why and offers one fix. Nothing is changed until you choose it.").font(.callout).foregroundStyle(.secondary)
@@ -296,8 +297,10 @@ struct MainView: View {
                 ForEach(Array(growers), id: \.id) { row in summaryRow(row.measurement.profile, value: signedBytes(row.change.delta ?? 0), tint: .growing) }
             }
         }
-        Divider()
-        Text("Select a folder to see what it is. ⌘-click or ⇧-click several to add their sizes.").font(.caption).foregroundStyle(.secondary)
+        if !rows.isEmpty {
+            Divider()
+            Text("Select a folder to see what it is. ⌘-click or ⇧-click several to add their sizes.").font(.caption).foregroundStyle(.secondary)
+        }
     }
     func summaryRow(_ profile: FolderProfile, value: String, tint: Color) -> some View {
         Button { model.selected = profile.path } label: {
@@ -325,6 +328,7 @@ struct MainView: View {
             Spacer()
             Button { model.policy(path) { $0.isWatched.toggle() } } label: { Label(policy.isWatched ? "Watching" : "Watch", systemImage: policy.isWatched ? "eye.fill" : "eye") }
                 .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")
+            Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
         Text(item.profile.category.shortPurpose).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         HStack(spacing: 8) {
@@ -360,7 +364,6 @@ struct MainView: View {
             Button("Scan Folder", systemImage: "magnifyingglass") { model.scan(selectedOnly: true) }
                 .buttonStyle(.borderedProminent).disabled(!model.canRescanSelection).help("Scan only this folder. Nothing is changed.")
             Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-            Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("More actions for this folder")
         }
         Divider()
         DisclosureGroup("What's inside", isExpanded: $showInside) { if showInside { contents(item).padding(.top, 8) } }.font(.headline)

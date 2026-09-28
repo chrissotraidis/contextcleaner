@@ -34,7 +34,7 @@ struct GeneralSettings: View {
             Section {
                 Label("Context Cleaner never deletes files. You decide, in Finder.", systemImage: "lock.shield")
             } footer: {
-                Text("\(model.records.count) scans and \(model.capacity.count) disk readings are saved on this Mac. Nothing is ever pruned.").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.records.count) \(model.records.count == 1 ? "scan" : "scans") and \(model.capacity.count) disk \(model.capacity.count == 1 ? "reading" : "readings") are saved on this Mac. Nothing is ever pruned.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
     }
@@ -112,10 +112,10 @@ struct CoverageSettings: View {
                 ForEach(CoverageGroup.allCases) { group in
                     let entries = Coverage.entries.filter { $0.group == group && matches($0) }
                     if !entries.isEmpty {
+                        let open = openGroups.contains(group.id) || !query.isEmpty
                         Section {
-                            DisclosureGroup(isExpanded: Binding(get: { openGroups.contains(group.id) || !query.isEmpty }, set: { if $0 { openGroups.insert(group.id) } else { openGroups.remove(group.id) } })) {
-                                ForEach(entries) { entry in row(entry, size: sizes[entry.id] ?? 0) }
-                            } label: { groupHeader(group, entries: Coverage.entries.filter { $0.group == group }, sizes: sizes) }
+                            groupHeader(group, entries: Coverage.entries.filter { $0.group == group }, open: open)
+                            if open { ForEach(entries) { entry in row(entry, size: sizes[entry.id] ?? 0) } }
                         }
                     }
                 }
@@ -136,15 +136,22 @@ struct CoverageSettings: View {
             }.value
         }
     }
-    private func groupHeader(_ group: CoverageGroup, entries: [CoverageEntry], sizes: [String: Int64]) -> some View {
+    /// An accessible expand button beside the group's switch.
+    private func groupHeader(_ group: CoverageGroup, entries: [CoverageEntry], open: Bool) -> some View {
         let paths = entries.map { $0.path(home: model.home) }
         let on = paths.filter { !model.preferences.excluded($0) }.count
         let total = uniqueAllocatedTotal(model.latest.filter { item in item.state == .measured && paths.contains { containsPath($0, item.profile.path) } })
+        let summary = "\(on) of \(entries.count) on" + (total > 0 ? " · \(byteLabel(total))" : "")
         return HStack(spacing: 10) {
-            Image(systemName: group.symbol).foregroundStyle(Color.accentColor).frame(width: 20).accessibilityHidden(true)
-            Text(group.rawValue).font(.headline)
-            Text("\(on) of \(entries.count) on" + (total > 0 ? " · \(byteLabel(total))" : "")).font(.caption).foregroundStyle(.secondary).monospacedDigit()
-            Spacer()
+            Button { if openGroups.contains(group.id) { openGroups.remove(group.id) } else { openGroups.insert(group.id) } } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(.secondary).frame(width: 12)
+                    Image(systemName: group.symbol).foregroundStyle(Color.accentColor).frame(width: 20)
+                    Text(group.rawValue).font(.headline)
+                    Text(summary).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("\(group.rawValue), \(summary)").accessibilityHint(open ? "Hides its locations" : "Shows its locations")
             Toggle(group.rawValue, isOn: Binding(get: { on > 0 }, set: { value in
                 model.updatePreferences { prefs in
                     for path in paths { var policy = prefs.policy(path); policy.excluded = !value; prefs.locations[normalized(path)] = policy }
@@ -167,11 +174,11 @@ struct CoverageSettings: View {
                 Text(status == .missing ? "Not on this Mac" : status == .unavailable ? "Couldn't check" : size > 0 ? byteLabel(size) : status == .present ? "On this Mac" : "…")
                     .font(.caption).monospacedDigit().foregroundStyle(status == .unavailable ? Color.attention : .secondary)
                 Toggle(entry.name, isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } }))
-                    .toggleStyle(.switch).labelsHidden().controlSize(.mini).disabled(busy)
+                    .toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
             }
             if open {
-                Text(entry.writes + (entry.kind == .folder ? "" : " Each " + (entry.kind == .children ? "subfolder" : "project's build folder") + " is listed on its own.")).font(.caption).foregroundStyle(.secondary).padding(.leading, 50)
-                Text("~/" + entry.relativePath).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(.secondary).padding(.leading, 50)
+                Text(entry.writes + (entry.kind == .folder ? "" : " Each " + (entry.kind == .children ? "subfolder" : "project's build folder") + " is listed on its own.")).font(.caption).foregroundStyle(.secondary).padding(.leading, 40)
+                Text("~/" + entry.relativePath).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(.secondary).padding(.leading, 40)
             }
         }.help("~/" + entry.relativePath + "\n" + entry.writes).accessibilityElement(children: .contain).accessibilityLabel(entry.writer + " " + entry.name)
     }
@@ -186,7 +193,7 @@ struct CoverageSettings: View {
                         Text(URL(fileURLWithPath: path).lastPathComponent).font(.callout).lineLimit(1).help(path)
                         Spacer()
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }.controlSize(.small)
-                        Toggle(path, isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })).toggleStyle(.switch).labelsHidden().controlSize(.mini).disabled(busy)
+                        Toggle(path, isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
                     }
                 }
                 ForEach(others, id: \.self) { path in

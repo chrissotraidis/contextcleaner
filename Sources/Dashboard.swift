@@ -110,15 +110,18 @@ struct Dashboard: View {
     private var total: Int64 { model.overview.total }
     private var growthCount: Int { model.overview.growthCount }
     private var freeHistory: [ScanRecord] { model.records.filter { $0.freeBytes != nil }.sorted { $0.finishedAt < $1.finishedAt } }
-    /// Fixed seven-day window ending now, so the chart does not slide when a scan or capacity refresh lands.
-    private var timeWindow: ClosedRange<Date> { let now = Date(); return now.addingTimeInterval(-7 * 86400)...now }
-    /// Rounded bounds in 10 GiB steps with at least a 20 GiB span, so the axis stays put between refreshes.
-    private var freeRange: ClosedRange<Double> {
-        let values = freeHistory.filter { timeWindow.contains($0.finishedAt) }.compactMap { $0.freeBytes }.map { Double($0) / 1_073_741_824 } + [model.volume.map { Double($0.free) / 1_073_741_824 } ?? 0]
-        let lower = (values.min() ?? 0), upper = (values.max() ?? 100)
-        var low = floor(lower / 10) * 10 - 10, high = ceil(upper / 10) * 10 + 10
-        if high - low < 20 { high = low + 20 }
-        return max(0, low)...high
+    @State private var timeWindow: ClosedRange<Date>
+    @State private var freeRange: ClosedRange<Double>
+    init(model: CleanerModel) {
+        self.model = model
+        let window = freeSpaceWindow(at: Date())
+        _timeWindow = State(initialValue: window)
+        _freeRange = State(initialValue: freeSpaceRange(model.records.filter { window.contains($0.finishedAt) }.compactMap(\.freeBytes)))
+    }
+    private func updateChartForScan() {
+        let window = freeSpaceWindow(at: Date())
+        timeWindow = window
+        freeRange = freeSpaceRange(freeHistory.filter { window.contains($0.finishedAt) }.compactMap(\.freeBytes), preserving: freeRange)
     }
     private func show(_ category: FolderCategory? = nil) { model.categoryFilter = category; model.search = ""; model.section = .locations; model.locationFilter = .all; model.selected = nil; model.inspector = "Overview" }
     private func open(_ item: FolderMeasurement) { model.categoryFilter = nil; model.search = ""; model.selected = item.profile.path; model.inspector = "Overview"; model.section = .locations; model.locationFilter = .all }
@@ -142,6 +145,7 @@ struct Dashboard: View {
             }
         }.padding(.horizontal, 22).padding(.bottom, 10)
         }.scrollBounceBehavior(.basedOnSize)
+        .onChange(of: model.lastScan?.id) { _, _ in updateChartForScan() }
     }
     @ViewBuilder private var scanStatus: some View {
         if model.running || model.discovering {
@@ -150,7 +154,7 @@ struct Dashboard: View {
                 Text(model.running ? "Scanning \(model.completed) of \(model.targetCount) · \(model.progress)" : model.progress).font(.caption).lineLimit(1).truncationMode(.middle)
                 Spacer()
                 Button("Cancel") { model.cancelWork() }.controlSize(.small)
-            }.padding(10).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }.padding(10).background(.background.secondary)
         } else if let last = model.lastScan {
             HStack(spacing: 8) {
                 Image(systemName: last.complete ? "checkmark.circle.fill" : "exclamationmark.circle.fill").foregroundStyle(last.complete ? Color.stable : Color.growing).accessibilityHidden(true)
@@ -167,7 +171,7 @@ struct Dashboard: View {
                 Text(value).font(.title3.weight(.semibold)).monospacedDigit()
                 VStack(alignment: .leading, spacing: 0) { Text(title).font(.caption.weight(.medium)); Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 10).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }.padding(.horizontal, 10).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
         }.buttonStyle(.plain).accessibilityLabel("\(title): \(value) \(detail)")
     }
     private var driveCard: some View {
@@ -251,7 +255,7 @@ struct Dashboard: View {
                             Rectangle().fill(group.category.tint).frame(width: max(2, geo.size.width * Double(group.bytes) / Double(max(total, 1)) - 2))
                                 .help("\(group.category.rawValue) · \(byteLabel(group.bytes))")
                         }
-                    }.clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    }.clipShape(Capsule())
                 }.frame(height: 18).accessibilityElement(children: .ignore).accessibilityLabel(groups.map { "\($0.category.rawValue) \(byteLabel($0.bytes))" }.joined(separator: ", "))
                 LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 3) {
                     ForEach(groups) { group in

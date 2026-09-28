@@ -1,4 +1,8 @@
-# Context Cleaner 0.6.0 — contents browser and stable layout checkpoint
+# Context Cleaner — 0.7.0 overhaul in progress
+
+Current review checkpoint: **0.7.0-11**. Five destinations, Settings, declared scan coverage, compact overview, stable chart domains, multi-selection totals, automatic Watching, report preview and cached derived state. Final icon selection and release acceptance are still open. [Current validation and remaining gates](docs/validation/Visual%20checkpoint%200.7.0-11.md) · [Approved goal loop](docs/GOAL_LOOP.md).
+
+The notes below retain earlier checkpoint history; they are not a final 0.7.0 release claim.
 
 Native SwiftUI macOS 14+ app, Apple Silicon. Local ad-hoc signing only; not notarized for public distribution.
 

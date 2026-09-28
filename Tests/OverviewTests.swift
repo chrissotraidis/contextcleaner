@@ -20,6 +20,18 @@ import Foundation
         check(overviewGroups([a,item("/fixture/work2", .workspace, 30)], preferences: Preferences()).first?.bytes == 130, "similar path prefix is not mistaken for a child")
         check(overviewGroups([], preferences: Preferences()).isEmpty, "no data produces no fabricated category")
         if let volume = VolumeSnapshot.read() { check(volume.total > 0 && volume.free >= 0 && volume.used + volume.free == volume.total, "read-only capacity snapshot reconciles used free and total") }
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let morning = Date(timeIntervalSince1970: 1_790_582_400)
+        let start = calendar.startOfDay(for: morning)
+        check(freeSpaceWindow(at: start.addingTimeInterval(60), calendar: calendar) == freeSpaceWindow(at: start.addingTimeInterval(40_000), calendar: calendar), "redraws within a calendar day retain the exact time axis")
+        let window = freeSpaceWindow(at: start, calendar: calendar)
+        check(window.upperBound.timeIntervalSince(window.lowerBound) == 7 * 86400, "free-space chart covers seven complete calendar days")
+        let gib: Int64 = 1_073_741_824
+        let axis = freeSpaceRange([200*gib, 240*gib])
+        check(freeSpaceRange([220*gib], preserving: axis) == axis, "new points inside the axis cannot shrink or shift it")
+        let expanded = freeSpaceRange([100*gib], preserving: axis)
+        check(expanded.lowerBound < axis.lowerBound && expanded.upperBound == axis.upperBound, "out-of-range observations expand only the necessary bound")
+        check(freeSpaceRange([], preserving: axis) == axis, "missing observations cannot reset the axis")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

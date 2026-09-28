@@ -18,7 +18,7 @@ struct GeneralSettings: View {
             Picker("Appearance", selection: Binding(get: { model.preferences.appearance ?? "System" }, set: { model.setAppearance($0) })) {
                 Text("Match System").tag("System"); Text("Light").tag("Light"); Text("Dark").tag("Dark")
             }.pickerStyle(.segmented)
-            LabeledContent("Units") { Text("Binary (GiB), matching Finder's size calculations for APFS volumes.") .foregroundStyle(.secondary) }
+            LabeledContent("Units") { Text("Binary units: 1 GiB = 1,073,741,824 bytes.") .foregroundStyle(.secondary) }
             LabeledContent("History") { Text("\(model.records.count) saved scans · \(model.discovery.profiles.count) known locations").foregroundStyle(.secondary) }
             Section {
                 Text("Context Cleaner never deletes files. You decide, in Finder.").font(.callout)

@@ -50,10 +50,12 @@ struct MainView: View {
         .onChange(of: model.search) { _, value in if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil } }
         .toolbar {
             ToolbarItemGroup {
-                Button { model.addRoot() } label: { Label("Add Location", systemImage: "folder.badge.plus") }.help("Add a folder to measure (Shift-Command-O)").disabled(model.running || model.inspecting || model.discovering)
                 Button { model.scan() } label: { Label("Scan Now", systemImage: "arrow.clockwise").labelStyle(.titleAndIcon) }.help("Measure every known and added location (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)
                 Button { model.scan(selectedOnly: true) } label: { Label("Rescan This Folder", systemImage: "arrow.clockwise.circle") }.help("Measure only the selected folder (Shift-Command-R)").disabled(model.selected == nil || model.running || model.inspecting || model.discovering)
                 if model.running || model.discovering { Button(model.discovering ? "Cancel Discovery" : "Cancel Scan") { model.cancelWork() } }
+            }
+            if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
+            ToolbarItemGroup {
                 Button { model.exportReport() } label: { Label("Export Report", systemImage: "square.and.arrow.up") }.help("Save a Markdown report of every location (Shift-Command-E)")
                 Button { model.toggleAppearance(current: colorScheme) } label: { Label(colorScheme == .dark ? "Switch to Light" : "Switch to Dark", systemImage: colorScheme == .dark ? "sun.max" : "moon") }.help("Toggle light and dark. Choose Match System in Settings.")
             }
@@ -171,7 +173,7 @@ struct MainView: View {
                     Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
                 } else if let item = model.chosen {
                     HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 46, height: 46).background(item.profile.category.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12)).accessibilityHidden(true)
+                        Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 46, height: 46).background(item.profile.category.tint.opacity(0.12), in: Circle()).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
                             Text(item.profile.name).font(.title3.weight(.semibold)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                             Text(item.profile.project ?? item.profile.associatedApp).font(.caption).foregroundStyle(.secondary)
@@ -368,7 +370,7 @@ struct MainView: View {
                     }
                     Text(e.value).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     DisclosureGroup("How we know") { Text(e.source).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 5) }
-                }.padding(14).background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                }.padding(14).background(.background.secondary)
             }
             DisclosureGroup("Processes with open handles · \(Set(item.processes.map(\.pid)).count)") {
                 VStack(alignment: .leading, spacing: 8) {
@@ -554,7 +556,7 @@ struct ReportPreview: View {
             Text("Markdown, \(model.rows.count) locations from the current view, largest first: a summary table, then one section per location with size, status, what lives there, what to consider before any manual change, evidence and your tags and notes. Nothing is sent anywhere; you choose where the file goes.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file contains every location." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.background.secondary)
             HStack {
                 Text("\(text.utf8.count.formatted()) bytes").font(.caption).foregroundStyle(.secondary)
                 Spacer()

@@ -16,3 +16,7 @@ Each stage: inspect → implement → build → verify in the real UI → versio
 | 7 | Icon, Liquid Glass, release | Icon candidates; system SDK rebuild; six suites pass; UI verified at two sizes and both appearances; tag v0.7.0; validation report |
 
 Design references: Apple HIG — Designing for macOS, Sidebars, Panels, Toolbars, Color; Adopting Liquid Glass; WWDC25 session 323.
+
+## Continuation checkpoint — 2026-09-28
+
+Stages 0–5 are committed. Stage 6 caches and exact-build Instruments launch evidence are committed as fb7e600; scrolling acceptance remains open. Checkpoint 11 adds stable chart domains, system toolbar grouping and removes fixed radii. Two icon candidates are ready for the user's choice. See [performance evidence](validation/Performance%20checkpoint%200.7.0-10.md) and [remaining release gates](validation/Visual%20checkpoint%200.7.0-11.md). Do not tag v0.7.0 or mark the goal complete yet.

@@ -31,14 +31,14 @@ Retired as destinations: Candidates (now the Rebuildable filter), Recurring (fol
 
 ## Materials and shape
 
-- Grouped content uses the system background hierarchy (`.background.secondary`) with the 12 pt continuous radius macOS uses for grouped panels. No custom borders, no per-view radii. `GroupBox` is not used: its accessibility structure crashes the automation that verifies every build, and verified builds outrank the nicer API.
+- Grouped content uses the system background hierarchy (`.background.secondary`) without fixed corner radii. No custom borders. Standard controls, sheets and toolbar groups receive the system shape and material; simple content panels stay rectangular. `GroupBox` is not used: its accessibility structure crashes the automation that verifies every build, and verified builds outrank the nicer API.
 - Charts use Swift Charts with fixed domains where the data is a time series, so axes do not move between refreshes.
 - Typography uses system text styles only (`.largeTitle`, `.headline`, `.body`, `.caption`); no fixed point sizes.
 
 ## Actions
 
 - One context menu (`LocationActions`) for every representation of a location: table row, overview card, inspector. Same items, same order, same wording.
-- Toolbar: Scan Now, Rescan This Folder, Export Report, appearance toggle, search. Everything in the toolbar also exists in the menu bar with a shortcut.
+- Toolbar: Scan Now and Rescan This Folder share a group. A system ToolbarSpacer separates Export Report and appearance on macOS 26+. Search stays separate. Add Location is in the File menu and Coverage settings. Everything in the toolbar also exists in the menu bar with a shortcut.
 - Wording: sentence case for descriptions, Title Case for commands. Commands are verbs ("Watch", "Exclude from Scans"); descriptions state facts ("Grew 2.1 GiB since Sep 27").
 
 ## Copy rules
@@ -46,3 +46,10 @@ Retired as destinations: Candidates (now the Rebuildable filter), Recurring (fol
 - Lead with the number, then the meaning, then the caveat, and put the caveat behind a disclosure if it exceeds one sentence.
 - Never say "clean", "free up" or "reclaim" as something the app does. Say "measure", "find", "watch", "reveal".
 - The deletion sentence, verbatim wherever removal is discussed: **"Context Cleaner never deletes files. You decide, in Finder."**
+
+## Platform references
+
+- [Apple: Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)
+- [Apple WWDC25: Build a SwiftUI app with the new design](https://developer.apple.com/videos/play/wwdc2025/323/)
+
+Use the native toolbar material and grouping. Keep content backgrounds quiet; applying glass to every content panel obscures hierarchy. macOS 14–15 retains the standard toolbar fallback.

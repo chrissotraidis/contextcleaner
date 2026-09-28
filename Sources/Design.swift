@@ -81,7 +81,7 @@ struct Panel<Content: View>: View {
             Label(title, systemImage: symbol).font(.headline).foregroundStyle(tint)
             content
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .background(.background.secondary)
     }
 }
 

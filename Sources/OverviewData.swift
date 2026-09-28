@@ -31,3 +31,17 @@ func overviewGroups(_ measurements: [FolderMeasurement], preferences: Preference
     }
     return totals.map { StorageGroup(category: $0.key, bytes: $0.value.0, count: $0.value.1) }.sorted { $0.bytes == $1.bytes ? $0.id < $1.id : $0.bytes > $1.bytes }
 }
+
+/// Calendar-aligned time window; chart redraws within a day cannot move the axis.
+func freeSpaceWindow(at date: Date, calendar: Calendar = .current) -> ClosedRange<Date> {
+    let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date))!
+    return calendar.date(byAdding: .day, value: -7, to: end)!...end
+}
+/// New observations may expand an axis, but never shrink or shift an existing range.
+func freeSpaceRange(_ bytes: [Int64], preserving previous: ClosedRange<Double>? = nil) -> ClosedRange<Double> {
+    let values = bytes.map { Double($0) / 1_073_741_824 }
+    guard let minimum = values.min(), let maximum = values.max() else { return previous ?? 0...100 }
+    let lower = max(0, floor(minimum / 10) * 10 - 10)
+    let upper = max(lower + 20, ceil(maximum / 10) * 10 + 10)
+    return min(previous?.lowerBound ?? lower, lower)...max(previous?.upperBound ?? upper, upper)
+}

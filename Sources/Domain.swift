@@ -140,14 +140,24 @@ func historyPoints(_ path: String, records: [ScanRecord]) -> [HistoryPoint] {
         HistoryPoint(recordID: record.id, path: path, date: $0.observedAt, bytes: $0.state == .measured ? $0.allocatedBytes : nil, state: $0.state, scopeID: $0.scopeID)
     }}.sorted { $0.date < $1.date }
 }
-func growth(_ path: String, records: [ScanRecord]) -> GrowthSummary {
-    let points = historyPoints(path, records: records)
+/// One pass over every record, producing the per-path point series the model caches.
+func historyIndex(_ records: [ScanRecord]) -> [String: [HistoryPoint]] {
+    var index: [String: [HistoryPoint]] = [:]
+    for record in records { for item in record.measurements {
+        index[item.profile.path, default: []].append(HistoryPoint(recordID: record.id, path: item.profile.path, date: item.observedAt, bytes: item.state == .measured ? item.allocatedBytes : nil, state: item.state, scopeID: item.scopeID))
+    }}
+    for key in index.keys { index[key]!.sort { $0.date < $1.date } }
+    return index
+}
+func growth(points: [HistoryPoint]) -> GrowthSummary {
     guard let last = points.last, last.state == .measured else { return GrowthSummary() }
-    // Do not bridge an excluded, missing or inaccessible observation as uninterrupted growth.
     guard points.count > 1 else { return GrowthSummary(current: last.bytes) }
     let prior = points[points.count - 2]
     guard prior.state == .measured, prior.scopeID == last.scopeID else { return GrowthSummary(current: last.bytes) }
     return GrowthSummary(previous: prior.bytes, current: last.bytes, interval: last.date.timeIntervalSince(prior.date))
+}
+func growth(_ path: String, records: [ScanRecord]) -> GrowthSummary {
+    growth(points: historyPoints(path, records: records))
 }
 func uniqueAllocatedTotal(_ measurements: [FolderMeasurement]) -> Int64 {
     var accepted: [String] = []

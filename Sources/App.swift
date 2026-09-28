@@ -233,7 +233,7 @@ struct MainView: View {
                 if let workspace = item.profile.evidence.first(where: { $0.label == "Workspace" }) { Label(workspace.value, systemImage: "folder.badge.gearshape").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 if let device = item.profile.evidence.first(where: { $0.label == "Device name" }) { Label(device.value, systemImage: "iphone").font(.caption).foregroundStyle(.purple).lineLimit(1) }
             }
-            FolderTrend(path: item.profile.path, records: model.records, compact: true)
+            FolderTrend(path: item.profile.path, points: model.history(item.profile.path), change: model.growthSummary(item.profile.path), compact: true)
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised").foregroundStyle(item.profile.category.reproducible ? Color.accentColor : Color.attention).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
@@ -333,8 +333,8 @@ struct MainView: View {
         return result
     }
     func history(_ item: FolderMeasurement) -> some View {
-        let points = historyPoints(item.profile.path, records: model.records)
-        let summary = growth(item.profile.path, records: model.records)
+        let points = model.history(item.profile.path)
+        let summary = model.growthSummary(item.profile.path)
         return VStack(alignment: .leading, spacing: 14) {
             Text("Measured history").font(.headline)
             if points.isEmpty { Text("No saved measurements for this location. Rescan it to establish a baseline.") }

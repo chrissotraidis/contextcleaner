@@ -66,6 +66,25 @@ import Foundation
         check(!watchModel.preferences.policy(grower.path).watched && watchModel.preferences.policy(grower.path).autoWatched == nil, "undo removes the automatic watch")
         let reopened = CleanerModel(home: home, dataRoot: storage.root)
         check(!reopened.preferences.policy(grower.path).watched && reopened.preferences.policy(expected.path).expected, "undo and expected flags persist across restart")
+        // Warm each cache, then mutate data without changing the record or profile count.
+        _ = watchModel.rows; _ = watchModel.overview; _ = watchModel.history(grower.path)
+        watchModel.records[1].measurements[0].allocatedBytes = 4_000_000_000
+        check(watchModel.latest.first { $0.profile.path == grower.path }?.allocatedBytes == 4_000_000_000, "same-count record updates invalidate latest measurements")
+        check(watchModel.growthSummary(grower.path).delta == 3_000_000_000, "same-count updates invalidate cached growth")
+        check(watchModel.history(grower.path).last?.bytes == 4_000_000_000, "same-count updates invalidate cached history")
+        check(watchModel.rows.first { $0.id == grower.path }?.bytes == 4_000_000_000, "same-count updates invalidate table rows")
+        check(watchModel.overview.measuredBySize.first { $0.profile.path == grower.path }?.allocatedBytes == 4_000_000_000, "same-count updates invalidate Overview")
+        watchModel.discovery = Discovery(profiles: [discovered], notes: [])
+        _ = watchModel.rows
+        watchModel.discovery = Discovery(profiles: [later], notes: [])
+        check(watchModel.rows.contains { $0.id == later.path } && !watchModel.rows.contains { $0.id == discovered.path }, "same-count discovery replacements invalidate rows")
+        watchModel.running = true
+        watchModel.partial = [measure(grower, 6_000_000_000, t1)]
+        _ = watchModel.latest
+        watchModel.partial[0].allocatedBytes = 7_000_000_000
+        check(watchModel.latest.first { $0.profile.path == grower.path }?.allocatedBytes == 7_000_000_000, "same-count partial updates invalidate live measurements")
+        watchModel.running = false
+        check(watchModel.latest.first { $0.profile.path == grower.path }?.allocatedBytes == 4_000_000_000, "stopping a scan drops partial cache values")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

@@ -57,10 +57,10 @@ struct ProportionBar: View {
 }
 struct FolderTrend: View {
     let path: String
-    let records: [ScanRecord]
+    let points: [HistoryPoint]
+    let change: GrowthSummary
     var compact = false
     @State private var selectedDate: Date?
-    private var points: [HistoryPoint] { historyPoints(path, records: records) }
     private var series: [TracePoint] {
         var out: [TracePoint] = [], segment = 0, scope: String?
         for point in points {
@@ -94,7 +94,6 @@ struct FolderTrend: View {
                     .accessibilityLabel("Recorded folder sizes. Gaps and changed scan scope break the line.")
                 if let picked { Text("\(picked.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(picked.bytes))").font(.caption).monospacedDigit() }
                 else { Text(series.count < 2 ? "First measurement. Rescan to see a change; earlier growth is unknown." : "Hover or drag across the chart to inspect an observation.").font(.caption).foregroundStyle(.secondary) }
-                let change = growth(path, records: records)
                 if let delta = change.delta, let interval = change.interval {
                     Label("\(delta > 0 ? "+" : delta < 0 ? "−" : "")\(byteLabel(abs(delta))) over \(elapsedLabel(interval))", systemImage: delta > 0 ? "arrow.up.right" : delta < 0 ? "arrow.down.right" : "equal").font(.caption.weight(.semibold)).foregroundStyle(delta > 0 ? Color.growing : Color.accentColor)
                 } else if series.count > 1 { Text("No comparable recent pair. Scan scope changes and failed observations break the comparison.").font(.caption).foregroundStyle(.secondary) }
@@ -106,15 +105,10 @@ struct Dashboard: View {
     @ObservedObject var model: CleanerModel
     @State private var selectedDate: Date?
     @State private var showingCaveats = false
-    private var groups: [StorageGroup] { overviewGroups(model.latest, preferences: model.preferences) }
-    private var measured: [FolderMeasurement] { model.latest.filter { $0.state == .measured && !model.preferences.excluded($0.profile.path) } }
-    private var total: Int64 { groups.reduce(0) { $0 + $1.bytes } }
-    private var growthCount: Int {
-        model.latest.filter { item in
-            let policy = model.preferences.policy(item.profile.path), delta = growth(item.profile.path, records: model.records).delta ?? 0
-            return delta > 0 && delta >= (policy.growthThresholdBytes ?? 0) && !policy.expected && (policy.reviewAfter ?? .distantPast) <= Date() && !model.preferences.excluded(item.profile.path)
-        }.count
-    }
+    private var groups: [StorageGroup] { model.overview.groups }
+    private var measured: [FolderMeasurement] { model.overview.measuredBySize }
+    private var total: Int64 { model.overview.total }
+    private var growthCount: Int { model.overview.growthCount }
     private var freeHistory: [ScanRecord] { model.records.filter { $0.freeBytes != nil }.sorted { $0.finishedAt < $1.finishedAt } }
     /// Fixed seven-day window ending now, so the chart does not slide when a scan or capacity refresh lands.
     private var timeWindow: ClosedRange<Date> { let now = Date(); return now.addingTimeInterval(-7 * 86400)...now }
@@ -139,7 +133,7 @@ struct Dashboard: View {
             HStack(spacing: 10) {
                 metric("Measured", value: measured.count.formatted(), detail: "locations", symbol: "folder", tint: .accentColor) { show() }
                 metric("Growing", value: growthCount.formatted(), detail: growthCount == 0 ? "since last comparable scan" : "need a look", symbol: "chart.line.uptrend.xyaxis", tint: growthCount > 0 ? .growing : .secondary) { model.categoryFilter = nil; model.section = .locations; model.locationFilter = .growing }
-                metric("Watching", value: model.preferences.locations.filter { ($0.value.watched || $0.value.recurring) && !model.preferences.excluded($0.key) }.count.formatted(), detail: "checked first", symbol: "eye", tint: .accentColor) { model.categoryFilter = nil; model.section = .watching }
+                metric("Watching", value: model.overview.watchingCount.formatted(), detail: "checked first", symbol: "eye", tint: .accentColor) { model.categoryFilter = nil; model.section = .watching }
                 metric("Needs attention", value: model.attentionCount.formatted(), detail: "not measured", symbol: "exclamationmark.triangle", tint: model.attentionCount > 0 ? .attention : .secondary) { model.categoryFilter = nil; model.section = .needsAttention }
             }
             HStack(alignment: .top, spacing: 12) {
@@ -277,7 +271,7 @@ struct Dashboard: View {
     }
     private var largest: some View {
         Panel(title: "Largest locations", symbol: "arrow.down.right.and.arrow.up.left") {
-            ForEach(measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }.prefix(5)) { item in
+            ForEach(measured.prefix(5)) { item in
                 Button { open(item) } label: {
                     HStack(spacing: 10) {
                         Image(systemName: item.profile.category.symbol).foregroundStyle(item.profile.category.tint).frame(width: 22).accessibilityHidden(true)

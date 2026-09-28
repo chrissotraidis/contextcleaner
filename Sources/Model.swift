@@ -36,9 +36,9 @@ struct FolderRow: Identifiable {
     }
 }
 @MainActor final class CleanerModel: ObservableObject {
-    @Published var records: [ScanRecord] = []
-    @Published var preferences = Preferences()
-    @Published var discovery = Discovery(profiles: [], notes: [])
+    @Published var records: [ScanRecord] = [] { didSet { recordsVersion += 1 } }
+    @Published var preferences = Preferences() { didSet { preferencesVersion += 1 } }
+    @Published var discovery = Discovery(profiles: [], notes: []) { didSet { discoveryVersion += 1 } }
     @Published var selected: String? { didSet { if let s = selected { if selection != [s] { selection = [s] } } else if !selection.isEmpty { selection = [] } } }
     /// Table selection. One item drives the inspector; several show a summed summary.
     @Published var selection: Set<String> = [] { didSet { if selection.count == 1, selected != selection.first { selected = selection.first } else if selection.isEmpty, selected != nil { selected = nil } } }
@@ -53,7 +53,7 @@ struct FolderRow: Identifiable {
     @Published var progress = "Ready"
     @Published var completed = 0
     @Published var targetCount = 0
-    @Published var partial: [FolderMeasurement] = []
+    @Published var partial: [FolderMeasurement] = [] { didSet { partialVersion += 1 } }
     @Published var inspector = "Overview"
     @Published var children: [FolderMeasurement] = []
     @Published var inspecting = false
@@ -85,15 +85,67 @@ struct FolderRow: Identifiable {
         for record in records { for item in record.measurements { saved[item.profile.path] = item.profile } }
         discovery = Discovery(profiles: saved.values.sorted { $0.path < $1.path }, notes: ["Showing saved locations. Discovery runs only when requested. Coverage is recognized development/cache locations and your selected roots, not the whole disk."])
     }
-    var latest: [FolderMeasurement] {
+    // Derived state is rebuilt only when its inputs change; SwiftUI reads these many times per frame.
+    private struct Derived { var key = ""; var latest: [FolderMeasurement] = []; var history: [String: [HistoryPoint]] = [:]; var growth: [String: GrowthSummary] = [:] }
+    private var derived = Derived()
+    private var rowsCache: (key: String, validUntil: Date, rows: [FolderRow]) = ("", .distantPast, [])
+    private var preferencesVersion = 0
+    private var recordsVersion = 0
+    private var discoveryVersion = 0
+    private var partialVersion = 0
+    private var derivedKey: String { "\(recordsVersion)|\(running ? partialVersion : -1)" }
+    private var nextReviewDeadline: Date {
+        let now = Date()
+        return preferences.locations.values.compactMap(\.reviewAfter).filter { $0 > now }.min() ?? .distantFuture
+    }
+    private func refreshDerived() {
+        let key = derivedKey
+        guard derived.key != key else { return }
         var byPath: [String: FolderMeasurement] = [:]
         for record in records.sorted(by: { $0.finishedAt < $1.finishedAt }) {
             for item in record.measurements where item.state != .cancelled { byPath[item.profile.path] = item }
         }
         if running { for item in partial { byPath[item.profile.path] = item } }
-        return Array(byPath.values)
+        let history = historyIndex(records)
+        derived = Derived(key: key, latest: Array(byPath.values), history: history, growth: history.mapValues { growth(points: $0) })
     }
+    var latest: [FolderMeasurement] { refreshDerived(); return derived.latest }
+    /// Everything the Overview needs, computed once per change of records or preferences.
+    struct OverviewSnapshot { var groups: [StorageGroup] = []; var total: Int64 = 0; var measuredBySize: [FolderMeasurement] = []; var growthCount = 0; var watchingCount = 0; var attentionCount = 0 }
+    private var overviewCache: (key: String, validUntil: Date, value: OverviewSnapshot) = ("", .distantPast, OverviewSnapshot())
+    var overview: OverviewSnapshot {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if overviewCache.key == key && Date() < overviewCache.validUntil { return overviewCache.value }
+        let current = latest
+        let excludedPaths = preferences.locations.filter { $0.value.excluded }.map { normalized($0.key) }
+        func excluded(_ path: String) -> Bool { excludedPaths.contains { containsPath($0, path) } }
+        let measured = current.filter { $0.state == .measured && !excluded($0.profile.path) }
+        let groups = overviewGroups(measured, preferences: Preferences())
+        let now = Date()
+        var growthCount = 0
+        for item in measured {
+            let policy = preferences.policy(item.profile.path), delta = growthSummary(item.profile.path).delta ?? 0
+            if delta > 0 && delta >= (policy.growthThresholdBytes ?? 0) && !policy.expected && (policy.reviewAfter ?? .distantPast) <= now { growthCount += 1 }
+        }
+        var attention = Set<String>()
+        for item in current where !excluded(item.profile.path) && [.inaccessible, .limited, .missing, .failed].contains(item.state) { attention.insert(item.profile.path) }
+        let known = Set(current.map { $0.profile.path })
+        for profile in discovery.profiles where !known.contains(profile.path) && !excluded(profile.path) { attention.insert(profile.path) }
+        let watching = preferences.locations.filter { ($0.value.watched || $0.value.recurring) && !excluded($0.key) }.count
+        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count)
+        overviewCache = (key, nextReviewDeadline, snapshot)
+        return snapshot
+    }
+    func history(_ path: String) -> [HistoryPoint] { refreshDerived(); return derived.history[path] ?? [] }
+    func growthSummary(_ path: String) -> GrowthSummary { refreshDerived(); return derived.growth[path] ?? GrowthSummary() }
     var rows: [FolderRow] {
+        let key = derivedKey + "|" + section.rawValue + "|" + locationFilter.rawValue + "|" + search + "|\(preferencesVersion)|\(categoryFilter?.rawValue ?? "")|\(discoveryVersion)"
+        if rowsCache.key == key && Date() < rowsCache.validUntil { return rowsCache.rows }
+        let result = computeRows()
+        rowsCache = (key, nextReviewDeadline, result)
+        return result
+    }
+    private func computeRows() -> [FolderRow] {
         var measures = latest
         for profile in discovery.profiles where !measures.contains(where: { $0.profile.path == profile.path }) {
             measures.append(FolderMeasurement(profile: profile, observedAt: Date(), state: .pending, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Discovered; not yet measured.", elapsedSeconds: 0))
@@ -102,7 +154,7 @@ struct FolderRow: Identifiable {
         for (path, policy) in preferences.locations where policy.excluded && !measures.contains(where: { $0.profile.path == path }) {
             measures.append(FolderMeasurement(profile: Classifier.profile(path: path, home: home, readMetadata: false), observedAt: Date(), state: .excluded, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Excluded by you.", elapsedSeconds: 0))
         }
-        return measures.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growth($0.profile.path, records: records)) }.filter { row in
+        return measures.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path)) }.filter { row in
             let p = row.measurement.profile
             if let categoryFilter, p.category != categoryFilter { return false }
             guard search.isEmpty || (p.path + p.name + p.associatedApp + (p.project ?? "") + row.policy.tags.joined()).localizedCaseInsensitiveContains(search) else { return false }
@@ -122,13 +174,7 @@ struct FolderRow: Identifiable {
         }
     }
     /// Locations that could not be measured completely, for the sidebar badge.
-    var attentionCount: Int {
-        var paths = Set<String>()
-        let current = latest
-        for item in current where !preferences.excluded(item.profile.path) && [.inaccessible, .limited, .missing, .failed].contains(item.state) { paths.insert(item.profile.path) }
-        for profile in discovery.profiles where !preferences.excluded(profile.path) && !current.contains(where: { $0.profile.path == profile.path }) { paths.insert(profile.path) }
-        return paths.count
-    }
+    var attentionCount: Int { overview.attentionCount }
     /// Measurements for every selected row, with unique allocated bytes (nested folders counted once).
     var selectionSummary: (items: [FolderMeasurement], bytes: Int64, unmeasured: Int)? {
         guard selection.count > 1 else { return nil }
@@ -144,7 +190,7 @@ struct FolderRow: Identifiable {
         var next = preferences, added: [String] = []
         for item in record.measurements where item.state == .measured {
             let path = item.profile.path, policy = next.policy(path)
-            guard !policy.watched, !policy.expected, !next.excluded(path), let delta = growth(path, records: records).delta else { continue }
+            guard !policy.watched, !policy.expected, !next.excluded(path), let delta = growthSummary(path).delta else { continue }
             guard delta >= max(Self.autoWatchFloor, policy.growthThresholdBytes ?? 0) else { continue }
             var updated = policy; updated.watched = true; updated.autoWatched = true; updated.autoWatchedBytes = delta
             next.locations[normalized(path)] = updated; added.append(path)

@@ -41,6 +41,10 @@ import Foundation
         schedule.priorityCount = 1000; schedule.perLocationSeconds = 1; schedule.perLocationEntries = 1
         check(schedule.effectivePriorityCount == 48 && schedule.manualLimits.seconds == 30 && schedule.manualLimits.entries == 100_000, "allowances are clamped to safe bounds")
         check(ScanPlanner.priority(profiles, preferences: prefs, records: records, now: now, limit: 4).count == 4, "priority pass honors a configured location count")
+        var recurring = Preferences(); recurring.locations[profiles[15].path] = LocationPolicy(recurring: true)
+        check(ScanPlanner.priority(profiles, preferences: recurring, records: [records[0]], now: now).first?.path == profiles[15].path, "legacy Recurring locations receive Watching priority")
+        recurring.locations[profiles[15].path]!.isWatched = false
+        check(ScanPlanner.priority(profiles, preferences: recurring, records: [records[0]], now: now).first?.path != profiles[15].path, "Stop Watching removes legacy scheduling priority")
         print("SUCCESS: \(count) planner checks; no filesystem mutations.")
     }
 }

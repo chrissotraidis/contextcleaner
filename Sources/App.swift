@@ -18,7 +18,7 @@ struct MainView: View {
         NavigationSplitView {
             List(selection: Binding(get: { model.section }, set: { model.categoryFilter = nil; model.section = $0 })) {
                 ForEach(AppSection.allCases, id: \.self) { section in
-                    Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(section.tint ?? Color.accentColor) }.tag(section)
+                    Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(section.tint ?? Color.primary) }.tag(section)
                         .badge(section == .needsAttention ? model.attentionCount : 0)
                 }
             }.navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
@@ -109,7 +109,7 @@ struct MainView: View {
                 Text(summary.unmeasured > 0 ? "nested folders counted once · \(summary.unmeasured) not measured" : "nested folders counted once").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.controlSize(.small)
-                Button("Watch All") { for path in model.selection { model.policy(path) { $0.watched = true } } }.controlSize(.small)
+                Button("Watch All") { for path in model.selection { model.policy(path) { $0.isWatched = true } } }.controlSize(.small)
                 Button("Clear") { model.selection = [] }.controlSize(.small)
             }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
         }
@@ -150,7 +150,7 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 16) {
                 if let summary = model.selectionSummary {
                     Text("\(model.selection.count) locations selected").font(.title3.weight(.semibold))
-                    Text(byteLabel(summary.bytes)).font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text(byteLabel(summary.bytes)).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                     Text(summary.unmeasured > 0 ? "Measured sizes added, nested folders counted once. \(summary.unmeasured) selected \(summary.unmeasured == 1 ? "location has" : "locations have") no size yet." : "Measured sizes added, nested folders counted once.").font(.caption).foregroundStyle(.secondary)
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
@@ -172,9 +172,9 @@ struct MainView: View {
                         }
                     }
                     HStack(alignment: .firstTextBaseline) {
-                        Text(item.allocatedBytes.map(byteLabel) ?? "Not measured").font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
+                        Text(item.allocatedBytes.map(byteLabel) ?? "Not measured").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                         Spacer()
-                        Button { model.policy(item.profile.path) { $0.watched.toggle() } } label: { Label(model.preferences.policy(item.profile.path).watched ? "Watching" : "Watch", systemImage: model.preferences.policy(item.profile.path).watched ? "eye.fill" : "eye") }.buttonStyle(.bordered)
+                        Button { model.policy(item.profile.path) { $0.isWatched.toggle() } } label: { Label(model.preferences.policy(item.profile.path).isWatched ? "Watching" : "Watch", systemImage: model.preferences.policy(item.profile.path).isWatched ? "eye.fill" : "eye") }.buttonStyle(.bordered)
                     }
                     Text(item.state == .pending ? "Not scanned yet" : "\(item.state == .measured ? "Measured" : "Attempted") \(item.observedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
                     Picker("Folder details", selection: $model.inspector) {
@@ -205,14 +205,14 @@ struct MainView: View {
                         Button("Tags & notes…") { model.editing = item.profile.path }
                         Menu("More") { LocationActions(model: model, path: item.profile.path) }.frame(maxWidth: 110)
                     }
-                    Text("Context Cleaner never deletes files. You control any action in Finder.").font(.caption).foregroundStyle(.secondary)
+                    Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
                 } else if model.running, let path = model.selected {
                     ProgressView()
                     Text("Measuring selected location…").font(.title3)
                     Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     Text(model.progress).font(.callout)
                 } else {
-                    Image(systemName: "folder.badge.questionmark").font(.system(size: 36)).foregroundStyle(Color.accentColor).accessibilityHidden(true)
+                    Image(systemName: "folder.badge.questionmark").font(.largeTitle).foregroundStyle(Color.accentColor).accessibilityHidden(true)
                     Text("Choose a location").font(.title2)
                     Text("Inspect its purpose, history, associated tools and the evidence behind each conclusion.").foregroundStyle(.secondary)
                     Text("A cache stores reusable output so work does not need to be repeated. Rebuildable does not mean unused or free of consequences.")
@@ -401,7 +401,7 @@ struct MainView: View {
                             Text("\(elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt)))").font(.caption).foregroundStyle(.tertiary)
                         }
                         if let changes {
-                            if changes.grew.isEmpty && changes.shrank.isEmpty { Text("No size changes in comparable locations.").font(.caption).foregroundStyle(.secondary) }
+                            if changes.grew.isEmpty && changes.shrank.isEmpty { Text("No net size change across comparable locations.").font(.caption).foregroundStyle(.secondary) }
                             else {
                                 HStack(alignment: .top, spacing: 18) {
                                     if !changes.grew.isEmpty {
@@ -464,8 +464,7 @@ struct PolicyEditor: View {
         Form {
             Text("Your context for this location").font(.title2)
             Text(path).font(.caption).textSelection(.enabled)
-            Toggle("Watch this location", isOn: $value.watched)
-            Toggle("Recurring area to review", isOn: $value.recurring)
+            Toggle("Watch this location", isOn: $value.isWatched)
             Toggle("This growth is expected", isOn: $value.expected)
             Toggle("Review later", isOn: Binding(get: { value.reviewAfter != nil }, set: { value.reviewAfter = $0 ? Date().addingTimeInterval(86400) : nil }))
             if value.reviewAfter != nil {
@@ -535,7 +534,7 @@ struct AccessHelp: View {
             Text("When testing a new development build, macOS may require approving that particular build again.").font(.caption).foregroundStyle(.secondary)
             Divider()
             Text("Scanning allowances").font(.headline)
-            Text("Priority checks: 10 seconds or 100,000 entries per location, up to 90 seconds of measurement per pass. Manual scans: 120 seconds or 1,000,000 entries per location, up to 15 minutes per pass. A slow filesystem call can delay stopping.").font(.caption).foregroundStyle(.secondary)
+            Text("Priority checks: 10 seconds or 100,000 entries per location, up to 90 seconds of measurement per pass. Manual defaults: 120 seconds or 1,000,000 entries per location, up to 15 minutes per pass. A slow filesystem call can delay stopping.").font(.caption).foregroundStyle(.secondary)
             Text("An incomplete scan never supplies a complete size. Choose a smaller child folder to investigate large locations. Daily checks run only while this app is open and record attempts so failures do not trigger rapid retries.").font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Reveal this app in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }

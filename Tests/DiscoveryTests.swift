@@ -102,6 +102,12 @@ import Foundation
         check(Coverage.presence(entry, home: root.path) == .missing, "coverage distinguishes a missing directory")
         entry.relativePath = String(repeating: "x", count: 300)
         check(Coverage.presence(entry, home: root.path) == .unavailable, "filesystem errors are never reported as a missing directory")
+        var legacyWatch = LocationPolicy(recurring: true)
+        check(legacyWatch.isWatched, "legacy Recurring preferences participate in Watching")
+        legacyWatch.isWatched = false
+        check(!legacyWatch.watched && !legacyWatch.recurring, "Stop Watching clears both legacy and current watch flags")
+        legacyWatch.isWatched = true
+        check(legacyWatch.watched && !legacyWatch.recurring, "new watch choices use one canonical stored flag")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

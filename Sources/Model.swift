@@ -21,8 +21,7 @@ struct FolderRow: Identifiable {
         if policy.expected { return "Expected" }
         if growing { return policy.autoWatched == true ? "Growing · watched" : "Growing" }
         if !measurement.processes.isEmpty { return "Open handles" }
-        if policy.recurring { return "Recurring review" }
-        if policy.watched { return policy.autoWatched == true ? "Watching (auto)" : "Watching" }
+        if policy.isWatched { return policy.autoWatched == true ? "Watching (auto)" : "Watching" }
         return "Measured"
     }
     /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
@@ -31,7 +30,7 @@ struct FolderRow: Identifiable {
         if measurement.state != .measured { return .attention }
         if growing { return .growing }
         if policy.expected { return .stable }
-        if policy.watched || policy.recurring { return .accentColor }
+        if policy.isWatched { return .accentColor }
         return .secondary
     }
 }
@@ -131,7 +130,7 @@ struct FolderRow: Identifiable {
         for item in current where !excluded(item.profile.path) && [.inaccessible, .limited, .missing, .failed].contains(item.state) { attention.insert(item.profile.path) }
         let known = Set(current.map { $0.profile.path })
         for profile in discovery.profiles where !known.contains(profile.path) && !excluded(profile.path) { attention.insert(profile.path) }
-        let watching = preferences.locations.filter { ($0.value.watched || $0.value.recurring) && !excluded($0.key) }.count
+        let watching = preferences.locations.filter { ($0.value.isWatched) && !excluded($0.key) }.count
         let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count)
         overviewCache = (key, nextReviewDeadline, snapshot)
         return snapshot
@@ -167,7 +166,7 @@ struct FolderRow: Identifiable {
                 case .reviewLater: return !preferences.excluded(p.path) && (row.policy.reviewAfter ?? .distantPast) > Date()
                 case .rebuildable: return !preferences.excluded(p.path) && p.category.reproducible && row.measurement.state == .measured && row.measurement.activityCheckAvailable && row.measurement.processes.isEmpty && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
                 }
-            case .watching: return !preferences.excluded(p.path) && (row.policy.watched || row.policy.recurring)
+            case .watching: return !preferences.excluded(p.path) && (row.policy.isWatched)
             case .needsAttention: return !preferences.excluded(p.path) && [.inaccessible, .limited, .missing, .failed, .pending].contains(row.measurement.state)
             default: return !preferences.excluded(p.path)
             }
@@ -190,9 +189,9 @@ struct FolderRow: Identifiable {
         var next = preferences, added: [String] = []
         for item in record.measurements where item.state == .measured {
             let path = item.profile.path, policy = next.policy(path)
-            guard !policy.watched, !policy.expected, !next.excluded(path), let delta = growthSummary(path).delta else { continue }
+            guard !policy.isWatched, !policy.expected, !next.excluded(path), let delta = growthSummary(path).delta else { continue }
             guard delta >= max(Self.autoWatchFloor, policy.growthThresholdBytes ?? 0) else { continue }
-            var updated = policy; updated.watched = true; updated.autoWatched = true; updated.autoWatchedBytes = delta
+            var updated = policy; updated.isWatched = true; updated.autoWatched = true; updated.autoWatchedBytes = delta
             next.locations[normalized(path)] = updated; added.append(path)
         }
         guard !added.isEmpty else { return }
@@ -200,7 +199,7 @@ struct FolderRow: Identifiable {
         catch { self.error = "Watching could not be saved: \(error.localizedDescription)" }
     }
     @Published var lastAutoWatched: [String] = []
-    func undoAutoWatch(_ path: String) { policy(path) { $0.watched = false; $0.autoWatched = nil; $0.autoWatchedBytes = nil }; lastAutoWatched.removeAll { $0 == path } }
+    func undoAutoWatch(_ path: String) { policy(path) { $0.isWatched = false; $0.autoWatched = nil; $0.autoWatchedBytes = nil }; lastAutoWatched.removeAll { $0 == path } }
     var chosen: FolderMeasurement? {
         guard let selected else { return nil }
         return (latest.filter { $0.profile.path == selected } + [inspected[selected]].compactMap { $0 }).max { $0.observedAt < $1.observedAt } ?? rows.first(where: { $0.id == selected })?.measurement
@@ -300,7 +299,7 @@ struct FolderRow: Identifiable {
             let found: Discovery
             if selectedOnly, let path { found = Discovery(profiles: [Classifier.profile(path: path, home: home, preferences: prefs)], notes: ["Selected folder only; exclusions apply."]) }
             else if watchedOnly {
-                let paths = prefs.locations.filter { $0.value.watched && !prefs.excluded($0.key) }.map(\.key).sorted()
+                let paths = prefs.locations.filter { $0.value.isWatched && !prefs.excluded($0.key) }.map(\.key).sorted()
                 found = Discovery(profiles: paths.map { Classifier.profile(path: $0, home: home, preferences: prefs) }, notes: ["Watchlist only; no broad discovery. Missing watched paths are recorded as missing."])
             } else if priorityOnly && !ScanPlanner.discoveryDue(prefs, now: now) {
                 found = Discovery(profiles: known, notes: ["Priority pass over saved locations. Discovery is due every seven days while periodic checks are enabled."])

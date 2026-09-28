@@ -78,7 +78,7 @@ struct Panel<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: symbol).font(.headline).foregroundStyle(tint)
+            Label { Text(title).foregroundStyle(.primary) } icon: { Image(systemName: symbol).foregroundStyle(tint) }.font(.headline)
             content
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
             .background(.background.secondary)
@@ -95,7 +95,7 @@ struct LocationActions: View {
         Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
         Button("Rescan This Folder") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
-        Button(policy.watched ? "Stop Watching" : "Watch") { model.policy(path) { $0.watched.toggle() } }
+        Button(policy.isWatched ? "Stop Watching" : "Watch") { model.policy(path) { $0.isWatched.toggle() } }
         Button(policy.expected ? "Growth Is Not Expected" : "Growth Is Expected") { model.policy(path) { $0.expected.toggle() } }
         Button("Review Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
         Button("Tags and Notes…") { model.editing = path }
@@ -110,8 +110,8 @@ struct SelectionActions: View {
     let paths: [String]
     var body: some View {
         Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
-        Button("Watch All") { for path in paths { model.policy(path) { $0.watched = true } } }
-        Button("Stop Watching All") { for path in paths { model.policy(path) { $0.watched = false; $0.autoWatched = nil } } }
+        Button("Watch All") { for path in paths { model.policy(path) { $0.isWatched = true } } }
+        Button("Stop Watching All") { for path in paths { model.policy(path) { $0.isWatched = false; $0.autoWatched = nil } } }
         Divider()
         Button("Exclude All from Scans") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
         Button("Clear Selection") { model.selection = [] }

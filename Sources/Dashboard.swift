@@ -135,7 +135,7 @@ struct Dashboard: View {
             }.frame(height: 172)
             HStack(spacing: 10) {
                 metric("Measured", value: measured.count.formatted(), detail: "locations", symbol: "folder", tint: .accentColor) { show() }
-                metric("Growing", value: growthCount.formatted(), detail: growthCount == 0 ? "since last comparable scan" : "need a look", symbol: "chart.line.uptrend.xyaxis", tint: growthCount > 0 ? .growing : .secondary) { model.categoryFilter = nil; model.section = .locations; model.locationFilter = .growing }
+                metric("Growing", value: growthCount.formatted(), detail: growthCount == 0 ? "comparable scans" : "need a look", symbol: "chart.line.uptrend.xyaxis", tint: growthCount > 0 ? .growing : .secondary) { model.categoryFilter = nil; model.section = .locations; model.locationFilter = .growing }
                 metric("Watching", value: model.overview.watchingCount.formatted(), detail: "checked first", symbol: "eye", tint: .accentColor) { model.categoryFilter = nil; model.section = .watching }
                 metric("Needs attention", value: model.attentionCount.formatted(), detail: "not measured", symbol: "exclamationmark.triangle", tint: model.attentionCount > 0 ? .attention : .secondary) { model.categoryFilter = nil; model.section = .needsAttention }
             }

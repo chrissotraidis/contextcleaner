@@ -23,7 +23,7 @@ struct ScanPlanner {
             guard let date = latest[p.path] else { return 1000 }
             let age = max(0, now.timeIntervalSince(date) / 86400)
             let growing = (growth(p.path, records: records).delta ?? 0) > 0
-            let weight = policy.watched ? 4.0 : growing ? 3.0 : policy.expected ? 0.5 : 1.0
+            let weight = policy.isWatched ? 4.0 : growing ? 3.0 : policy.expected ? 0.5 : 1.0
             return (age + 0.1) * weight
         }
         var unique: [String: FolderProfile] = [:]

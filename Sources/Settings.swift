@@ -57,7 +57,7 @@ struct ScanningSettings: View {
                     Spacer()
                     Button("About access…") { showingAccessHelp = true }
                 }.disabled(model.running || model.inspecting || model.discovering)
-                if let last = model.preferences.lastDiscovery { Text("Locations were last rediscovered \(last.formatted(date: .abbreviated, time: .shortened)). Rediscovery also runs with Scan Now once a week.").font(.caption).foregroundStyle(.secondary) }
+                if let last = model.preferences.lastDiscovery { Text("Locations were last rediscovered \(last.formatted(date: .abbreviated, time: .shortened)). Scan Now rediscovers included locations; scheduled checks rediscover weekly.").font(.caption).foregroundStyle(.secondary) }
             }
         }.formStyle(.grouped).padding(.top, 4)
         .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
@@ -72,7 +72,7 @@ struct CoverageSettings: View {
         Form {
             Section {
                 TextField("Filter by tool or path", text: $query)
-                Text("Every place Context Cleaner knows a tool writes to. Present means the folder exists on this Mac right now. Turn a location off to exclude it and everything inside it from scanning.").font(.caption).foregroundStyle(.secondary)
+                Text("Every place Context Cleaner knows a tool writes to. Presence is checked when this page opens. Turn a location off to exclude it and everything inside it from scanning.").font(.caption).foregroundStyle(.secondary)
             }
             let groups = Dictionary(grouping: Coverage.entries.filter { query.isEmpty || ($0.writer + " " + $0.relativePath + " " + $0.writes).localizedCaseInsensitiveContains(query) }, by: \.writer)
             ForEach(groups.keys.sorted { a, b in a == "You" ? false : b == "You" ? true : a.localizedStandardCompare(b) == .orderedAscending }, id: \.self) { writer in
@@ -84,13 +84,13 @@ struct CoverageSettings: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {
                                     Image(systemName: entry.category.symbol).foregroundStyle(entry.category.tint).accessibilityHidden(true)
-                                    Text("~/" + entry.relativePath).font(.callout).lineLimit(1).truncationMode(.middle)
+                                    Text("~/" + entry.relativePath).font(.callout).lineLimit(1).truncationMode(.middle).help(path)
                                     Spacer()
                                     Text(status?.label ?? "Checking…").font(.caption).foregroundStyle(status == .unavailable ? Color.attention : .secondary)
                                 }
                                 Text(entry.writes + (entry.kind == .folder ? "" : " Measured as: " + entry.kind.rawValue.lowercased() + ".")).font(.caption).foregroundStyle(.secondary)
                             }
-                        }.toggleStyle(.switch).disabled(model.running || model.inspecting)
+                        }.toggleStyle(.switch).accessibilityLabel("~/" + entry.relativePath + " · " + (status?.label ?? "Checking…")).accessibilityHint(entry.writes).disabled(model.running || model.inspecting)
                     }
                 }
             }

@@ -84,6 +84,14 @@ struct ScanRecord: Codable, Identifiable {
 struct LocationPolicy: Codable, Equatable {
     var watched = false
     var recurring = false
+    /// Older Recurring preferences participate in the single Watching feature.
+    var isWatched: Bool {
+        get { watched || recurring }
+        set {
+            watched = newValue; recurring = false
+            if !newValue { autoWatched = nil; autoWatchedBytes = nil }
+        }
+    }
     var expected = false
     var excluded = false
     var reviewAfter: Date? = nil

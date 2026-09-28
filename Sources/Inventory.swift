@@ -46,12 +46,12 @@ struct Inventory {
             }
         }
         for p in preferences.customRoots where !preferences.excluded(p) { paths.insert(normalized(p)) }
-        for (p, policy) in preferences.locations where policy.watched && !preferences.excluded(p) { paths.insert(normalized(p)) }
+        for (p, policy) in preferences.locations where policy.isWatched && !preferences.excluded(p) { paths.insert(normalized(p)) }
         let profiles = paths.map { path in
             if !cancellation.stopped { progress(path) }
             return Classifier.profile(path: path, home: home, readMetadata: !cancellation.stopped, preferences: preferences)
         }.sorted { a,b in
-            let aw = preferences.policy(a.path).watched, bw = preferences.policy(b.path).watched
+            let aw = preferences.policy(a.path).isWatched, bw = preferences.policy(b.path).isWatched
             if aw != bw { return aw }
             if a.category.reproducible != b.category.reproducible { return a.category.reproducible }
             return a.path < b.path

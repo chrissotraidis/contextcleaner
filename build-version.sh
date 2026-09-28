@@ -2,8 +2,13 @@
 set -euo pipefail
 source_dir="$(cd "$(dirname "$0")" && pwd)"
 release_root="${1:?Supply a NEW release directory; existing output is refused}"
+icon_source="${2:-$source_dir/Assets/IconCandidates/LayeredC.png}"
+if [ ! -f "$icon_source" ]; then echo "Icon source not found: $icon_source" >&2; exit 1; fi
 if [ -e "$release_root" ]; then echo "Refusing existing release destination: $release_root" >&2; exit 1; fi
 mkdir -p "$release_root"
+git -C "$source_dir" rev-parse HEAD > "$release_root/source-revision.txt"
+git -C "$source_dir" status --porcelain > "$release_root/source-status.txt"
+printf '%s\n' "$icon_source" > "$release_root/icon-source.txt"
 stage_dir="$HOME/Library/Application Support/Context Cleaner Development/Builds/$(uuidgen)"
 mkdir -p "$stage_dir"
 app="$stage_dir/Context Cleaner.app"
@@ -16,9 +21,9 @@ swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -Xlinker -no_adhoc_code
 iconset="$stage_dir/ContextCleaner.iconset"
 mkdir "$iconset"
 for size in 16 32 128 256 512; do
- sips -z "$size" "$size" "$source_dir/Assets/ContextCleaner.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+ sips -z "$size" "$size" "$icon_source" --out "$iconset/icon_${size}x${size}.png" >/dev/null
  double=$((size * 2))
- sips -z "$double" "$double" "$source_dir/Assets/ContextCleaner.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+ sips -z "$double" "$double" "$icon_source" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/ContextCleaner.icns"
 cat > "$app/Contents/Info.plist" <<'PLIST'

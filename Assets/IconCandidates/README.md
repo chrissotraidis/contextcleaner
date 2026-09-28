@@ -5,7 +5,7 @@ Generated with the built-in imagegen tool on 2026-09-28. Original artwork is pre
 - A: StorageGauge.png — silver storage gauge; light tile.
 - B: LayeredC.png — layered storage C; dark blue tile.
 
-User choice requested in the active task; neither replaces the existing app icon yet.
+Both candidates are packaged as separate builds so the user can choose. The build script defaults to B and accepts A as its second argument; this is a packaging default, not a recorded user preference. The previous Assets/ContextCleaner.png artwork remains preserved.
 
 ## Prompt A
 

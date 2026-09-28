@@ -17,6 +17,8 @@ Each stage: inspect → implement → build → verify in the real UI → versio
 
 Design references: Apple HIG — Designing for macOS, Sidebars, Panels, Toolbars, Color; Adopting Liquid Glass; WWDC25 session 323.
 
-## Continuation checkpoint — 2026-09-28
+## Completed acceptance — 2026-09-28
 
-Stages 0–5 are committed. Stage 6 caches and exact-build Instruments launch evidence are committed as fb7e600; scrolling acceptance remains open. Checkpoint 11 adds stable chart domains, system toolbar grouping and removes fixed radii. Two icon candidates are ready for the user's choice. See [performance evidence](validation/Performance%20checkpoint%200.7.0-10.md) and [remaining release gates](validation/Visual%20checkpoint%200.7.0-11.md). Do not tag v0.7.0 or mark the goal complete yet.
+Stages 0–7 are implemented and validated for the local 0.7.0 release. App source: `fc7f0f2`. The final affected-suite rerun brings validation to 154 checks across six suites. The exact release binary rendered its initial frame at 1.14 seconds of Instruments trace time. Native multi-selection, view changes, scrolling, Settings, coverage, report preview and both appearances were exercised. Two icon packages are provided for user choice. Earlier checkpoints remain preserved.
+
+See [final validation, package provenance and limits](validation/Final%20validation%200.7.0.md). This is an ad-hoc signed local release, not notarized public-distribution acceptance or multi-day monitoring proof. The 13 GiB failed profiler trace is disclosed as a manual cleanup candidate; it was not deleted.

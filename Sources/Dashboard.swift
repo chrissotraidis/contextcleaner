@@ -159,6 +159,7 @@ struct FolderTrend: View {
 /// Used space over time, filling upward under the disk's capacity.
 struct UsageChart: View {
     @ObservedObject var model: CleanerModel
+    var chartHeight: CGFloat = 136
     @State private var range: UsageRange = .week
     @State private var perBucket = false
     @State private var hover: Date?
@@ -180,7 +181,7 @@ struct UsageChart: View {
                 if perBucket { bucketChart(readings, window: window) }
                 else if points.count < 2 { emptyChart }
                 else { levelChart(points, window: window) }
-            }.frame(height: 136)
+            }.frame(height: chartHeight)
             HStack(spacing: 10) {
                 Picker("Chart", selection: $perBucket) { Text("Space used").tag(false); Text("Change per \(range.bucketName)").tag(true) }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
@@ -340,22 +341,26 @@ struct Dashboard: View {
         model.locationFilter = filter; model.selected = nil; model.inspector = "Overview"
     }
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
-                hero
-                statusLine
-                HStack(alignment: .top, spacing: 16) {
-                    categories.frame(maxWidth: .infinity)
-                    largest.frame(maxWidth: .infinity)
-                }
-            }.padding(.horizontal, 22).padding(.bottom, 16)
-        }.scrollBounceBehavior(.basedOnSize)
+        GeometryReader { geometry in
+            // The chart grows into spare height on large windows; everything else keeps its size.
+            let chartHeight = min(320, max(136, geometry.size.height - 610))
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 14) {
+                    hero(chartHeight)
+                    statusLine
+                    HStack(alignment: .top, spacing: 16) {
+                        categories.frame(maxWidth: .infinity)
+                        largest.frame(maxWidth: .infinity)
+                    }
+                }.padding(.horizontal, 22).padding(.bottom, 16)
+            }.scrollBounceBehavior(.basedOnSize)
+        }
     }
-    private var hero: some View {
+    private func hero(_ chartHeight: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 22) {
             capacity.frame(width: 190)
             Divider()
-            UsageChart(model: model)
+            UsageChart(model: model, chartHeight: chartHeight)
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
     }
     @ViewBuilder private var capacity: some View {

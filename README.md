@@ -1,77 +1,69 @@
 # Context Cleaner
 
-**Find what’s filling your Mac. Understand it before you act.**
+**See what's filling your Mac, and when. Then decide for yourself.**
 
-Context Cleaner shows large folders, tracks their growth, and explains which apps or projects they belong to. It helps you investigate recurring storage problems without handing over control of your files.
+Context Cleaner is a native macOS app that shows how full your disk is, how that changed this week, and which folders are taking the space. It covers the places apps quietly pile up data: AI tools, Xcode and simulators, package caches, game libraries and your downloads.
 
-**It never deletes files.** There is no cleanup, Trash, uninstall, pruning or reset command. You decide what to do in Finder.
+**It never deletes files.** There's no cleanup, Trash, uninstall or reset button anywhere. You decide what to do, in Finder.
 
 ## Start here
 
-1. Choose **Scan Folders…**. Review the apps and paths included, then choose **Start Scan**.
-2. Open **Folders** to sort by size or filter to **Not scanned**, **Growing**, or **Caches & builds**.
-3. Select a folder to see its purpose, project, saved sizes and supporting evidence. **Scan Folder** checks just that folder; **Show in Finder** reveals it.
-4. Add recurring concerns to your **Watchlist**. Optional daily or weekly checks are in **Context Cleaner → Settings…** (⌘,). They run only while the app is open and are off by default.
+1. Choose **Scan Folders…** (⌘R). The sheet lists the apps and paths it will read. Choose **Start Scan**; a bar under the title shows progress, and you can stop at any time.
+2. On **Overview**, read the headline above the chart, for example "+24 GiB more space used". Then look at **What's taking space** and **Largest folders**.
+3. Click any category or folder to open it in **Folders**. The panel on the right says what the folder is, how its size has changed, and offers **Scan Folder** and **Show in Finder**.
+4. Add folders you care about to your **Watchlist**. Optional daily or weekly checks are in **Context Cleaner › Settings…** (⌘,). They run only while the app is open and are off by default.
 
-Scans read directory metadata. They do not inspect every file’s contents or scan your entire Mac. Settings → Coverage lists the known paths, your added folders and exclusions.
+## How to read the chart
 
-## A clearer view of your storage
+![Space used chart](docs/images/space-used.png)
+
+- **The blue area is used space.** It rises when your disk fills up. The dashed line at the top is your disk's capacity, and the gray band between them is free space.
+- **The headline is the change** for the range you picked: 24 hours, 7 days or 30 days.
+- **Point at the chart** to see the exact reading at that moment. **Drag across it** to see the change between two times, plus the scanned folders that grew most in that span. Click **Clear Selection** to go back.
+- **Change per day** switches to bars: orange means more space used, green means space was freed.
+- **Where readings come from:** Context Cleaner notes your disk space every hour while it's open, and at every scan. Gaps in the line are times when the app wasn't running. Nothing is filled in or guessed.
+
+## The five views
 
 | View | What it answers |
 |---|---|
-| **Overview** | How much space is free? What changed? Which scanned folders take the most space? |
-| **Folders** | What is in this folder, what uses it, and how large is it? |
-| **Watchlist** | Which folders should I keep checking? |
-| **Scan Issues** | Which scans could not finish, and what can I try next? |
-| **Scan History** | Which folders were checked, when, and with what result? |
+| **Overview** | How full is my disk, how did that change, and what's taking the space? |
+| **Folders** | How big is each folder, is it growing, and what is it? Select several with ⌘‑click or ⇧‑click to add their sizes. |
+| **Watchlist** | Which folders am I keeping an eye on? |
+| **Couldn't Scan** | Which folders couldn't be read, and what's the fix? Each row gives a plain reason and one button. Folders that simply haven't been scanned yet aren't listed here. |
+| **Scan History** | What did each scan check, and what did it find? Grouped by day. |
 
-### New in 0.8.0
+**Export Report…** (⇧⌘E) previews a Markdown file of the folders shown, with the week's change at the top, before you save it. It stays on your Mac.
 
-- **A scan preview with a clear scope.** See included apps and exact paths before starting. Stop a scan at any time.
-- **A readable free-space chart.** Real sample dates, labelled units and a plain-language change. Its latest point matches the storage card; it represents whole-disk free space, not growth attributed to a particular app.
-- **Unscanned is not an error.** Pending folders have their own filter. Scan Issues is reserved for access problems, limits, missing folders and failures.
-- **Useful scan history.** Entries name the folder and result. Expand one for sizes, comparison details and the free space recorded at the time.
-- **Simpler folder details.** One folder-scan button, one Finder button, details on demand, and no empty graph pretending to show history.
-- **Plain category names.** Project files, App libraries and Test devices replace technical labels. Generic build folders identify their project.
-
-Native ⇧-click and ⌘-click selection shows a combined size without counting a selected parent and its children twice. Tags, notes, expected growth and exclusions remain available from the folder menu. A report preview lets you inspect a local Markdown report before saving it to a new file.
+**Settings** has three short tabs. General covers appearance and scheduled checks. Scanning explains what a scan does, with limits under Advanced. Coverage lists every place the app looks, grouped as AI tools, developer tools, games and emulators, downloads, and your folders, with a switch for each.
 
 ## What the numbers mean
 
-- **Free space** is a reading from macOS for the volume containing your home folder. The chart combines saved scan readings with the latest capacity check. Refreshing capacity does not scan folders or save a standalone history record.
-- **Folder totals** use the latest complete measurement of each included folder. Parent/child overlaps are counted once. The readings can come from different dates and do not cover the entire disk.
-- **Growth** requires comparable scans. The app cannot reconstruct what happened before it started recording, or reliably identify a historical writer from a path alone.
-- **A cache is a clue, not a deletion guarantee.** Rebuilding can take time. App libraries, test devices, recovery copies and project folders can contain unique work, saves or other personal files.
-- **Allocated size is an estimate.** APFS shared blocks, snapshots and unavailable folders mean these totals are not guaranteed recoverable space.
+- **Disk space** comes from macOS for the volume holding your home folder.
+- **Folder sizes** come from the latest scan of each folder. A folder inside another is counted once in totals. Sizes can come from different days, and scanned folders never add up to all your used space.
+- **Growth** needs two comparable scans. Nothing before the first scan is known, and a folder's location suggests which app uses it without proving which app wrote to it.
+- **Removing a folder may free less than its size**, because APFS shares storage between files. Caches can usually be rebuilt, but that takes time. App libraries, test devices, recovery copies and project folders can hold the only copy of your work.
 
 ## Privacy and preservation
 
-Scanned folders are read-only. Scan history and preferences are saved locally as new JSON records under `~/Library/Application Support/Context Cleaner`; older records and existing SpaceCheck history stay untouched. There is no automatic record cleanup. Reports stay local unless you share them yourself. Existing export files are never replaced.
-
-If macOS blocks a folder, the app explains how to grant access. Incomplete sizes are withheld rather than presented as complete.
+Scans read folder sizes and dates only; they never open, change or delete files. Scans, preferences and hourly disk readings are saved as new files under `~/Library/Application Support/Context Cleaner`. Nothing is rewritten or pruned. Earlier SpaceCheck history stays untouched.
 
 ## Build and run
 
-Apple Silicon, macOS 14 or newer. Built with Xcode 27.0; newer toolbar styling is availability-gated. These builds are locally ad-hoc signed, **not notarized for public distribution**.
-
-Use a new output directory for each build:
+Apple Silicon, macOS 14 or newer. Built with Xcode 27.0. Builds are ad‑hoc signed and **not notarized** for public distribution.
 
 ```sh
 bash build-version.sh /absolute/path/to/new-build-output
 ```
 
-The output contains the DMG, checksum, source revision/status and icon provenance. The script refuses an existing destination. Build stages remain under `~/Library/Application Support/Context Cleaner Development/Builds/<UUID>`; nothing is cleaned automatically.
+The script refuses an existing destination and writes the DMG, its checksum, the source revision and status, and the icon it used. Build stages stay under `~/Library/Application Support/Context Cleaner Development/Builds/<UUID>`; nothing is cleaned automatically.
 
-The Blue C icon is the default. To build the preserved alternative, pass `Assets/IconCandidates/StorageGauge.png` as the second argument.
-
-## Development and validation
-
-Run all six regression suites while keeping every fixture and log:
+## Development
 
 ```sh
 bash test-preserving.sh /absolute/path/to/new-test-output
 ```
 
-The suites cover preservation, metadata, scan limits, planning, discovery/model state, totals, chart readings and history summaries. The 0.8.0 run passed **167 checks**. Native UI verification is separate from these automated checks.
+Six suites cover preservation, folder contents, scan limits, planning, discovery and model state, and the Overview's numbers: chart ranges and gaps, span changes, per‑day bars, what grew, hourly readings and scan results. Every fixture and log is kept.
 
-[Design and copy rules](docs/DESIGN.md) · [0.8 goal loop](docs/GOAL_LOOP_0.8.0.md) · [0.8 validation and limits](docs/validation/Final%20validation%200.8.0.md)
+[Design and copy rules](docs/DESIGN.md) · [0.9 goal loop](docs/GOAL_LOOP_0.9.0.md) · [0.9 validation and limits](docs/validation/Final%20validation%200.9.0.md)

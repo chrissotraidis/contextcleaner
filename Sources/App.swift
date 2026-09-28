@@ -301,7 +301,7 @@ struct MainView: View {
                 ForEach(Array(growers), id: \.id) { row in summaryRow(row.measurement.profile, value: signedBytes(row.change.delta ?? 0), tint: .growing) }
             }
         }
-        if !rows.isEmpty {
+        if !rows.isEmpty && model.section != .needsAttention {
             Divider()
             Text("Select a folder to see what it is. ⌘-click or ⇧-click several to add their sizes.").font(.caption).foregroundStyle(.secondary)
         }
@@ -509,7 +509,9 @@ struct MainView: View {
             }.padding(.vertical, 6)
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: record.complete ? "checkmark.circle" : "stop.circle").foregroundStyle(record.complete ? Color.accentColor : .growing).accessibilityHidden(true)
+                let problem = !record.wasStopped && record.measurements.contains { [.inaccessible, .limited, .missing, .failed].contains($0.state) }
+                Image(systemName: record.wasStopped ? "stop.circle" : problem ? "exclamationmark.triangle" : "checkmark.circle")
+                    .foregroundStyle(record.wasStopped ? Color.growing : problem ? Color.attention : Color.accentColor).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.folderSummary).font(.headline).lineLimit(1)
                     Text(record.resultSummary).font(.callout).foregroundStyle(.secondary)

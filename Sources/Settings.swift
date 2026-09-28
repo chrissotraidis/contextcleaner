@@ -156,7 +156,7 @@ struct CoverageSettings: View {
                 model.updatePreferences { prefs in
                     for path in paths { var policy = prefs.policy(path); policy.excluded = !value; prefs.locations[normalized(path)] = policy }
                 }
-            })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy).help(on > 0 ? "Turn off every \(group.rawValue.lowercased()) location" : "Turn on every \(group.rawValue.lowercased()) location")
+            })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy).help(on > 0 ? "Turn off everything in \(group.rawValue)" : "Turn on everything in \(group.rawValue)")
         }
     }
     private func row(_ entry: CoverageEntry, size: Int64) -> some View {

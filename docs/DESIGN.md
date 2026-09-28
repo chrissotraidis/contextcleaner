@@ -4,6 +4,22 @@ Source of truth for every screen. Grounded in Apple's Human Interface Guidelines
 
 ## 0.9 spec — calm, visual, obvious
 
+### 0.9.1 — answer "can I remove it?" everywhere
+
+The question people open this app with is "what can I safely delete?" Every folder now carries one of three verdicts, and every screen shows it in the same words and colors.
+
+| Verdict | Color | Means | Examples |
+|---|---|---|---|
+| **Safe to remove** | green | A tool recreates it, nothing had it open, and it hasn't been used recently | package caches, Xcode DerivedData, device install caches, build output unused for 7+ days, simulators unused for 30+ days, never started, or unable to run |
+| **Check first** | orange | Might be fine, but look first; the card says what to check | work folders, recovery copies, recently used build output, downloads, AI models, anything with unknown last use |
+| **Keep** | gray | Manage it inside its own app | app libraries (OpenEmu, Steam, CrossOver), conversation history, folders you marked as expected |
+
+Rules: unknown last use is never "safe"; open files downgrade to "check first"; your own marks win; the Simulator Devices folder is never removed whole. Simulator facts (name, iOS version, last used, current size) come straight from Xcode, so they are never stale. Each verdict states its reason, the evidence ("Last used 3 weeks ago · size from 2 days ago") and **how to remove it yourself** (in Finder, Xcode, or the tool's own clean command, copied never run). The app still never deletes anything.
+
+Folders shows **Last used** and **Can I remove it?** columns. Overview leads with the safe total. Folders that no longer exist show "Gone" and leave all totals. When most sizes come from a full scan older than a day, the status line says so.
+
+Charts: no vertical gridlines, faint horizontal ones, smooth monotone line with a soft fill, a labeled dot for the latest value, a hover bubble, and a quiet "No readings yet" area where there's no data.
+
 Written from an audit of every 0.8 screen, sheet, menu and Settings tab (dark and light, 1103 × 752 and 1480 × 920 points) plus the user's 2026-09-28 screenshots. It supersedes every earlier rule below where they conflict.
 
 ### What the audit found

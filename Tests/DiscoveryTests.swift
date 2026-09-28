@@ -144,6 +144,24 @@ import Foundation
         capacityRestart.lastResult = nil
         capacityRestart.open(grower.path)
         check(capacityRestart.section == .locations && capacityRestart.selected == grower.path && capacityRestart.locationFilter == .all, "opening a folder from Overview shows it selected in Folders")
+        // Can I remove it? Safe folders are totalled and filtered; gone folders drop out of both.
+        let verdictModel = CleanerModel(home: home, dataRoot: storage.root)
+        var buildProfile = Classifier.profile(path: home + "/verdict/DerivedData", home: home, readMetadata: false); buildProfile.category = .buildOutput
+        var oldBuild = measure(buildProfile, 5_000_000_000, t0); oldBuild.latestModifiedAt = Date().addingTimeInterval(-30 * 86400)
+        var libraryProfile = Classifier.profile(path: home + "/verdict/Library", home: home, readMetadata: false); libraryProfile.category = .appData
+        verdictModel.records = [ScanRecord(id: "verdicts", startedAt: t0, finishedAt: t0, scope: "fixture", complete: true, measurements: [oldBuild, measure(libraryProfile, 9_000_000_000, t0)], discoveryNotes: [])]
+        verdictModel.gone = []
+        check(verdictModel.overview.safe.map(\.profile.path) == [buildProfile.path] && verdictModel.overview.safeBytes == 5_000_000_000, "the Overview totals only folders that are safe to remove")
+        verdictModel.section = .locations; verdictModel.locationFilter = .safe
+        check(verdictModel.rows.map(\.id) == [buildProfile.path], "Safe to remove lists safe folders only")
+        verdictModel.locationFilter = .keep
+        check(verdictModel.rows.map(\.id) == [libraryProfile.path] && verdictModel.rows.first?.advice.verdict == .keep, "app libraries are listed under Keep")
+        verdictModel.gone = [buildProfile.path]
+        check(verdictModel.overview.safe.isEmpty && !verdictModel.overview.measuredBySize.contains { $0.profile.path == buildProfile.path }, "a folder that's gone leaves the Overview's totals")
+        verdictModel.locationFilter = .all
+        check(verdictModel.rows.first { $0.id == buildProfile.path }?.status == "Gone", "a gone folder says so in the list")
+        verdictModel.locationFilter = .safe
+        check(verdictModel.rows.isEmpty, "a gone folder is never offered as safe to remove")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

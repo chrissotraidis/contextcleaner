@@ -29,14 +29,15 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", scanned = "Scanned", unscanned = "Not scanned", rebuildable = "Caches & builds", growing = "Growing", reviewLater = "Review later", excluded = "Excluded"
+    case all = "All", safe = "Safe to remove", check = "Check first", keep = "Keep", growing = "Growing", unscanned = "Not scanned", reviewLater = "Review later", excluded = "Turned off"
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Sizes from your latest scans."
-        case .scanned: return "Folders with a complete size."
+        case .all: return "Sizes from your latest scans. Each row says whether it's safe to remove."
+        case .safe: return "Caches, build files and unused test devices that tools recreate. Remove them yourself, in Finder or Xcode."
+        case .check: return "Might be fine to remove, but look first. Each one says what to check."
+        case .keep: return "App libraries and history. Manage these inside their own apps."
         case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
-        case .rebuildable: return "Caches and build files a tool can recreate. Check each before removing anything yourself."
         case .growing: return "Grew between two scans and not marked as expected."
         case .reviewLater: return "Folders you asked to come back to."
         case .excluded: return "Folders you turned off. They aren't scanned."
@@ -68,6 +69,64 @@ extension FolderMeasurement {
     /// Ordinary file permissions ("Permission denied") need a different fix from macOS privacy protection ("Operation not permitted").
     var permissionDenied: Bool { state == .inaccessible && ((diagnostic ?? "").contains("Permission denied") || (diagnostic ?? "").contains("error 13")) }
     var problem: String { permissionDenied ? "No permission to read it" : state.problem }
+}
+
+extension Verdict {
+    /// Green: safe. Orange: look first. Gray: leave it to its app.
+    var tint: Color {
+        switch self {
+        case .safe: return .green
+        case .check: return .orange
+        case .keep: return .secondary
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .safe: return "checkmark.circle.fill"
+        case .check: return "exclamationmark.circle.fill"
+        case .keep: return "hand.raised.fill"
+        }
+    }
+}
+/// The one-glance answer used in tables and lists.
+struct VerdictBadge: View {
+    let verdict: Verdict
+    var selected = false
+    var body: some View {
+        Label(verdict.title, systemImage: verdict.symbol)
+            .font(.caption.weight(.semibold)).lineLimit(1)
+            .foregroundStyle(selected ? Color.white : verdict.tint)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background((selected ? Color.white : verdict.tint).opacity(0.15), in: Capsule())
+    }
+}
+/// "Can I remove it?" with the reason, the evidence and how to do it yourself.
+struct VerdictCard: View {
+    let advice: Advice
+    let scannedAt: Date?
+    @State private var copied = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(advice.verdict.title, systemImage: advice.verdict.symbol).font(.headline).foregroundStyle(advice.verdict.tint)
+            Text(advice.reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+            Text(["Last used " + ageText(advice.lastUsed), scannedAt.map { "size from " + ageText($0) }].compactMap { $0 }.joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary)
+            Divider()
+            Text("How to remove it yourself").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(advice.howTo).font(.callout).fixedSize(horizontal: false, vertical: true)
+            if let command = advice.command {
+                HStack(spacing: 8) {
+                    Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                        .padding(.horizontal, 8).padding(.vertical, 5).background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
+                    Button(copied ? "Copied" : "Copy") {
+                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string); copied = true
+                    }.controlSize(.small).help("Copies the command. Context Cleaner never runs it.")
+                }
+            }
+        }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .background(advice.verdict.tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
+            .onChange(of: advice) { _, _ in copied = false }
+    }
 }
 
 extension Color {

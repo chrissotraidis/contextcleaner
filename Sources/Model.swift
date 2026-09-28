@@ -7,15 +7,21 @@ struct FolderRow: Identifiable {
     var measurement: FolderMeasurement
     var policy: LocationPolicy
     var change: GrowthSummary
+    var advice: Advice
+    var gone = false
     var name: String { measurement.profile.displayName }
     var app: String { measurement.profile.project ?? measurement.profile.associatedApp }
     var bytes: Int64 { measurement.allocatedBytes ?? -1 }
     var delta: Int64 { change.delta ?? Int64.min }
     var category: String { measurement.profile.category.displayName }
+    /// Sort keys: verdict (safe first) and last use (unknown last).
+    var verdictRank: Int { gone ? 9 : advice.verdict.rawValue }
+    var lastUsedKey: Double { advice.lastUsed?.timeIntervalSince1970 ?? 0 }
     var growing: Bool { (change.delta ?? 0) > 0 && (change.delta ?? 0) >= (policy.growthThresholdBytes ?? 0) && !policy.expected }
     /// One plain word, shown only when it tells you something. Empty for an ordinary scanned folder.
     var status: String {
         if policy.excluded { return "Excluded" }
+        if gone { return "Gone" }
         if measurement.state == .pending { return "Not scanned" }
         if measurement.state != .measured {
             switch measurement.state {
@@ -67,6 +73,37 @@ struct FolderRow: Identifiable {
     @Published var capacity: [CapacityReading] = []
     /// One-line result of the most recent scan, shown under the page header until dismissed.
     @Published var lastResult: String?
+    /// Simulators as Xcode reports them, keyed by device ID. Read-only.
+    @Published var simDevices: [String: SimDevice] = [:] { didSet { discoveryVersion += 1 } }
+    /// Known folders that no longer exist on disk.
+    @Published var gone: Set<String> = [] { didSet { discoveryVersion += 1 } }
+    /// Reads Xcode's simulator list in the background. Never changes simulators.
+    func loadSimDevices() {
+        DispatchQueue.global(qos: .utility).async {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            process.arguments = ["simctl", "list", "devices", "-j"]
+            process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+            guard (try? process.run()) != nil else { return }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let devices = process.terminationStatus == 0 ? parseSimDevices(data) : [:]
+            DispatchQueue.main.async { self.simDevices = devices }
+        }
+    }
+    /// Checks which known folders are gone. Metadata only.
+    func refreshGone() {
+        let paths = Array(Set(discovery.profiles.map(\.path) + latest.map(\.profile.path)))
+        DispatchQueue.global(qos: .utility).async {
+            let missing = missingPaths(paths)
+            DispatchQueue.main.async { if missing != self.gone { self.gone = missing } }
+        }
+    }
+    func adviceFor(_ m: FolderMeasurement) -> Advice { advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices) }
+    func deviceAdvice(_ device: SimDevice) -> Advice {
+        let profile = FolderProfile(path: home + "/Library/Developer/CoreSimulator/Devices/" + device.udid, name: device.name, category: .simulator, project: nil, associatedApp: "Apple CoreSimulator", explanation: "", consequence: "", evidence: [])
+        return advice(for: FolderMeasurement(profile: profile, observedAt: Date(), state: .measured, fileCount: 0, processes: [], activityCheckAvailable: false, elapsedSeconds: 0), policy: LocationPolicy(), devices: simDevices)
+    }
     func refreshVolume() { volume = VolumeSnapshot.read(); recordCapacityIfDue() }
     /// Minimum spacing between stored capacity readings.
     static let capacityInterval: TimeInterval = 55 * 60
@@ -142,6 +179,8 @@ struct FolderRow: Identifiable {
         for record in records { for item in record.measurements { saved[item.profile.path] = item.profile } }
         discovery = Discovery(profiles: saved.values.sorted { $0.path < $1.path }, notes: ["Showing saved locations. Discovery runs only when requested. Coverage is recognized development/cache locations and your selected roots, not the whole disk."])
         recordCapacityIfDue()
+        loadSimDevices()
+        refreshGone()
     }
     // Derived state is rebuilt only when its inputs change; SwiftUI reads these many times per frame.
     private struct Derived { var key = ""; var latest: [FolderMeasurement] = []; var history: [String: [HistoryPoint]] = [:]; var growth: [String: GrowthSummary] = [:] }
@@ -169,7 +208,7 @@ struct FolderRow: Identifiable {
     }
     var latest: [FolderMeasurement] { refreshDerived(); return derived.latest }
     /// Everything the Overview needs, computed once per change of records or preferences.
-    struct OverviewSnapshot { var groups: [StorageGroup] = []; var total: Int64 = 0; var measuredBySize: [FolderMeasurement] = []; var growthCount = 0; var watchingCount = 0; var attentionCount = 0; var pendingCount = 0 }
+    struct OverviewSnapshot { var groups: [StorageGroup] = []; var total: Int64 = 0; var measuredBySize: [FolderMeasurement] = []; var growthCount = 0; var watchingCount = 0; var attentionCount = 0; var pendingCount = 0; var safe: [FolderMeasurement] = []; var safeBytes: Int64 = 0 }
     private var overviewCache: (key: String, validUntil: Date, value: OverviewSnapshot) = ("", .distantPast, OverviewSnapshot())
     var overview: OverviewSnapshot {
         let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
@@ -177,7 +216,7 @@ struct FolderRow: Identifiable {
         let current = latest
         let excludedPaths = preferences.locations.filter { $0.value.excluded }.map { normalized($0.key) }
         func excluded(_ path: String) -> Bool { excludedPaths.contains { containsPath($0, path) } }
-        let measured = current.filter { $0.state == .measured && !excluded($0.profile.path) }
+        let measured = current.filter { $0.state == .measured && !excluded($0.profile.path) && !gone.contains($0.profile.path) }
         let groups = overviewGroups(measured, preferences: Preferences())
         let now = Date()
         var growthCount = 0
@@ -190,7 +229,8 @@ struct FolderRow: Identifiable {
         let known = Set(current.map { $0.profile.path })
         let pendingCount = discovery.profiles.filter { !known.contains($0.path) && !excluded($0.path) }.count
         let watching = preferences.locations.filter { ($0.value.isWatched) && !excluded($0.key) }.count
-        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count, pendingCount: pendingCount)
+        let safe = measured.filter { adviceFor($0).verdict == .safe }.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }
+        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count, pendingCount: pendingCount, safe: safe, safeBytes: uniqueAllocatedTotal(safe))
         overviewCache = (key, nextReviewDeadline, snapshot)
         return snapshot
     }
@@ -212,7 +252,7 @@ struct FolderRow: Identifiable {
         for (path, policy) in preferences.locations where policy.excluded && !measures.contains(where: { $0.profile.path == path }) {
             measures.append(FolderMeasurement(profile: Classifier.profile(path: path, home: home, readMetadata: false), observedAt: Date(), state: .excluded, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Excluded by you.", elapsedSeconds: 0))
         }
-        return measures.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path)) }.filter { row in
+        return measures.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path), advice: adviceFor($0), gone: gone.contains($0.profile.path)) }.filter { row in
             let p = row.measurement.profile
             if let categoryFilter, p.category != categoryFilter { return false }
             guard search.isEmpty || (p.path + p.name + p.associatedApp + (p.project ?? "") + row.policy.tags.joined()).localizedCaseInsensitiveContains(search) else { return false }
@@ -221,11 +261,12 @@ struct FolderRow: Identifiable {
                 switch locationFilter {
                 case .excluded: return row.policy.excluded
                 case .all: return !preferences.excluded(p.path)
-                case .scanned: return !preferences.excluded(p.path) && row.measurement.state == .measured
+                case .safe: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .measured && row.advice.verdict == .safe
+                case .check: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .measured && row.advice.verdict == .check
+                case .keep: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .measured && row.advice.verdict == .keep
                 case .unscanned: return !preferences.excluded(p.path) && row.measurement.state == .pending
                 case .growing: return !preferences.excluded(p.path) && (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
                 case .reviewLater: return !preferences.excluded(p.path) && (row.policy.reviewAfter ?? .distantPast) > Date()
-                case .rebuildable: return !preferences.excluded(p.path) && p.category.reproducible && row.measurement.state == .measured && row.measurement.activityCheckAvailable && row.measurement.processes.isEmpty && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
                 }
             case .watching: return !preferences.excluded(p.path) && (row.policy.isWatched)
             case .needsAttention: return !preferences.excluded(p.path) && [.inaccessible, .limited, .missing, .failed].contains(row.measurement.state)
@@ -382,7 +423,7 @@ struct FolderRow: Identifiable {
                 DispatchQueue.main.async { self.partial.append(item); self.completed = index; self.progress = item.profile.name }
             }
             DispatchQueue.main.async {
-                self.records.append(record); self.refreshVolume()
+                self.records.append(record); self.refreshVolume(); self.refreshGone(); self.loadSimDevices()
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
                 self.autoWatch(after: record)

@@ -177,21 +177,26 @@ struct MainView: View {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
-                    Text(row.app + " · " + row.category).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text([row.app, row.category, row.status].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-            }.width(min: 170, ideal: 230)
-            TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").font(.callout).monospacedDigit() }.width(min: 80, ideal: 90)
-            TableColumn("Trend", value: \.delta) { row in
-                let values = model.sparkline(row.id)
-                HStack(spacing: 8) {
-                    if values.count > 1 { Sparkline(values: values, tint: selectedRow(row.id) ? .white : values.trendTint) }
-                    else { Text(row.measurement.state == .measured ? "1 scan" : "—").font(.caption).foregroundStyle(selectedRow(row.id) ? Color.white : Color.secondary.opacity(0.6)) }
-                    if let delta = row.change.delta, delta != 0 {
-                        Text(signedBytes(delta)).font(.caption).monospacedDigit().foregroundStyle(selectedRow(row.id) ? Color.white : delta > 0 ? Color.growing : Color.stable)
-                    }
-                }.help(values.count > 1 ? "Size across the last \(values.count) comparable scans" : "Needs two scans to show a trend")
-            }.width(min: 90, ideal: 120)
-            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(selectedRow(row.id) ? Color.white : row.statusTint) }.width(min: 60, ideal: 80)
+            }.width(min: 170, ideal: 240)
+            TableColumn("Size", value: \.bytes) { row in
+                Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").font(.callout).monospacedDigit().foregroundStyle(row.gone ? Color.secondary : Color.primary).strikethrough(row.gone)
+            }.width(min: 80, ideal: 90)
+            TableColumn("Last used", value: \.lastUsedKey) { row in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.advice.lastUsed.map { ageText($0) } ?? (row.measurement.state == .pending ? "—" : "Unknown")).font(.callout)
+                        .foregroundStyle(row.advice.lastUsed == nil ? Color.secondary : Color.primary)
+                    if row.measurement.state == .measured { Text("size from " + ageText(row.measurement.observedAt)).font(.caption).foregroundStyle(.secondary) }
+                }.help("Last used: the newest change a scan saw inside it, or when Xcode last ran a test device.")
+            }.width(min: 90, ideal: 110)
+            TableColumn("Can I remove it?", value: \.verdictRank) { row in
+                Group {
+                    if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
+                    else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
+                    else { VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id)) }
+                }.help(row.advice.reason)
+            }.width(min: 120, ideal: 140)
         }
         .contextMenu(forSelectionType: String.self) { paths in
             if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }
@@ -334,11 +339,14 @@ struct MainView: View {
                 .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
-        Text(item.profile.category.shortPurpose).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        HStack(spacing: 8) {
-            CapsuleLabel(text: item.profile.category.reproducible ? "Usually rebuildable" : "May hold personal files", symbol: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised", color: item.profile.category.reproducible ? .accentColor : .secondary)
-            if item.state == .measured { Text("Scanned \(item.observedAt.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary) }
+        (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        let simulatorRoot = path.hasSuffix("/CoreSimulator/Devices")
+        if model.gone.contains(path) {
+            Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)
+        } else if item.state == .measured || simulatorRoot || SimulatorLocations.deviceRoot(path) != nil {
+            VerdictCard(advice: model.adviceFor(item), scannedAt: item.state == .measured ? item.observedAt : nil)
         }
+        if simulatorRoot { simulatorDeviceList() }
         if item.state != .measured && item.state != .pending {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: item.state.problemSymbol).foregroundStyle(Color.attention).accessibilityHidden(true)
@@ -373,6 +381,35 @@ struct MainView: View {
         DisclosureGroup("What's inside", isExpanded: $showInside) { if showInside { contents(item).padding(.top, 8) } }.font(.headline)
         DisclosureGroup("Details", isExpanded: $showDetails) { if showDetails { details(item).padding(.top, 8) } }.font(.headline)
         Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
+    }
+    /// Every simulator Xcode knows, with current size, last use and a verdict. Read from Xcode, so it's never stale.
+    @ViewBuilder func simulatorDeviceList() -> some View {
+        let devices = model.simDevices.values.sorted { ($0.dataBytes ?? 0) > ($1.dataBytes ?? 0) }
+        if !devices.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Test devices, from Xcode").font(.headline)
+                ForEach(devices, id: \.udid) { device in
+                    let verdict = model.deviceAdvice(device)
+                    HStack(spacing: 8) {
+                        Image(systemName: verdict.verdict.symbol).foregroundStyle(verdict.verdict.tint).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(device.name).font(.callout).lineLimit(1)
+                            Text("\(device.runtime) · used \(device.lastUsed.map { ageText($0) } ?? "never")").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(device.dataBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit()
+                    }
+                    .contentShape(Rectangle())
+                    .help(verdict.verdict.title + ". " + verdict.reason)
+                    .accessibilityElement(children: .combine)
+                    .contextMenu {
+                        Button("Copy Remove Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("xcrun simctl delete \(device.udid)", forType: .string) }
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.home + "/Library/Developer/CoreSimulator/Devices/" + device.udid)]) }
+                    }
+                }
+                Text("Current sizes and last use, straight from Xcode. Remove devices in Xcode › Window › Devices and Simulators.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
     /// Evidence, path, handles and every saved size. Folded by default.
     func details(_ item: FolderMeasurement) -> some View {

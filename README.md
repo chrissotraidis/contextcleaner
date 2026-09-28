@@ -13,11 +13,21 @@ Context Cleaner is a native macOS app that shows how full your disk is, how that
 3. Click any category or folder to open it in **Folders**. The panel on the right says what the folder is, how its size has changed, and offers **Scan Folder** and **Show in Finder**.
 4. Add folders you care about to your **Watchlist**. Optional daily or weekly checks are in **Context Cleaner › Settings…** (⌘,). They run only while the app is open and are off by default.
 
+## Can I remove it?
+
+Every folder gets a plain answer, with the reason and how to do it yourself:
+
+- **Safe to remove** (green): tools recreate it, and it hasn't been used lately. Package caches, Xcode build data, install caches, old build output, and test devices you haven't opened in 30 days.
+- **Check first** (orange): might be fine; the folder's card says exactly what to look at.
+- **Keep** (gray): app libraries and history. Remove things from inside their own app instead.
+
+The Overview shows how much looks safe to remove, and **Review Safe Folders** lists them. Simulator details come straight from Xcode, so they're always current. Context Cleaner never deletes anything; it tells you where, why and how.
+
 ## How to read the chart
 
 ![Space used chart](docs/images/overview-chart.png)
 
-- **The blue area is used space.** It rises when your disk fills up. The dashed line at the top is your disk's capacity, and the gray band between them is free space.
+- **The blue area is used space.** It rises when your disk fills up. The dashed line at the top is your disk's capacity; the gap between them is your free space. The dot on the right is today.
 - **The headline is the change** for the range you picked: 24 hours, 7 days or 30 days.
 - **Point at the chart** to see the exact reading at that moment. **Drag across it** to see the change between two times, plus the scanned folders that grew most in that span. Click **Clear Selection** to go back.
 - **Change per day** switches to bars: orange means more space used, green means space was freed.

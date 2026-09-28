@@ -234,3 +234,168 @@ extension ScanRecord {
         measurements.contains { $0.state == .cancelled } || measurements.count < (requestedCount ?? measurements.count)
     }
 }
+
+
+// MARK: - Can I remove it?
+
+/// A plain answer for every folder. The app never acts on it; it tells you what you can do yourself.
+enum Verdict: Int, Comparable, CaseIterable, Identifiable {
+    case safe = 0, check = 1, keep = 2
+    var id: Int { rawValue }
+    static func < (a: Verdict, b: Verdict) -> Bool { a.rawValue < b.rawValue }
+    var title: String {
+        switch self {
+        case .safe: return "Safe to remove"
+        case .check: return "Check first"
+        case .keep: return "Keep"
+        }
+    }
+}
+/// A simulator as Xcode reports it (`xcrun simctl list devices -j`). Read-only.
+struct SimDevice: Equatable {
+    let udid: String
+    let name: String
+    let runtime: String
+    let lastUsed: Date?
+    let available: Bool
+    let dataBytes: Int64?
+}
+func parseSimDevices(_ data: Data) -> [String: SimDevice] {
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let groups = root["devices"] as? [String: [[String: Any]]] else { return [:] }
+    let iso = ISO8601DateFormatter()
+    var out: [String: SimDevice] = [:]
+    for (runtime, devices) in groups {
+        let pretty = runtime.replacingOccurrences(of: "com.apple.CoreSimulator.SimRuntime.", with: "").replacingOccurrences(of: "-", with: " ")
+        for device in devices {
+            guard let udid = device["udid"] as? String else { continue }
+            out[udid] = SimDevice(udid: udid, name: device["name"] as? String ?? udid, runtime: prettyRuntime(pretty),
+                                  lastUsed: (device["lastUsedAt"] as? String).flatMap { iso.date(from: $0) },
+                                  available: device["isAvailable"] as? Bool ?? true, dataBytes: (device["dataPathSize"] as? NSNumber)?.int64Value)
+        }
+    }
+    return out
+}
+/// "iOS 26 5" → "iOS 26.5"
+private func prettyRuntime(_ value: String) -> String {
+    let parts = value.split(separator: " ").map(String.init)
+    guard let first = parts.first else { return value }
+    return parts.count > 1 ? first + " " + parts.dropFirst().joined(separator: ".") : first
+}
+/// Short, human age: "today", "yesterday", "3 days ago", "5 weeks ago", "4 months ago".
+func ageText(_ date: Date?, now: Date = Date()) -> String {
+    guard let date else { return "unknown" }
+    let days = Int(max(0, now.timeIntervalSince(date)) / 86400)
+    if days == 0 { return "today" }
+    if days == 1 { return "yesterday" }
+    if days < 14 { return "\(days) days ago" }
+    if days < 60 { return "\(days / 7) weeks ago" }
+    return "\(days / 30) months ago"
+}
+struct Advice: Equatable {
+    let verdict: Verdict
+    /// Why, in one sentence.
+    let reason: String
+    /// How to remove it yourself, safely.
+    let howTo: String
+    /// Optional Terminal command the user may run themselves.
+    let command: String?
+    /// Best evidence of last use: Xcode's last-used date for simulators, otherwise the newest file change seen by a scan.
+    let lastUsed: Date?
+}
+/// Summary of the simulators Xcode knows about, for the Devices folder.
+struct SimSummary: Equatable { var total = 0; var idle = 0; var idleBytes: Int64 = 0; var bytes: Int64 = 0; var unavailable = 0 }
+func simSummary(_ devices: [String: SimDevice], now: Date = Date(), idleDays: Double = 30) -> SimSummary {
+    var s = SimSummary()
+    for d in devices.values {
+        s.total += 1; s.bytes += d.dataBytes ?? 0
+        if !d.available { s.unavailable += 1 }
+        if !d.available || d.lastUsed == nil || now.timeIntervalSince(d.lastUsed!) >= idleDays * 86400 { s.idle += 1; s.idleBytes += d.dataBytes ?? 0 }
+    }
+    return s
+}
+/// The verdict rules. Evidence first (open files, your own marks, last use), then what the folder is.
+func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], now: Date = Date()) -> Advice {
+    let path = m.profile.path
+    let name = m.profile.displayName
+    let trash = "Quit the app that uses it, then move it to the Trash in Finder. Empty the Trash when you're sure."
+    let days: (Date?) -> Double? = { $0.map { now.timeIntervalSince($0) / 86400 } }
+    // Simulators: Xcode knows best.
+    if path.hasSuffix("/CoreSimulator/Devices") {
+        let s = simSummary(devices, now: now)
+        let reason = s.total == 0 ? "Virtual iPhones and iPads for testing apps. Xcode didn't report any devices." :
+            "Holds \(s.total) test \(s.total == 1 ? "device" : "devices") using \(byteLabel(s.bytes)) now. \(s.idle) \(s.idle == 1 ? "hasn't" : "haven't") been used in 30 days (\(byteLabel(s.idleBytes)))."
+        return Advice(verdict: .check, reason: reason, howTo: "Don't remove this whole folder. Remove single devices in Xcode › Window › Devices and Simulators: select one, then press Delete.", command: s.unavailable > 0 ? "xcrun simctl delete unavailable" : nil, lastUsed: devices.values.compactMap(\.lastUsed).max() ?? m.latestModifiedAt)
+    }
+    if let root = SimulatorLocations.deviceRoot(path) {
+        let udid = URL(fileURLWithPath: root).lastPathComponent
+        let device = devices[udid]
+        let deviceName = device.map { "“\($0.name)”" } ?? "this device"
+        let how = "In Xcode, choose Window › Devices and Simulators, select \(deviceName), then press Delete. That removes the device and its apps and saves."
+        if root != path {
+            return Advice(verdict: .check, reason: "App data inside a test device. Deleting it alone can confuse the simulator.", howTo: "Delete the app inside the Simulator, or remove the whole device. " + how, command: nil, lastUsed: device?.lastUsed ?? m.latestModifiedAt)
+        }
+        guard let device else {
+            return Advice(verdict: .check, reason: "Xcode doesn't list this device anymore, so it may be left over.", howTo: "Check Xcode › Window › Devices and Simulators. If it isn't there, it's safe to move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+        }
+        let cmd = "xcrun simctl delete \(udid)"
+        if !device.available { return Advice(verdict: .safe, reason: "\(device.name) needs \(device.runtime), which isn't installed, so it can't run anymore.", howTo: how, command: cmd, lastUsed: device.lastUsed) }
+        guard let used = days(device.lastUsed) else { return Advice(verdict: .safe, reason: "\(device.name) (\(device.runtime)) has never been started.", howTo: how, command: cmd, lastUsed: nil) }
+        if used >= 30 { return Advice(verdict: .safe, reason: "\(device.name) (\(device.runtime)) hasn't been used in \(Int(used)) days. Its apps and saves go with it.", howTo: how, command: cmd, lastUsed: device.lastUsed) }
+        return Advice(verdict: .check, reason: "\(device.name) (\(device.runtime)) was used \(ageText(device.lastUsed, now: now)). Removing it loses its apps and saves.", howTo: how, command: cmd, lastUsed: device.lastUsed)
+    }
+    switch m.state {
+    case .pending: return Advice(verdict: .check, reason: "Not scanned yet, so its size and last use are unknown.", howTo: "Scan it first.", command: nil, lastUsed: nil)
+    case .missing: return Advice(verdict: .check, reason: "It's no longer on disk. Scan again to update the list.", howTo: "Nothing to do.", command: nil, lastUsed: nil)
+    case .inaccessible, .limited, .failed: return Advice(verdict: .check, reason: "It couldn't be read completely, so what's inside is unknown.", howTo: "Open it in Finder and look before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
+    default: break
+    }
+    if !m.processes.isEmpty {
+        let apps = Array(Set(m.processes.map(\.command))).sorted().prefix(2).joined(separator: " and ")
+        return Advice(verdict: .check, reason: "\(apps) had files open here during the last scan.", howTo: "Quit \(apps) first. " + trash, command: nil, lastUsed: m.latestModifiedAt)
+    }
+    if policy.expected { return Advice(verdict: .keep, reason: "You marked its growth as expected.", howTo: "Change that in Tags and Notes if you want to review it.", command: nil, lastUsed: m.latestModifiedAt) }
+    let idle = days(m.latestModifiedAt)
+    let lastSeen = m.latestModifiedAt.map { " Last changed \(ageText($0, now: now))." } ?? ""
+    switch m.profile.category {
+    case .packageCache:
+        let cmd: String? = path.hasSuffix(".npm/_cacache") ? "npm cache clean --force" : path.hasSuffix("Caches/pip") ? "pip cache purge" : path.hasSuffix(".cache/uv") ? "uv cache clean" : path.hasSuffix("Caches/Homebrew") ? "brew cleanup --prune=all" : path.hasSuffix("Caches/Yarn") ? "yarn cache clean" : nil
+        return Advice(verdict: .safe, reason: "A download cache. The tool downloads what it needs again, so the next install is a little slower.\(lastSeen)", howTo: cmd == nil ? trash : "Use the tool's own clean command, or: " + trash, command: cmd, lastUsed: m.latestModifiedAt)
+    case .buildOutput:
+        return Advice(verdict: .safe, reason: "Xcode rebuilds this. The next build of each project takes longer.\(lastSeen)", howTo: "Quit Xcode, then move the folder's contents to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+    case .installCache:
+        return Advice(verdict: .safe, reason: "Saved pieces from installing \(name.replacingOccurrences(of: " install cache", with: "")) on an iPhone or iPad. It's recreated on the next install.\(lastSeen)", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
+    case .debugSymbols:
+        if let idle, idle < 30 { return Advice(verdict: .check, reason: "Debug files for a device you connected \(ageText(m.latestModifiedAt, now: now)). Xcode copies them again if you remove them.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
+        return Advice(verdict: .safe, reason: "Debug files for one iPhone or iPad and iOS version. Xcode copies them again the next time you connect it.\(lastSeen)", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+    case .workspace:
+        let rebuildable = ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) }
+        let project = m.profile.project ?? "its project"
+        if rebuildable {
+            guard let idle else { return Advice(verdict: .check, reason: "Build output for \(project), which a build recreates. When it was last used isn't known yet; scan it to find out.", howTo: trash, command: nil, lastUsed: nil) }
+            if idle < 7 { return Advice(verdict: .check, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). You're probably still building it.", howTo: "Wait until you're done with \(project). " + trash, command: nil, lastUsed: m.latestModifiedAt) }
+            return Advice(verdict: .safe, reason: "Build output for \(project). Building again recreates it.\(lastSeen)", howTo: "Move it to the Trash in Finder. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
+        }
+        if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "A work folder for \(project). These can mix build files with inputs you made by hand.\(lastSeen)", howTo: "Look inside first. Remove what you know you can rebuild.", command: nil, lastUsed: m.latestModifiedAt) }
+        return Advice(verdict: .check, reason: "Project files for \(project). Some may be the only copy of your work.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
+    case .backup:
+        return Advice(verdict: .check, reason: "A recovery copy made before a risky change. It may hold the only copy of unfinished work.\(lastSeen)", howTo: "Compare it with the project. If the project has everything, move this to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+    case .history:
+        return Advice(verdict: .keep, reason: "Your past conversations. Removing them loses that history for good.", howTo: "Archive old conversations in the app instead.", command: nil, lastUsed: m.latestModifiedAt)
+    case .model:
+        return Advice(verdict: .check, reason: "Downloaded AI models. You can download them again, but they're large.\(lastSeen)", howTo: "Remove models you don't use from inside \(m.profile.associatedApp).", command: nil, lastUsed: m.latestModifiedAt)
+    case .appData:
+        let app = m.profile.associatedApp
+        return Advice(verdict: .keep, reason: "\(app)'s own library: things like games, saves and settings. Removing the folder can break \(app).", howTo: "Remove what you don't need from inside \(app) instead.", command: nil, lastUsed: m.latestModifiedAt)
+    case .download:
+        return Advice(verdict: .check, reason: "Files you downloaded. Old installers (.dmg, .pkg, .zip) are usually safe; documents may be your only copy.\(lastSeen)", howTo: "Sort by date in Finder and remove what you recognize.", command: nil, lastUsed: m.latestModifiedAt)
+    case .simulator:
+        return Advice(verdict: .check, reason: "Simulator data outside a device folder.\(lastSeen)", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
+    case .unknown:
+        return Advice(verdict: .check, reason: "Context Cleaner doesn't know what this folder is.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
+    }
+}
+/// Paths that no longer exist on disk. Only reads metadata.
+func missingPaths(_ paths: [String]) -> Set<String> {
+    Set(paths.filter { path in var st = stat(); return lstat(path, &st) != 0 && (errno == ENOENT || errno == ENOTDIR) })
+}

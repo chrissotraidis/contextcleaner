@@ -89,6 +89,44 @@ import Foundation
         check(scanOutcome(blocked, grew: 0) == "1 folder couldn't be read" && blocked.resultSummary == "1 folder couldn't be read", "an unreadable folder is reported as unreadable, not as a stopped scan")
         var stoppedOne = record("stopped-one", [item("/fixture/a", .appData, nil, .cancelled)]); stoppedOne.complete = false; stoppedOne.requestedCount = 1
         check(scanOutcome(stoppedOne, grew: 0) == "Stopped after 0 of 1 folder", "a stopped one-folder scan uses the singular")
+        // Can I remove it?
+        let now = start.addingTimeInterval(100 * 86400)
+        func folder(_ path: String, _ category: FolderCategory, lastChanged daysAgo: Double?, project: String? = nil) -> FolderMeasurement {
+            var m = item(path, category, 10 * gib); m.latestModifiedAt = daysAgo.map { now.addingTimeInterval(-$0 * 86400) }
+            m.profile.project = project; return m
+        }
+        let staleBuild = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now)
+        check(staleBuild.verdict == .safe && staleBuild.reason.contains("kartpad") && staleBuild.reason.contains("2 weeks ago"), "build output idle for weeks is safe and says which project and when")
+        check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 0.2, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "build output changed today is check first")
+        check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "unknown last use is never called safe")
+        check(advice(for: folder("/fixture/kartpad/work", .workspace, lastChanged: 90), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "work folders may hold hand-made inputs")
+        let npm = advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 1), policy: LocationPolicy(), devices: [:], now: now)
+        check(npm.verdict == .safe && npm.command == "npm cache clean --force", "package caches are safe and offer the tool's own clean command")
+        check(advice(for: folder("/fixture/Library/Application Support/OpenEmu", .appData, lastChanged: 200), policy: LocationPolicy(), devices: [:], now: now).verdict == .keep, "app libraries are kept however old")
+        check(advice(for: folder("/fixture/.codex/backups/x", .backup, lastChanged: 300), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "recovery copies are never called safe")
+        var busy = folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50); busy.processes = [ProcessEvidence(pid: 1, command: "node", access: "r", path: "/fixture/.npm/_cacache/x")]
+        let busyAdvice = advice(for: busy, policy: LocationPolicy(), devices: [:], now: now)
+        check(busyAdvice.verdict == .check && busyAdvice.reason.contains("node"), "open files downgrade a safe folder and name the app")
+        check(advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50), policy: LocationPolicy(expected: true), devices: [:], now: now).verdict == .keep, "your expected mark wins")
+        let json = """
+        {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
+          {"udid":"OLD","name":"iPhone Old","isAvailable":true,"lastUsedAt":"2026-05-01T00:00:00Z","dataPathSize":5000000000},
+          {"udid":"NEW","name":"iPhone New","isAvailable":true,"lastUsedAt":"\(ISO8601DateFormatter().string(from: now.addingTimeInterval(-86400)))","dataPathSize":2000000000},
+          {"udid":"NEVER","name":"iPad Fresh","isAvailable":true,"dataPathSize":4096}],
+          "com.apple.CoreSimulator.SimRuntime.iOS-17-0":[{"udid":"GONE","name":"iPhone 15","isAvailable":false,"lastUsedAt":"2026-09-20T00:00:00Z","dataPathSize":1000}]}}
+        """
+        let sims = parseSimDevices(Data(json.utf8))
+        check(sims.count == 4 && sims["OLD"]?.runtime == "iOS 26.5" && sims["GONE"]?.available == false, "Xcode's device list is parsed with readable runtimes")
+        func device(_ udid: String) -> Advice { advice(for: folder("/Users/x/Library/Developer/CoreSimulator/Devices/\(udid)", .simulator, lastChanged: nil), policy: LocationPolicy(), devices: sims, now: now) }
+        check(device("OLD").verdict == .safe && device("OLD").reason.contains("iPhone Old") && device("OLD").command == "xcrun simctl delete OLD", "an unused simulator is safe, named, and removed through Xcode")
+        check(device("NEW").verdict == .check, "a simulator used yesterday is check first")
+        check(device("GONE").verdict == .safe && device("GONE").reason.contains("iOS 17.0"), "a simulator whose iOS is gone is safe")
+        check(device("NEVER").verdict == .safe && device("NEVER").reason.contains("never been started"), "a never-started simulator is safe")
+        let simRoot = advice(for: folder("/Users/x/Library/Developer/CoreSimulator/Devices", .simulator, lastChanged: nil), policy: LocationPolicy(), devices: sims, now: now)
+        check(simRoot.verdict == .check && simRoot.reason.contains("4 test devices") && simRoot.command == "xcrun simctl delete unavailable", "the Devices folder is never removed whole; it summarizes devices from Xcode")
+        check(simSummary(sims, now: now).idle == 3, "idle devices: unused, never started, or unable to run")
+        check(ageText(now.addingTimeInterval(-3600), now: now) == "today" && ageText(now.addingTimeInterval(-86400 * 1.5), now: now) == "yesterday" && ageText(now.addingTimeInterval(-86400 * 20), now: now) == "2 weeks ago" && ageText(nil, now: now) == "unknown", "ages read like a person would say them")
+        check(missingPaths(["/fixture-definitely-missing/x", "/"]) == ["/fixture-definitely-missing/x"], "missing folders are found by metadata only")
         let single = record("single", [cache])
         check(single.folderSummary == cache.profile.displayName, "single-folder scan history identifies the folder")
         var stopped = single; stopped.complete = false; stopped.requestedCount = 4

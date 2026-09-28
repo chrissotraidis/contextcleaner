@@ -136,19 +136,19 @@ struct FolderTrend: View {
                 Chart {
                     ForEach(series) { point in
                         AreaMark(x: .value("Date", point.date), yStart: .value("Zero", 0), yEnd: .value("Size", Double(point.bytes) / gibibyte), series: .value("Run", point.segment))
-                            .foregroundStyle(LinearGradient(colors: [Color.accentColor.opacity(0.35), Color.accentColor.opacity(0.05)], startPoint: .top, endPoint: .bottom))
+                            .foregroundStyle(LinearGradient(colors: [Color.accentColor.opacity(0.3), Color.accentColor.opacity(0.02)], startPoint: .top, endPoint: .bottom)).interpolationMethod(.monotone)
                         LineMark(x: .value("Date", point.date), y: .value("Size", Double(point.bytes) / gibibyte), series: .value("Run", point.segment))
-                            .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2))
+                            .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
                         if series.count <= 30 { PointMark(x: .value("Date", point.date), y: .value("Size", Double(point.bytes) / gibibyte)).foregroundStyle(Color.accentColor).symbolSize(18) }
                     }
                     if let picked { RuleMark(x: .value("Selected", picked.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3])) }
                 }
                 .chartYScale(domain: 0...max(top * 1.1, 0.001))
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))) } } } }
+                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
                 .chartXAxis {
                     // Within two days, dates alone repeat; show the day and hour instead.
                     let short = (series.last?.date.timeIntervalSince(first.date) ?? 0) < 2 * 86400
-                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisGridLine(); AxisValueLabel(format: short ? .dateTime.weekday(.abbreviated).hour() : .dateTime.month(.abbreviated).day()) }
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisValueLabel(format: short ? .dateTime.weekday(.abbreviated).hour() : .dateTime.month(.abbreviated).day()) }
                 }
                 .chartHover($hover)
                 .frame(height: 110)
@@ -232,32 +232,55 @@ struct UsageChart: View {
     private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
         let axis = usageAxis(points.map(\.reading))
         let capacity = axis.upperBound
-        let step = niceStep((axis.upperBound - axis.lowerBound) / 4)
-        let ticks = stride(from: axis.lowerBound, through: axis.upperBound - step * 0.5, by: step).map { $0 } + [axis.upperBound]
+        let ticks = [axis.lowerBound, (axis.lowerBound + axis.upperBound) / 2, axis.upperBound]
         let picked = hover.flatMap { date in points.min { abs($0.reading.date.timeIntervalSince(date)) < abs($1.reading.date.timeIntervalSince(date)) } }
+        let first = points.first?.reading.date ?? window.lowerBound
+        let hasGapBefore = first.timeIntervalSince(window.lowerBound) > (window.upperBound.timeIntervalSince(window.lowerBound)) * 0.08
+        let fill = LinearGradient(colors: [Color.accentColor.opacity(0.32), Color.accentColor.opacity(0.02)], startPoint: .top, endPoint: .bottom)
         return Chart {
-            if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.12)) }
+            if hasGapBefore {
+                RectangleMark(xStart: .value("From", window.lowerBound), xEnd: .value("To", first), yStart: .value("Low", axis.lowerBound), yEnd: .value("High", capacity))
+                    .foregroundStyle(Color.secondary.opacity(0.04))
+                    .annotation(position: .overlay, alignment: .center) { Text("No readings yet").font(.caption).foregroundStyle(.tertiary) }
+            }
+            if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.10)) }
+            RuleMark(y: .value("Capacity", capacity)).foregroundStyle(Color.secondary.opacity(0.45)).lineStyle(StrokeStyle(lineWidth: 0.75, dash: [3, 3]))
+                .annotation(position: .top, alignment: .trailing, spacing: 2) { Text("Capacity \(byteLabel(Int64(capacity * gibibyte)))").font(.caption).foregroundStyle(.secondary) }
             ForEach(points) { point in
                 let used = Double(point.reading.used) / gibibyte
                 AreaMark(x: .value("Time", point.reading.date), yStart: .value("Floor", axis.lowerBound), yEnd: .value("Used", used), series: .value("Series", "used-\(point.segment)"))
-                    .foregroundStyle(LinearGradient(colors: [Color.accentColor.opacity(0.45), Color.accentColor.opacity(0.10)], startPoint: .top, endPoint: .bottom))
-                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Used", used), yEnd: .value("Capacity", Double(point.reading.total) / gibibyte), series: .value("Series", "free-\(point.segment)"))
-                    .foregroundStyle(Color.secondary.opacity(0.10))
+                    .foregroundStyle(fill).interpolationMethod(.monotone)
                 LineMark(x: .value("Time", point.reading.date), y: .value("Used", used), series: .value("Series", "line-\(point.segment)"))
-                    .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2, lineJoin: .round))
+                    .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
             }
-            RuleMark(y: .value("Capacity", capacity)).foregroundStyle(.secondary).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .annotation(position: .bottom, alignment: .trailing) { Text("Capacity").font(.caption).foregroundStyle(.secondary) }
-            if let last = points.last { PointMark(x: .value("Time", last.reading.date), y: .value("Used", Double(last.reading.used) / gibibyte)).foregroundStyle(Color.accentColor).symbolSize(40) }
+            if let last = points.last, picked == nil {
+                let used = Double(last.reading.used) / gibibyte
+                PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor.opacity(0.2)).symbolSize(180)
+                PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(45)
+                    .annotation(position: .leading, alignment: .center, spacing: 8) { Text(byteLabel(last.reading.used)).font(.caption.weight(.semibold)).monospacedDigit() }
+            }
             if let picked {
-                RuleMark(x: .value("Reading", picked.reading.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3]))
-                PointMark(x: .value("Reading", picked.reading.date), y: .value("Used", Double(picked.reading.used) / gibibyte)).foregroundStyle(Color.accentColor).symbolSize(70)
+                let used = Double(picked.reading.used) / gibibyte
+                RuleMark(x: .value("Reading", picked.reading.date)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 1))
+                PointMark(x: .value("Reading", picked.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(60)
+                    .annotation(position: .top, alignment: .center, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        VStack(spacing: 1) {
+                            Text(byteLabel(picked.reading.used) + " used").font(.caption.weight(.semibold)).monospacedDigit()
+                            Text(picked.reading.date.formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.caption).foregroundStyle(.secondary)
+                        }.padding(.horizontal, 8).padding(.vertical, 4).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    }
             }
         }
         .chartXScale(domain: window)
         .chartYScale(domain: axis)
-        .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisGridLine(); AxisValueLabel(format: xFormat) } }
-        .chartYAxis { AxisMarks(position: .leading, values: ticks) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))) } } } }
+        .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisValueLabel(format: xFormat).font(.caption).foregroundStyle(Color.secondary) } }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: ticks) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
+                AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } }
+            }
+        }
+        .chartLegend(.hidden)
         .chartOverlay { proxy in interactionLayer(proxy) }
         .accessibilityLabel("Used disk space \(range.phrase). \(points.count) readings. The dashed line is capacity.")
     }
@@ -270,14 +293,14 @@ struct UsageChart: View {
                 Chart {
                     ForEach(buckets) { bucket in
                         BarMark(x: .value("When", bucket.start, unit: range.bucket), y: .value("Change", Double(bucket.delta!) / gibibyte))
-                            .foregroundStyle(bucket.delta! > 0 ? Color.growing : Color.stable)
+                            .foregroundStyle(bucket.delta! > 0 ? Color.growing.gradient : Color.stable.gradient).cornerRadius(3)
                             .opacity(hover.map { bucket.start <= $0 && $0 < bucket.end } ?? true ? 1 : 0.45)
                     }
-                    RuleMark(y: .value("No change", 0)).foregroundStyle(Color.secondary)
+                    RuleMark(y: .value("No change", 0)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 0.75))
                 }
                 .chartXScale(domain: window)
-                .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisGridLine(); AxisValueLabel(format: xFormat) } }
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))) } } } }
+                .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisValueLabel(format: xFormat).font(.caption).foregroundStyle(Color.secondary) } }
+                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
                 .chartHover($hover)
                 .accessibilityLabel("Change in used space per \(range.bucketName). Orange bars used more space, green bars freed space.")
             }
@@ -347,10 +370,11 @@ struct Dashboard: View {
     var body: some View {
         GeometryReader { geometry in
             // The chart grows into spare height on large windows; everything else keeps its size.
-            let chartHeight = min(320, max(136, geometry.size.height - 610))
+            let chartHeight = min(300, max(136, geometry.size.height - 690))
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 14) {
                     hero(chartHeight)
+                    safeCard
                     statusLine
                     HStack(alignment: .top, spacing: 16) {
                         categories.frame(maxWidth: .infinity)
@@ -397,16 +421,42 @@ struct Dashboard: View {
     }
     private var statusLine: some View {
         HStack(spacing: 6) {
-            link("\(measured.count) scanned", tint: .primary) { show(filter: .scanned) }
+            link("\(measured.count) scanned", tint: .primary) { show(filter: .all) }
             if model.overview.pendingCount > 0 { dot; link("\(model.overview.pendingCount) not scanned yet", tint: .secondary) { show(filter: .unscanned) } }
             if model.overview.growthCount > 0 { dot; link("\(model.overview.growthCount) growing", tint: .growing) { show(filter: .growing) } }
             dot
             if model.attentionCount > 0 { link("\(model.attentionCount) couldn't be scanned", tint: .attention) { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention } }
             else { Text("nothing needs attention").foregroundStyle(.secondary) }
             Spacer()
-            if let scan = model.lastScan { Text("Last scan \(scan.finishedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary) }
+            // Most sizes come from the last full scan; say plainly when that's old.
+            if let full = model.records.last(where: { $0.measurements.count >= 20 })?.finishedAt, Date().timeIntervalSince(full) > 86400 {
+                link("Sizes are from \(ageText(full)) · Scan to refresh", tint: .growing) { model.showingScanPlan = true }
+            } else if let scan = model.lastScan { Text("Last scan \(scan.finishedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary) }
             Button("What gets scanned?") { model.showingScanPlan = true }.buttonStyle(.link)
         }.font(.callout).lineLimit(1)
+    }
+    /// The answer to "what can I remove?", before anything else below the chart.
+    private var safeCard: some View {
+        let overview = model.overview
+        let names = overview.safe.prefix(3).map { $0.profile.displayName }.joined(separator: ", ")
+        return HStack(spacing: 14) {
+            Image(systemName: overview.safe.isEmpty ? "questionmark.circle" : "checkmark.circle.fill").font(.largeTitle)
+                .foregroundStyle(overview.safe.isEmpty ? Color.secondary : Verdict.safe.tint).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(overview.safe.isEmpty ? "Nothing is clearly safe to remove yet" : "About \(byteLabel(overview.safeBytes)) looks safe to remove")
+                    .font(.title2.weight(.semibold)).monospacedDigit()
+                Text(overview.safe.isEmpty ? "Scan your folders so Context Cleaner can see when each was last used." :
+                     "\(overview.safe.count) \(overview.safe.count == 1 ? "folder" : "folders") that tools recreate, like \(names). You remove them yourself.")
+                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            if overview.safe.isEmpty { Button("Scan Folders…") { model.showingScanPlan = true } }
+            else {
+                Button("Check First") { show(filter: .check) }.help("Folders that might be fine to remove, with what to check")
+                Button("Review Safe Folders") { show(filter: .safe) }.buttonStyle(.borderedProminent)
+            }
+        }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Verdict.safe.tint.opacity(overview.safe.isEmpty ? 0.0 : 0.08)).background(.background.secondary)
     }
     private var dot: some View { Text("·").foregroundStyle(.tertiary) }
     private func link(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -480,6 +530,8 @@ struct Dashboard: View {
                         }
                         Spacer(minLength: 8)
                         Sparkline(values: values, tint: values.trendTint)
+                        Image(systemName: model.adviceFor(item).verdict.symbol).foregroundStyle(model.adviceFor(item).verdict.tint)
+                            .help(model.adviceFor(item).verdict.title + ": " + model.adviceFor(item).reason).accessibilityLabel(model.adviceFor(item).verdict.title)
                         Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit().frame(minWidth: 78, alignment: .trailing)
                         Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
                     }.padding(.vertical, 2).contentShape(Rectangle())

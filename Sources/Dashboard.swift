@@ -129,7 +129,7 @@ struct FolderTrend: View {
                     Text("Size over time").font(.headline)
                     Spacer()
                     if let delta = change.delta, let interval = change.interval {
-                        Text("\(signedBytes(delta)) in \(elapsedLabel(interval))").font(.callout.weight(.medium)).monospacedDigit()
+                        Text(delta == 0 ? "No change in \(elapsedLabel(interval))" : "\(signedBytes(delta)) in \(elapsedLabel(interval))").font(.callout.weight(.medium)).monospacedDigit()
                             .foregroundStyle(delta > 0 ? Color.growing : delta < 0 ? Color.stable : .secondary)
                     }
                 }
@@ -145,7 +145,11 @@ struct FolderTrend: View {
                 }
                 .chartYScale(domain: 0...max(top * 1.1, 0.001))
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))) } } } }
-                .chartXAxis { AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+                .chartXAxis {
+                    // Within two days, dates alone repeat; show the day and hour instead.
+                    let short = (series.last?.date.timeIntervalSince(first.date) ?? 0) < 2 * 86400
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in AxisGridLine(); AxisValueLabel(format: short ? .dateTime.weekday(.abbreviated).hour() : .dateTime.month(.abbreviated).day()) }
+                }
                 .chartHover($hover)
                 .frame(height: 110)
                 .accessibilityLabel("Folder size from \(byteLabel(first.bytes)) to \(byteLabel(series.last!.bytes)) across \(series.count) scans")

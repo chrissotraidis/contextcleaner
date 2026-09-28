@@ -39,12 +39,12 @@ struct SnapshotContentsView: View {
                 Toggle("Folders only", isOn: $foldersOnly).toggleStyle(.checkbox)
             }
             HStack {
-                Text("Showing \(min(shown, matching.count)) of \(matching.count) retained matches").font(.caption).foregroundStyle(.secondary)
+                Text("Showing \(min(shown, matching.count)) of \(matching.count)").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if shown < matching.count { Button("Show more") { shown += 30 }.font(.caption).accessibilityLabel("Show 30 more retained children") }
+                if shown < matching.count { Button("Show more") { shown += 30 }.font(.caption).accessibilityLabel("Show 30 more items") }
             }
             if matching.isEmpty {
-                Text("No retained entries match. Search covers this saved breakdown, not every item on disk.").font(.callout).foregroundStyle(.secondary)
+                Text("Nothing matches. Search covers the items kept from the last scan.").font(.callout).foregroundStyle(.secondary)
             }
             ForEach(Array(matching.prefix(shown))) { child in
                 VStack(alignment: .leading, spacing: 5) {
@@ -75,8 +75,8 @@ struct ChildEventsView: View {
     var matching: [ChildChange] { events.filter { query.isEmpty || ($0.name + " " + $0.event).localizedCaseInsensitiveContains(query) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Changes since the previous comparable scan").font(.headline)
-            if events.isEmpty { Text("No changes in retained child sizes, identities or modification metadata.").font(.caption) }
+            Text("Changes since the scan before").font(.headline)
+            if events.isEmpty { Text("Nothing inside changed size, appeared or disappeared.").font(.caption).foregroundStyle(.secondary) }
             else {
                 TextField("Find a child or change", text: $query).textFieldStyle(.roundedBorder).accessibilityLabel("Find a child or change")
                 Text("Showing \(min(shown, matching.count)) of \(matching.count) matching changes").font(.caption).foregroundStyle(.secondary)

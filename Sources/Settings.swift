@@ -7,7 +7,7 @@ struct SettingsView: View {
             GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
             ScanningSettings(model: model).tabItem { Label("Scanning", systemImage: "arrow.clockwise") }
             CoverageSettings(model: model).tabItem { Label("Coverage", systemImage: "folder.badge.gearshape") }
-        }.frame(width: 560).padding(.bottom, 8)
+        }.frame(width: 600, height: 620).padding(.bottom, 8)
     }
 }
 
@@ -66,8 +66,33 @@ struct ScanningSettings: View {
 
 struct CoverageSettings: View {
     @ObservedObject var model: CleanerModel
+    @State private var query = ""
     var body: some View {
         Form {
+            Section {
+                TextField("Filter by tool or path", text: $query)
+                Text("Every place Context Cleaner knows a tool writes to. Present means the folder exists on this Mac right now. Turn a location off to exclude it and everything inside it from scanning.").font(.caption).foregroundStyle(.secondary)
+            }
+            let groups = Dictionary(grouping: Coverage.entries.filter { query.isEmpty || ($0.writer + " " + $0.relativePath + " " + $0.writes).localizedCaseInsensitiveContains(query) }, by: \.writer)
+            ForEach(groups.keys.sorted { a, b in a == "You" ? false : b == "You" ? true : a.localizedStandardCompare(b) == .orderedAscending }, id: \.self) { writer in
+                Section(writer) {
+                    ForEach(groups[writer]!) { entry in
+                        let path = entry.path(home: model.home)
+                        let present = Coverage.presence(entry, home: model.home)
+                        Toggle(isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: entry.category.symbol).foregroundStyle(entry.category.tint).accessibilityHidden(true)
+                                    Text("~/" + entry.relativePath).font(.callout).lineLimit(1).truncationMode(.middle)
+                                    Spacer()
+                                    Text(present ? "Present" : "Not on this Mac").font(.caption).foregroundStyle(present ? Color.stable : .secondary)
+                                }
+                                Text(entry.writes + (entry.kind == .folder ? "" : " Measured as: " + entry.kind.rawValue.lowercased() + ".")).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.toggleStyle(.switch).disabled(model.running || model.inspecting)
+                    }
+                }
+            }
             Section("Folders you added") {
                 if model.preferences.customRoots.isEmpty { Text("None yet. Added folders are measured with every Scan Now.").foregroundStyle(.secondary) }
                 ForEach(model.preferences.customRoots, id: \.self) { path in
@@ -75,15 +100,17 @@ struct CoverageSettings: View {
                 }
                 Button("Add Folder…") { model.addRoot() }.disabled(model.running || model.inspecting || model.discovering)
             }
-            Section("Excluded from scanning") {
-                let excluded = model.preferences.locations.filter { $0.value.excluded }.map(\.key).sorted()
-                if excluded.isEmpty { Text("Nothing is excluded.").foregroundStyle(.secondary) }
+            Section("Other exclusions") {
+                let catalog = Set(Coverage.entries.map { $0.path(home: model.home) })
+                let excluded = model.preferences.locations.filter { $0.value.excluded && !catalog.contains($0.key) }.map(\.key).sorted()
+                if excluded.isEmpty { Text("None. Right-click any location to exclude it.").foregroundStyle(.secondary) }
                 ForEach(excluded, id: \.self) { path in
                     HStack { Text(path).font(.callout).lineLimit(1).truncationMode(.middle); Spacer(); Button("Include Again") { model.policy(path) { $0.excluded = false } } }
                 }
             }
-            Section {
-                Text("Known tool locations (Codex, Claude, Xcode, simulators, package caches, game libraries) are recognized automatically. The full catalog with what writes to each appears here in the next update.").font(.caption).foregroundStyle(.secondary)
+            Section("Not scanned") {
+                ForEach(Coverage.notScanned, id: \.self) { Text($0).font(.callout) }
+                Text("Context Cleaner is not a whole-disk scanner. It measures the places where tools accumulate data, so the totals here never equal your used space.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped).padding(.top, 4)
     }

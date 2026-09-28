@@ -33,17 +33,18 @@ struct Inventory {
             if let note = listing.note { notes.append(parent + ": " + note) }
             return listing.names.filter { !$0.hasPrefix(".") }.map { parent + "/" + $0 }
         }
-        for p in [".cache/uv", ".npm/_cacache", ".npm/_npx", ".gradle/caches", "Library/Caches/pip", "Library/Caches/Homebrew", "Library/Caches/Yarn", "Library/Caches/ms-playwright", "Library/Developer/Xcode/DerivedData", ".codex/sessions", ".cache/huggingface", ".cache/lm-studio", "Downloads", "Documents/Codex"] { add(home + "/" + p) }
-        for root in ["Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/AppInstallationBinaryDeltas", "Library/Developer/Xcode/iOS DeviceSupport", "Library/Developer/CoreSimulator/Devices", ".codex/backups", ".codex/tasks"] {
-            for p in children(home + "/" + root) { add(p) }
-        }
-        for root in [home + "/.codex/worktrees", home + "/GitHub"] {
-            for project in children(root) {
-                var st = stat(); guard lstat(project, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { continue }
-                for suffix in ["android/app/.cxx", "android/app/build/intermediates", "build", "generated", "work"] { add(project + "/" + suffix) }
+        for entry in Coverage.entries {
+            let root = entry.path(home: home)
+            switch entry.kind {
+            case .folder: add(root)
+            case .children: for p in children(root) { add(p) }
+            case .projects:
+                for project in children(root) {
+                    var st = stat(); guard lstat(project, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { continue }
+                    for suffix in Coverage.projectSuffixes { add(project + "/" + suffix) }
+                }
             }
         }
-        for app in ["Steam", "CrossOver", "OpenEmu", "Claude", "Codex"] { add(home + "/Library/Application Support/" + app) }
         for p in preferences.customRoots where !preferences.excluded(p) { paths.insert(normalized(p)) }
         for (p, policy) in preferences.locations where policy.watched && !preferences.excluded(p) { paths.insert(normalized(p)) }
         let profiles = paths.map { path in

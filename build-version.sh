@@ -11,7 +11,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 # No cleanup trap. Every stage, failed build and previous release is preserved.
 swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -Xlinker -no_adhoc_codesign \
  "$source_dir/Sources/Planner.swift" "$source_dir/Sources/Contents.swift" "$source_dir/Sources/Domain.swift" "$source_dir/Sources/Classifier.swift" "$source_dir/Sources/Store.swift" "$source_dir/Sources/Inventory.swift" \
- "$source_dir/Sources/Activity.swift" "$source_dir/Sources/OverviewData.swift" "$source_dir/Sources/Design.swift" "$source_dir/Sources/Settings.swift" "$source_dir/Sources/Dashboard.swift" "$source_dir/Sources/ContentsBrowser.swift" "$source_dir/Sources/Model.swift" "$source_dir/Sources/App.swift" \
+ "$source_dir/Sources/Activity.swift" "$source_dir/Sources/OverviewData.swift" "$source_dir/Sources/Coverage.swift" "$source_dir/Sources/Design.swift" "$source_dir/Sources/Settings.swift" "$source_dir/Sources/Dashboard.swift" "$source_dir/Sources/ContentsBrowser.swift" "$source_dir/Sources/Model.swift" "$source_dir/Sources/App.swift" \
  -framework SwiftUI -framework AppKit -framework Charts -o "$app/Contents/MacOS/ContextCleaner"
 iconset="$stage_dir/ContextCleaner.iconset"
 mkdir "$iconset"

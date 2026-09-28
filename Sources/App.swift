@@ -9,33 +9,32 @@ struct TracePoint: Identifiable {
 struct MainView: View {
     @StateObject var model = CleanerModel()
     @State var sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)]
-    @State var editing: String?
     var appearance: String { model.preferences.appearance ?? "System" }
     @State var simulatorSearch = ""
     @State var showingAccessHelp = false
     let timer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
-    let sections = ["Overview", "Growing", "Candidates", "Recurring", "Watched", "Review Later", "Scanned Locations", "Needs Attention", "Excluded", "Scan History"]
     var body: some View {
         NavigationSplitView {
             List(selection: Binding(get: { model.section }, set: { model.categoryFilter = nil; model.section = $0 })) {
-                Section("CONTEXT CLEANER") {
-                    ForEach(sections, id: \.self) { section in Label { Text(section) } icon: { Image(systemName: icon(section)).foregroundStyle(section == "Growing" ? Color.brandOrange : Color.brandTeal) }.tag(section).padding(.vertical, 3) }
-                }
-                Section("Read-only by design") {
-                    VStack(alignment: .leading, spacing: 7) { Label("Observe. Understand.", systemImage: "eye"); Text("Your files stay yours.") }.font(.caption).foregroundStyle(.secondary)
+                ForEach(AppSection.allCases, id: \.self) { section in
+                    Label { Text(section.rawValue) } icon: { Image(systemName: section.symbol).foregroundStyle(section.tint ?? Color.accentColor) }.tag(section)
+                        .badge(section == .needsAttention ? model.attentionCount : 0)
                 }
             }.navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+            .safeAreaInset(edge: .bottom) {
+                Label("Never deletes. You do, in Finder.", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            }
         } detail: {
             VStack(spacing: 0) {
                 header
-                if model.section == "Overview" { Dashboard(model: model) }
-                else if model.section == "Scan History" { scanHistory }
+                if model.section == .overview { Dashboard(model: model) }
+                else if model.section == .history { scanHistory }
                 else {
                     // A fixed proportional split never reports a width larger than the window,
                     // so the header, table and inspector stay inside the visible area at any size.
                     GeometryReader { geometry in
                         HStack(spacing: 0) {
-                            VStack(spacing: 0) { categoryBanner; folderTable }
+                            VStack(spacing: 0) { filterBar; categoryBanner; folderTable }
                             Divider()
                             inspector.frame(width: min(max(geometry.size.width * 0.36, 340), 520))
                         }
@@ -45,10 +44,9 @@ struct MainView: View {
             }
         }
         .frame(minWidth: 1100, minHeight: 700)
-        .tint(Color.brandTeal)
         .preferredColorScheme(appearance == "Light" ? .light : appearance == "Dark" ? .dark : nil)
         .onChange(of: model.selected) { _, _ in model.inspector = "Overview" }
-        .onChange(of: model.search) { _, value in if !value.isEmpty && model.section == "Overview" { model.section = "Scanned Locations"; model.categoryFilter = nil } }
+        .onChange(of: model.search) { _, value in if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil } }
         .toolbar {
             ToolbarItemGroup {
                 Button { model.addRoot() } label: { Label("Add Location", systemImage: "folder.badge.plus") }.disabled(model.running || model.inspecting || model.discovering)
@@ -70,8 +68,8 @@ struct MainView: View {
             }
         }
         .searchable(text: $model.search, prompt: "Folder, project, app or tag")
-        .sheet(item: Binding(get: { editing.map { EditTarget(id: $0) } }, set: { editing = $0?.id })) { target in
-            PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; editing = nil }
+        .sheet(item: Binding(get: { model.editing.map { EditTarget(id: $0) } }, set: { model.editing = $0?.id })) { target in
+            PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; model.editing = nil }
         }
         .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
         .onReceive(timer) { _ in
@@ -79,20 +77,17 @@ struct MainView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.cancellation.cancel(); model.inspectionCancellation.cancel() }
     }
-    func icon(_ section: String) -> String {
-        switch section { case "Needs Attention": return "exclamationmark.circle"; case "Growing": return "chart.line.uptrend.xyaxis"; case "Candidates": return "arrow.triangle.2.circlepath"; case "Recurring": return "repeat"; case "Watched": return "eye"; case "Review Later": return "calendar"; case "Excluded": return "eye.slash"; case "Scan History": return "clock"; case "Scanned Locations": return "folder"; default: return "square.grid.2x2" }
-    }
     var header: some View {
         HStack(alignment: .center, spacing: 14) {
-            if model.section == "Overview", let icon = NSImage(named: "NSApplicationIcon") {
+            if model.section == .overview, let icon = NSImage(named: "NSApplicationIcon") {
                 Image(nsImage: icon).resizable().frame(width: 54, height: 54)
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text(model.section == "Overview" ? "Understand your space." : model.section).font(.system(size: 26, weight: .semibold))
-                Text(model.section == "Overview" ? "See what takes space, what changes, and what it belongs to." : model.section == "Growing" ? "Unexpected growth between comparable measurements." : "Explore your locations. Select one to see its story.").font(.callout).foregroundStyle(.secondary)
+                Text(model.section == .overview ? "Understand your space." : model.section.rawValue).font(.largeTitle.weight(.semibold))
+                Text(model.section.subtitle).font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            if model.section != "Overview", let v = model.volume {
+            if model.section != .overview, let v = model.volume {
                 VStack(alignment: .trailing, spacing: 5) {
                     Text("\(byteLabel(v.free)) free / \(byteLabel(v.total))").font(.caption).monospacedDigit()
                     ProportionBar(value: Double(v.used) / Double(v.total), tint: .indigo).frame(width: 180)
@@ -100,6 +95,15 @@ struct MainView: View {
                 }
             } else { CapsuleLabel(text: "Read-only by design", symbol: "lock.shield") }
         }.padding(.horizontal, 22).padding(.vertical, 18)
+    }
+    @ViewBuilder var filterBar: some View {
+        if model.section == .locations {
+            HStack(spacing: 12) {
+                Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 520)
+                Spacer()
+                Text(model.locationFilter.explanation).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 360, alignment: .trailing)
+            }.padding(.horizontal, 16).padding(.bottom, 10)
+        }
     }
     @ViewBuilder var categoryBanner: some View {
         if let category = model.categoryFilter {
@@ -120,23 +124,12 @@ struct MainView: View {
             }.width(min: 190, ideal: 260)
             TableColumn("Size", value: \.bytes) { row in Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").monospacedDigit() }.width(min: 100, ideal: 110)
             TableColumn("Change", value: \.delta) { row in
-                Text(row.change.delta.map { "\($0 > 0 ? "+" : $0 < 0 ? "−" : "")\(byteLabel(abs($0)))" } ?? "No baseline").font(.caption).foregroundStyle((row.change.delta ?? 0) > 0 ? Color.brandOrange : .secondary)
+                Text(row.change.delta.map { "\($0 > 0 ? "+" : $0 < 0 ? "−" : "")\(byteLabel(abs($0)))" } ?? "No baseline").font(.caption).foregroundStyle((row.change.delta ?? 0) > 0 ? Color.growing : .secondary)
             }.width(min: 100, ideal: 110)
-            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selected == row.id ? Color.white : row.policy.watched ? Color.brandTeal : .secondary) }.width(min: 85, ideal: 95)
+            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selected == row.id ? Color.white : ![.measured, .excluded].contains(row.measurement.state) ? Color.attention : row.policy.watched ? Color.accentColor : .secondary) }.width(min: 85, ideal: 95)
         }
         .contextMenu(forSelectionType: String.self) { paths in
-            if let path = paths.first {
-                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-                Button("Rescan this folder") { model.selected = path; model.scan(selectedOnly: true) }.disabled(model.running || model.inspecting || model.discovering || model.preferences.excluded(path))
-                Divider()
-                Button(model.preferences.policy(path).watched ? "Stop watching" : "Watch this location") { model.policy(path) { $0.watched.toggle() } }
-                Button(model.preferences.policy(path).recurring ? "Clear recurring label" : "Mark recurring") { model.policy(path) { $0.recurring.toggle() } }
-                Button(model.preferences.policy(path).expected ? "Clear expected-growth label" : "Mark growth as expected") { model.policy(path) { $0.expected.toggle() } }
-                Button("Tags, notes and thresholds…") { editing = path }
-                Button("Review tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
-                Divider()
-                Button(model.preferences.policy(path).excluded ? "Include in scans again" : "Exclude from scans") { model.policy(path) { $0.excluded.toggle() } }.disabled(model.running || model.inspecting)
-            }
+            if let path = paths.first { LocationActions(model: model, path: path) }
         }
         .overlay {
             if model.rows.isEmpty { ContentUnavailableView("No matching locations", systemImage: "folder", description: Text("Change the filter, add a location, or run a scan. Excluded folders have their own section.")) }
@@ -163,7 +156,7 @@ struct MainView: View {
                         ForEach(["Overview", "Contents", "History", "Evidence"], id: \.self) { Text($0).tag($0) }
                     }.pickerStyle(.segmented).labelsHidden()
                     if item.state != .measured {
-                        Panel(title: item.state == .pending ? "Ready to measure" : item.state == .limited ? "Scan allowance reached" : item.state == .missing ? "Location not found" : "This measurement is incomplete", symbol: "exclamationmark.circle", tint: .brandOrange) {
+                        Panel(title: item.state == .pending ? "Ready to measure" : item.state == .limited ? "Scan allowance reached" : item.state == .missing ? "Location not found" : "This measurement is incomplete", symbol: "exclamationmark.circle", tint: .attention) {
                             Text(item.diagnostic ?? item.state.rawValue.capitalized).font(.callout).textSelection(.enabled)
                             if item.state != .pending { Text("Earlier observations stay in History. This attempt is not treated as a zero-size folder or as measured growth.").font(.caption).foregroundStyle(.secondary) }
                             Button(item.state == .pending ? "Measure this location" : "Retry selected location", systemImage: "arrow.clockwise") { model.scan(selectedOnly: true) }.disabled(model.running || model.inspecting || model.preferences.excluded(item.profile.path))
@@ -183,7 +176,10 @@ struct MainView: View {
                         Button("Reveal in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) }.buttonStyle(.borderedProminent)
                         Button("Rescan") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).help("Rescan only this folder (Shift-Command-R)").disabled(model.running || model.preferences.excluded(item.profile.path))
                     }
-                    Button("Tags & notes…") { editing = item.profile.path }.keyboardShortcut("t", modifiers: [.command, .shift])
+                    HStack {
+                        Button("Tags & notes…") { model.editing = item.profile.path }.keyboardShortcut("t", modifiers: [.command, .shift])
+                        Menu("More") { LocationActions(model: model, path: item.profile.path) }.frame(maxWidth: 110)
+                    }
                     Text("Context Cleaner never deletes files. You control any action in Finder.").font(.caption).foregroundStyle(.secondary)
                 } else if model.running, let path = model.selected {
                     ProgressView()
@@ -191,7 +187,7 @@ struct MainView: View {
                     Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     Text(model.progress).font(.callout)
                 } else {
-                    Image(systemName: "folder.badge.questionmark").font(.system(size: 36)).foregroundStyle(Color.brandTeal).accessibilityHidden(true)
+                    Image(systemName: "folder.badge.questionmark").font(.system(size: 36)).foregroundStyle(Color.accentColor).accessibilityHidden(true)
                     Text("Choose a location").font(.title2)
                     Text("Inspect its purpose, history, associated tools and the evidence behind each conclusion.").foregroundStyle(.secondary)
                     Text("A cache stores reusable output so work does not need to be repeated. Rebuildable does not mean unused or free of consequences.")
@@ -216,8 +212,8 @@ struct MainView: View {
                     Text("Simulators are virtual test devices, separate from physical iPhones and iPads. Their app data can include unique saves.").font(.caption).foregroundStyle(.secondary)
                 } else { Text(item.profile.explanation).font(.caption).foregroundStyle(.secondary) }
             }
-            Panel(title: "Before any manual change", symbol: "info.circle", tint: item.profile.category.reproducible ? .brandTeal : .brandOrange) {
-                CapsuleLabel(text: item.profile.category.reproducible ? "Usually reproducible · review first" : "May contain unique data", symbol: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised", color: item.profile.category.reproducible ? .brandTeal : .brandOrange)
+            Panel(title: "Before any manual change", symbol: "info.circle", tint: item.profile.category.reproducible ? .accentColor : .attention) {
+                CapsuleLabel(text: item.profile.category.reproducible ? "Usually reproducible · review first" : "May contain unique data", symbol: item.profile.category.reproducible ? "arrow.triangle.2.circlepath" : "hand.raised", color: item.profile.category.reproducible ? .accentColor : .attention)
                 Text(item.profile.consequence).font(.callout)
             }
             HStack(spacing: 10) {
@@ -310,8 +306,8 @@ struct MainView: View {
             if points.isEmpty { Text("No saved measurements for this location. Rescan it to establish a baseline.") }
             else {
                 Chart(trace(points)) { point in
-                    LineMark(x: .value("Observed", point.date), y: .value("GiB", Double(point.bytes) / 1_073_741_824), series: .value("Comparable series", point.segment)).foregroundStyle(Color.brandTeal)
-                    PointMark(x: .value("Observed", point.date), y: .value("GiB", Double(point.bytes) / 1_073_741_824)).foregroundStyle(Color.brandTeal)
+                    LineMark(x: .value("Observed", point.date), y: .value("GiB", Double(point.bytes) / 1_073_741_824), series: .value("Comparable series", point.segment)).foregroundStyle(Color.accentColor)
+                    PointMark(x: .value("Observed", point.date), y: .value("GiB", Double(point.bytes) / 1_073_741_824)).foregroundStyle(Color.accentColor)
                 }.chartYAxisLabel("GiB").frame(height: 170).accessibilityLabel("Folder size over recorded observations; detailed values below")
                 if points.count == 1 { Text("One observation. No earlier growth is known.").font(.caption).foregroundStyle(.secondary) }
                 if let delta = summary.delta, let interval = summary.interval {
@@ -334,7 +330,7 @@ struct MainView: View {
                     HStack {
                         Text(e.label).font(.headline)
                         Spacer()
-                        CapsuleLabel(text: e.level.rawValue, symbol: e.level == .observed ? "checkmark.circle" : e.level == .inferred ? "link" : "questionmark.circle", color: e.level == .observed ? .brandTeal : e.level == .inferred ? .blue : .secondary)
+                        CapsuleLabel(text: e.level.rawValue, symbol: e.level == .observed ? "checkmark.circle" : e.level == .inferred ? "link" : "questionmark.circle", color: e.level == .observed ? .accentColor : e.level == .inferred ? .blue : .secondary)
                     }
                     Text(e.value).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     DisclosureGroup("How we know") { Text(e.source).font(.caption).foregroundStyle(.secondary).textSelection(.enabled).padding(.top, 5) }
@@ -355,7 +351,7 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(record.finishedAt.formatted()).font(.headline)
                 Text("\(record.scope) · \(record.measurements.count) / \(record.requestedCount ?? record.measurements.count) locations · \(record.complete ? "Completed" : "Incomplete")")
-                if let reason = record.stopReason { Text(reason).font(.caption).foregroundStyle(Color.brandOrange) }
+                if let reason = record.stopReason { Text(reason).font(.caption).foregroundStyle(Color.attention) }
                 DisclosureGroup("Scan coverage and limits") { ForEach(Array(record.discoveryNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) } }
                 Text(record.legacySource == nil ? "Append-only record · \(record.id)" : "Imported copy; original SpaceCheck history preserved").font(.caption).foregroundStyle(.secondary)
             }.padding(.vertical, 6)
@@ -366,14 +362,13 @@ struct MainView: View {
             Divider()
             if model.discovering { HStack { ProgressView().controlSize(.small); Text(model.progress).font(.caption).textSelection(.enabled) } }
             if model.running { ProgressView(value: Double(model.completed), total: Double(max(model.targetCount, 1))); Text("\(model.completed)/\(model.targetCount) · \(model.progress)").font(.caption) }
-            if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.brandOrange).textSelection(.enabled) }
+            if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled) }
             HStack {
                 Toggle("Check priority locations daily while open", isOn: Binding(get: { model.preferences.dailyWhileOpen }, set: { model.setDaily($0) })).toggleStyle(.checkbox)
                 Spacer()
                 Text("\(model.discovery.profiles.count) known/selected locations · \(model.records.count) preserved scans").font(.caption).foregroundStyle(.secondary)
             }
-            if model.section == "Needs Attention" { Text("Unreadable, missing, limited or unmeasured locations. Select a row for the reason and next step.").font(.caption).foregroundStyle(.secondary) }
-            if model.section == "Scanned Locations" { Text("Coverage: known tool locations + your selected folders. Open Overview for details.").font(.caption2).foregroundStyle(.secondary) }
+            if model.section == .locations { Text("Coverage: known tool locations plus folders you add. Sizes are estimates, never a promise of reclaimable space.").font(.caption2).foregroundStyle(.secondary) }
         }.padding(.horizontal, 16).padding(.bottom, 10)
     }
 }
@@ -408,7 +403,7 @@ struct PolicyEditor: View {
             }
             TextField("Tags, separated by commas", text: $tags)
             TextField("Review threshold (GiB of growth)", text: $threshold)
-            if !validThreshold { Text("Enter a nonnegative number below 1,000,000 GiB, or leave blank.").font(.caption).foregroundStyle(Color.brandOrange) }
+            if !validThreshold { Text("Enter a nonnegative number below 1,000,000 GiB, or leave blank.").font(.caption).foregroundStyle(Color.attention) }
             TextField("Notes", text: $value.note, axis: .vertical).lineLimit(3...6)
             Text("Labels guide review. They never authorize file changes or deletion.").font(.caption).foregroundStyle(.secondary)
             HStack { Button("Cancel") { dismiss() }; Spacer(); Button("Save Context") {

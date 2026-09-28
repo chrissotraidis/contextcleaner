@@ -20,7 +20,7 @@ import Foundation
         check(Set(reloaded.discovery.profiles.map(\.path)) == Set([discovered.path,later.path,selected]), "discovered and selected unmeasured locations survive model restart")
         check(reloaded.rows.allSatisfy { $0.measurement.state == .pending && $0.bytes == -1 && $0.status == "Not scanned" }, "unmeasured locations have no size or measured status")
         check(reloaded.rows.allSatisfy { historyPoints($0.id, records: reloaded.records).isEmpty }, "discovery never invents measurement history")
-        reloaded.section = "Needs Attention"
+        reloaded.section = .needsAttention
         check(reloaded.rows.count == 3, "unmeasured locations are discoverable in Needs Attention")
         reloaded.policy(selected) { $0.excluded = true; $0.note = "Fixture exclusion" }
         check(!reloaded.rows.contains { $0.id == selected }, "exclusion still governs persisted discovery")

@@ -11,7 +11,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 # No cleanup trap. Every stage, failed build and previous release is preserved.
 swiftc -swift-version 5 -O -target arm64-apple-macos14.0 -Xlinker -no_adhoc_codesign \
  "$source_dir/Sources/Planner.swift" "$source_dir/Sources/Contents.swift" "$source_dir/Sources/Domain.swift" "$source_dir/Sources/Classifier.swift" "$source_dir/Sources/Store.swift" "$source_dir/Sources/Inventory.swift" \
- "$source_dir/Sources/Activity.swift" "$source_dir/Sources/OverviewData.swift" "$source_dir/Sources/Dashboard.swift" "$source_dir/Sources/ContentsBrowser.swift" "$source_dir/Sources/Model.swift" "$source_dir/Sources/App.swift" \
+ "$source_dir/Sources/Activity.swift" "$source_dir/Sources/OverviewData.swift" "$source_dir/Sources/Design.swift" "$source_dir/Sources/Dashboard.swift" "$source_dir/Sources/ContentsBrowser.swift" "$source_dir/Sources/Model.swift" "$source_dir/Sources/App.swift" \
  -framework SwiftUI -framework AppKit -framework Charts -o "$app/Contents/MacOS/ContextCleaner"
 iconset="$stage_dir/ContextCleaner.iconset"
 mkdir "$iconset"
@@ -30,8 +30,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Context Cleaner</string>
 <key>CFBundleIconFile</key><string>ContextCleaner</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.6.0</string>
-<key>CFBundleVersion</key><string>6</string>
+<key>CFBundleShortVersionString</key><string>0.7.0</string>
+<key>CFBundleVersion</key><string>7</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
@@ -43,7 +43,7 @@ mkdir "$package_dir"
 ditto "$app" "$package_dir/Context Cleaner.app"
 ln -s /Applications "$package_dir/Applications"
 printf '%s\n' "$stage_dir" > "$release_root/build-stage.txt"
-hdiutil create -volname 'Context Cleaner 0.6.0' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.6.0.dmg"
-hdiutil verify "$release_root/Context-Cleaner-0.6.0.dmg"
-shasum -a 256 "$release_root/Context-Cleaner-0.6.0.dmg" > "$release_root/SHA256SUMS.txt"
+hdiutil create -volname 'Context Cleaner 0.7.0' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.7.0.dmg"
+hdiutil verify "$release_root/Context-Cleaner-0.7.0.dmg"
+shasum -a 256 "$release_root/Context-Cleaner-0.7.0.dmg" > "$release_root/SHA256SUMS.txt"
 printf 'App retained at: %s\n' "$app"

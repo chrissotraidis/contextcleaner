@@ -30,7 +30,9 @@ struct FolderRow: Identifiable {
     @Published var preferences = Preferences()
     @Published var discovery = Discovery(profiles: [], notes: [])
     @Published var selected: String?
-    @Published var section = "Overview"
+    @Published var section: AppSection = .overview
+    @Published var locationFilter: LocationFilter = .all
+    @Published var editing: String?
     @Published var search = ""
     @Published var categoryFilter: FolderCategory?
     @Published var volume = VolumeSnapshot.read()
@@ -92,18 +94,28 @@ struct FolderRow: Identifiable {
             let p = row.measurement.profile
             if let categoryFilter, p.category != categoryFilter { return false }
             guard search.isEmpty || (p.path + p.name + p.associatedApp + (p.project ?? "") + row.policy.tags.joined()).localizedCaseInsensitiveContains(search) else { return false }
-            if section == "Excluded" { return row.policy.excluded }
-            if preferences.excluded(p.path) { return false }
             switch section {
-            case "Growing": return (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
-            case "Needs Attention": return [.inaccessible, .limited, .missing, .failed, .pending].contains(row.measurement.state)
-            case "Review Later": return (row.policy.reviewAfter ?? .distantPast) > Date()
-            case "Recurring": return row.policy.recurring
-            case "Watched": return row.policy.watched
-            case "Candidates": return p.category.reproducible && row.measurement.state == .measured && row.measurement.activityCheckAvailable && row.measurement.processes.isEmpty && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
-            default: return true
+            case .locations:
+                switch locationFilter {
+                case .excluded: return row.policy.excluded
+                case .all: return !preferences.excluded(p.path)
+                case .growing: return !preferences.excluded(p.path) && (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
+                case .reviewLater: return !preferences.excluded(p.path) && (row.policy.reviewAfter ?? .distantPast) > Date()
+                case .rebuildable: return !preferences.excluded(p.path) && p.category.reproducible && row.measurement.state == .measured && row.measurement.activityCheckAvailable && row.measurement.processes.isEmpty && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
+                }
+            case .watching: return !preferences.excluded(p.path) && (row.policy.watched || row.policy.recurring)
+            case .needsAttention: return !preferences.excluded(p.path) && [.inaccessible, .limited, .missing, .failed, .pending].contains(row.measurement.state)
+            default: return !preferences.excluded(p.path)
             }
         }
+    }
+    /// Locations that could not be measured completely, for the sidebar badge.
+    var attentionCount: Int {
+        var paths = Set<String>()
+        let current = latest
+        for item in current where !preferences.excluded(item.profile.path) && [.inaccessible, .limited, .missing, .failed].contains(item.state) { paths.insert(item.profile.path) }
+        for profile in discovery.profiles where !preferences.excluded(profile.path) && !current.contains(where: { $0.profile.path == profile.path }) { paths.insert(profile.path) }
+        return paths.count
     }
     var chosen: FolderMeasurement? {
         guard let selected else { return nil }
@@ -173,7 +185,7 @@ struct FolderRow: Identifiable {
             if !preferences.excluded(url.path), !discovery.profiles.contains(where: { $0.path == url.path }) {
                 discovery.profiles.append(Classifier.profile(path: url.path, home: home, readMetadata: false))
             }
-            selected = url.path; categoryFilter = nil; section = "Scanned Locations"; search = ""
+            selected = url.path; categoryFilter = nil; section = .locations; locationFilter = .all; search = ""
         } catch { self.error = error.localizedDescription }
     }
     func scan(selectedOnly: Bool = false, watchedOnly: Bool = false, priorityOnly: Bool = false) {

@@ -3,36 +3,7 @@ import Charts
 import AppKit
 
 
-// Deep accent colors in light appearance keep small labels readable.
-extension Color {
-    static func adaptive(_ name: String, light: (Double, Double, Double), dark: (Double, Double, Double)) -> Color {
-        Color(nsColor: NSColor(name: NSColor.Name(name)) { appearance in
-            let rgb = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
-            return NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: 1)
-        })
-    }
-    static let brandTeal = adaptive("ContextTeal", light: (0.0, 0.38, 0.42), dark: (0.2, 0.82, 0.86))
-    static let brandCyan = adaptive("ContextCyan", light: (0.0, 0.38, 0.55), dark: (0.3, 0.8, 0.93))
-    static let brandMint = adaptive("ContextMint", light: (0.0, 0.40, 0.29), dark: (0.4, 0.88, 0.7))
-    static let brandOrange = adaptive("ContextOrange", light: (0.65, 0.29, 0.0), dark: (1.0, 0.65, 0.32))
-    static let brandYellow = adaptive("ContextYellow", light: (0.5, 0.38, 0.0), dark: (0.95, 0.8, 0.3))
-}
-
 extension FolderCategory {
-    var tint: Color {
-        switch self {
-        case .packageCache, .installCache: return .brandTeal
-        case .buildOutput, .debugSymbols: return .blue
-        case .simulator: return .purple
-        case .workspace: return .indigo
-        case .backup: return .brandOrange
-        case .history: return .pink
-        case .model: return .brandMint
-        case .appData: return .brandCyan
-        case .download: return .brandYellow
-        case .unknown: return .gray
-        }
-    }
     var symbol: String {
         switch self {
         case .packageCache: return "shippingbox"
@@ -66,22 +37,8 @@ extension FolderCategory {
         }
     }
 }
-struct Panel<Content: View>: View {
-    var title: String
-    var symbol: String
-    var tint: Color = .brandTeal
-    @ViewBuilder var content: Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            Label(title, systemImage: symbol).font(.headline).foregroundStyle(tint)
-            content
-        }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.07)))
-    }
-}
 struct CapsuleLabel: View {
-    var text: String; var symbol: String; var color: Color = .brandTeal
+    var text: String; var symbol: String; var color: Color = .accentColor
     var body: some View {
         Label(text, systemImage: symbol).font(.caption.weight(.medium)).foregroundStyle(color)
             .padding(.horizontal, 9).padding(.vertical, 5).background(color.opacity(0.12), in: Capsule())
@@ -128,8 +85,8 @@ struct FolderTrend: View {
                 Text("Scan this folder to start its timeline.").foregroundStyle(.secondary)
             } else {
                 Chart(series) { p in
-                    LineMark(x: .value("Date", p.date), y: .value("GiB", Double(p.bytes) / 1_073_741_824), series: .value("Comparable scope", p.segment)).foregroundStyle(Color.brandTeal).lineStyle(StrokeStyle(lineWidth: 2.5))
-                    PointMark(x: .value("Date", p.date), y: .value("GiB", Double(p.bytes) / 1_073_741_824)).foregroundStyle(Color.brandTeal).symbolSize(35)
+                    LineMark(x: .value("Date", p.date), y: .value("GiB", Double(p.bytes) / 1_073_741_824), series: .value("Comparable scope", p.segment)).foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.5))
+                    PointMark(x: .value("Date", p.date), y: .value("GiB", Double(p.bytes) / 1_073_741_824)).foregroundStyle(Color.accentColor).symbolSize(35)
                     if let picked, picked.id == p.id {
                         RuleMark(x: .value("Selected", picked.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3]))
                     }
@@ -139,7 +96,7 @@ struct FolderTrend: View {
                 else { Text(series.count < 2 ? "First measurement. Rescan to see a change; earlier growth is unknown." : "Hover or drag across the chart to inspect an observation.").font(.caption).foregroundStyle(.secondary) }
                 let change = growth(path, records: records)
                 if let delta = change.delta, let interval = change.interval {
-                    Label("\(delta > 0 ? "+" : delta < 0 ? "−" : "")\(byteLabel(abs(delta))) over \(elapsedLabel(interval))", systemImage: delta > 0 ? "arrow.up.right" : delta < 0 ? "arrow.down.right" : "equal").font(.caption.weight(.semibold)).foregroundStyle(delta > 0 ? Color.brandOrange : Color.brandTeal)
+                    Label("\(delta > 0 ? "+" : delta < 0 ? "−" : "")\(byteLabel(abs(delta))) over \(elapsedLabel(interval))", systemImage: delta > 0 ? "arrow.up.right" : delta < 0 ? "arrow.down.right" : "equal").font(.caption.weight(.semibold)).foregroundStyle(delta > 0 ? Color.growing : Color.accentColor)
                 } else if series.count > 1 { Text("No comparable recent pair. Scan scope changes and failed observations break the comparison.").font(.caption).foregroundStyle(.secondary) }
             }
         }
@@ -164,8 +121,8 @@ struct Dashboard: View {
         return max(0, lower - padding)...(upper + padding)
     }
     private var freeHistory: [ScanRecord] { model.records.filter { $0.freeBytes != nil }.sorted { $0.finishedAt < $1.finishedAt } }
-    private func show(_ category: FolderCategory? = nil) { model.categoryFilter = category; model.search = ""; model.section = "Scanned Locations"; model.selected = nil; model.inspector = "Overview" }
-    private func open(_ item: FolderMeasurement) { model.categoryFilter = nil; model.search = ""; model.selected = item.profile.path; model.inspector = "Overview"; model.section = "Scanned Locations" }
+    private func show(_ category: FolderCategory? = nil) { model.categoryFilter = category; model.search = ""; model.section = .locations; model.locationFilter = .all; model.selected = nil; model.inspector = "Overview" }
+    private func open(_ item: FolderMeasurement) { model.categoryFilter = nil; model.search = ""; model.selected = item.profile.path; model.inspector = "Overview"; model.section = .locations; model.locationFilter = .all }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -175,8 +132,8 @@ struct Dashboard: View {
                 }
                 HStack(spacing: 12) {
                     metric("Locations measured", value: measured.count.formatted(), detail: "Saved observations", symbol: "folder", tint: .blue) { show() }
-                    metric("Growing", value: growthCount.formatted(), detail: "Comparable baselines: \(measured.filter { growth($0.profile.path, records: model.records).delta != nil }.count)", symbol: "chart.line.uptrend.xyaxis", tint: .brandOrange) { model.categoryFilter = nil; model.section = "Growing" }
-                    metric("Watching", value: model.preferences.locations.filter { $0.value.watched && !model.preferences.excluded($0.key) }.count.formatted(), detail: "Your recurring checkpoints", symbol: "eye", tint: .purple) { model.categoryFilter = nil; model.section = "Watched" }
+                    metric("Growing", value: growthCount.formatted(), detail: "Comparable baselines: \(measured.filter { growth($0.profile.path, records: model.records).delta != nil }.count)", symbol: "chart.line.uptrend.xyaxis", tint: .growing) { model.categoryFilter = nil; model.section = .locations; model.locationFilter = .growing }
+                    metric("Watching", value: model.preferences.locations.filter { $0.value.watched && !model.preferences.excluded($0.key) }.count.formatted(), detail: "Your recurring checkpoints", symbol: "eye", tint: .accentColor) { model.categoryFilter = nil; model.section = .watching }
                 }
                 HStack(alignment: .top, spacing: 20) {
                     categories.frame(maxWidth: .infinity)
@@ -208,13 +165,13 @@ struct Dashboard: View {
         }.buttonStyle(.plain).accessibilityLabel("\(title): \(value). \(detail)")
     }
     private var driveCard: some View {
-        Panel(title: "Your Mac’s storage", symbol: "internaldrive", tint: .brandTeal) {
+        Panel(title: "Your Mac’s storage", symbol: "internaldrive", tint: .accentColor) {
             if let volume = model.volume {
                 HStack(spacing: 22) {
                     ZStack {
                         Chart {
                             SectorMark(angle: .value("Used", volume.used), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.indigo.gradient)
-                            SectorMark(angle: .value("Free", volume.free), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.brandTeal.gradient)
+                            SectorMark(angle: .value("Free", volume.free), innerRadius: .ratio(0.78), angularInset: 2).foregroundStyle(Color.accentColor.gradient)
                         }.chartLegend(.hidden)
                         VStack(spacing: 3) { Text((Double(volume.used) / Double(volume.total)).formatted(.percent.precision(.fractionLength(0)))).font(.system(size: 27, weight: .semibold, design: .rounded)); Text("used").font(.caption).foregroundStyle(.secondary) }
                     }.frame(width: 148, height: 148).accessibilityElement(children: .ignore).accessibilityLabel("\(byteLabel(volume.used)) used of \(byteLabel(volume.total)) total")
@@ -231,12 +188,12 @@ struct Dashboard: View {
         }
     }
     private var freeSpaceChart: some View {
-        Panel(title: "Free space over time", symbol: "chart.xyaxis.line", tint: .brandTeal) {
+        Panel(title: "Free space over time", symbol: "chart.xyaxis.line", tint: .accentColor) {
             if let last = freeHistory.last, let bytes = last.freeBytes {
                 HStack(alignment: .firstTextBaseline) { Text(byteLabel(bytes)).font(.title2.weight(.semibold)); Text("at last scan").font(.caption).foregroundStyle(.secondary) }
                 Chart(freeHistory) { record in
-                    LineMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.brandTeal).lineStyle(StrokeStyle(lineWidth: 2.5))
-                    PointMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.brandTeal)
+                    LineMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.5))
+                    PointMark(x: .value("Date", record.finishedAt), y: .value("Free GiB", Double(record.freeBytes ?? 0) / 1_073_741_824)).foregroundStyle(Color.accentColor)
                     if let selectedDate, let picked = freeHistory.min(by: { abs($0.finishedAt.timeIntervalSince(selectedDate)) < abs($1.finishedAt.timeIntervalSince(selectedDate)) }), picked.id == record.id {
                         RuleMark(x: .value("Selected", picked.finishedAt)).foregroundStyle(.secondary).annotation(position: .top, alignment: .leading) { Text(byteLabel(picked.freeBytes ?? 0)).font(.caption).padding(4).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 5)) }
                     }

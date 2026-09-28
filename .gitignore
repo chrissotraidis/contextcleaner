@@ -1,0 +1,5 @@
+# Local build stages and disk images are versioned outside the repository.
+build/
+*.dmg
+.DS_Store
+work/

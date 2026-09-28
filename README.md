@@ -15,7 +15,7 @@ Context Cleaner is a native macOS app that shows how full your disk is, how that
 
 ## How to read the chart
 
-![Space used chart](docs/images/space-used.png)
+![Space used chart](docs/images/overview-chart.png)
 
 - **The blue area is used space.** It rises when your disk fills up. The dashed line at the top is your disk's capacity, and the gray band between them is free space.
 - **The headline is the change** for the range you picked: 24 hours, 7 days or 30 days.

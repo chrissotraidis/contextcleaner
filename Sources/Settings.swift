@@ -185,20 +185,31 @@ struct CoverageSettings: View {
     private var yourFolders: some View {
         let catalog = Set(Coverage.entries.map { $0.path(home: model.home) })
         let others = model.preferences.locations.filter { $0.value.excluded && !catalog.contains($0.key) && !model.preferences.customRoots.contains($0.key) }.map(\.key).sorted()
+        let open = openGroups.contains("mine") || filter == .off
+        let summary = "\(model.preferences.customRoots.count) added" + (others.isEmpty ? "" : " · \(others.count) turned off from Folders")
         return Section {
-            DisclosureGroup(isExpanded: Binding(get: { openGroups.contains("mine") || filter == .off }, set: { if $0 { openGroups.insert("mine") } else { openGroups.remove("mine") } })) {
+            Button { if openGroups.contains("mine") { openGroups.remove("mine") } else { openGroups.insert("mine") } } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(.secondary).frame(width: 12)
+                    Image(systemName: "person.crop.circle").foregroundStyle(Color.accentColor).frame(width: 20)
+                    Text("Your folders").font(.headline)
+                    Text(summary).font(.caption).foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel("Your folders, \(summary)").accessibilityHint(open ? "Hides your folders" : "Shows your folders")
+            if open {
                 ForEach(model.preferences.customRoots.filter { filter != .off || model.preferences.excluded($0) }, id: \.self) { path in
-                    HStack {
-                        Image(systemName: "folder").foregroundStyle(.secondary).frame(width: 18)
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder").foregroundStyle(.secondary).frame(width: 18).padding(.leading, 22)
                         Text(model.displayName(path)).font(.callout).lineLimit(1).help(path)
                         Spacer()
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }.controlSize(.small)
-                        Toggle(path, isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
+                        Toggle(model.displayName(path), isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
                     }
                 }
                 ForEach(others, id: \.self) { path in
-                    HStack {
-                        Image(systemName: "folder.badge.minus").foregroundStyle(.secondary).frame(width: 18)
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder.badge.minus").foregroundStyle(.secondary).frame(width: 18).padding(.leading, 22)
                         Text(model.displayName(path)).font(.callout).lineLimit(1).help(path)
                         Text("turned off from Folders").font(.caption).foregroundStyle(.secondary)
                         Spacer()
@@ -206,12 +217,6 @@ struct CoverageSettings: View {
                     }
                 }
                 Button("Add Folder…") { model.addRoot() }.disabled(model.running || model.inspecting || model.discovering)
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "person.crop.circle").foregroundStyle(Color.accentColor).frame(width: 20).accessibilityHidden(true)
-                    Text("Your folders").font(.headline)
-                    Text("\(model.preferences.customRoots.count) added" + (others.isEmpty ? "" : " · \(others.count) turned off")).font(.caption).foregroundStyle(.secondary)
-                }
             }
         }
     }

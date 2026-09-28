@@ -19,8 +19,8 @@ struct SnapshotContentsView: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("File types at this observation").font(.headline)
-            Text("Based on extensions, not file contents. Folder metadata is excluded from these type totals.").font(.caption).foregroundStyle(.secondary)
+            Text("File types").font(.headline)
+            Text("Grouped by file extension at the last scan. Files aren't opened.").font(.caption).foregroundStyle(.secondary)
             ForEach(Array(detail.fileTypes.prefix(allTypes ? detail.fileTypes.count : 12))) { type in
                 VStack(spacing: 5) {
                     HStack { Text(type.kind); Spacer(); Text("\(type.files.formatted()) files · \(byteLabel(type.bytes))").monospacedDigit() }.font(.caption)
@@ -31,9 +31,9 @@ struct SnapshotContentsView: View {
                 Button(allTypes ? "Show fewer file types" : "Show all \(detail.fileTypes.count) file types") { allTypes.toggle() }.font(.caption)
             }
             Divider()
-            Text("Measured children").font(.headline)
-            Text("\(detail.children.count) retained of \(detail.listedChildren) listed entries. Scans retain up to \(detail.retainedLimit) names alphabetically. \(detail.omittedEntries) entries skipped for exclusions, links or other volumes.").font(.caption).foregroundStyle(.secondary)
-            TextField("Find a retained child", text: $query).textFieldStyle(.roundedBorder).accessibilityLabel("Find a retained child")
+            Text("Items inside").font(.headline)
+            Text("\(detail.children.count) of \(detail.listedChildren) items kept from the last scan (up to \(detail.retainedLimit), alphabetically)." + (detail.omittedEntries > 0 ? " \(detail.omittedEntries) skipped: turned off, links or other disks." : "")).font(.caption).foregroundStyle(.secondary)
+            TextField("Find an item", text: $query).textFieldStyle(.roundedBorder).accessibilityLabel("Find an item")
             HStack {
                 Picker("Sort children", selection: $order) { Text("Largest").tag("Largest"); Text("Name").tag("Name") }.labelsHidden().frame(maxWidth: 150).accessibilityLabel("Sort children")
                 Toggle("Folders only", isOn: $foldersOnly).toggleStyle(.checkbox)
@@ -89,7 +89,7 @@ struct ChildEventsView: View {
                 if matching.isEmpty { Text("No changes match this search.").font(.caption) }
                 if shown < matching.count { Button("Show more changes") { shown += 30 } }
             }
-            Text("Observations cannot establish what happened between scans. A matching filesystem identity only suggests a rename; identifiers may be reused.").font(.caption).foregroundStyle(.secondary)
+            Text("Only what two scans show. What happened in between isn't known, and a likely rename is a guess.").font(.caption).foregroundStyle(.secondary)
         }.onChange(of: query) { _, _ in shown = 30 }
     }
 }

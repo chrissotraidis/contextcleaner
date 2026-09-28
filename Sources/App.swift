@@ -439,7 +439,7 @@ struct MainView: View {
                                 if let runtime = device.evidence.first(where: { $0.label == "Runtime" }) { Text(runtime.value.replacingOccurrences(of: "com.apple.CoreSimulator.SimRuntime.", with: "")).font(.caption).foregroundStyle(.secondary) }
                                 if let saved = model.latest.first(where: { $0.profile.path == device.path && $0.state == .measured }), let bytes = saved.allocatedBytes {
                                     Text("\(byteLabel(bytes)) · measured \(saved.observedAt.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
-                                } else { Text("Size not yet measured").font(.caption2).foregroundStyle(.secondary) }
+                                } else { Text("Not scanned yet").font(.caption).foregroundStyle(.secondary) }
                             }.padding(.vertical, 5)
                         }
                         if !model.identifyingDevices && model.simulatorDevices.isEmpty { Text("No included device metadata was found.").font(.caption).foregroundStyle(.secondary) }
@@ -451,19 +451,19 @@ struct MainView: View {
                     model.selected = (item.profile.path == "/" ? "" : item.profile.path) + "/" + child.name
                     model.scan(selectedOnly: true)
                 }.id(item.profile.path)
-            } else { Text("Rescan this folder to record its child and file-type breakdown. Earlier snapshots do not contain this detail.").font(.callout) }
+            } else { Text("Scan this folder to see what's inside it.").font(.callout).foregroundStyle(.secondary) }
             Divider()
             if let events = childChanges(item.profile.path, records: model.records) {
                 ChildEventsView(events: events).id(item.profile.path)
             }
             Divider()
-            Text("Inspect further").font(.headline)
-            if model.inspecting { ProgressView(); Text("Measuring and preserving individual observations…").font(.caption); Button("Stop inspecting") { model.inspectionCancellation.cancel() } }
+            Text("Go deeper").font(.headline)
+            if model.inspecting { ProgressView(); Text("Scanning each item inside…").font(.caption); Button("Stop") { model.inspectionCancellation.cancel() } }
             else {
-                Button("Measure child folders and files") { model.inspectChildren(item) }.disabled(model.running || model.preferences.excluded(item.profile.path))
+                Button("Scan Each Item Inside") { model.inspectChildren(item) }.disabled(model.running || model.preferences.excluded(item.profile.path))
                 if SimulatorLocations.deviceRoot(item.profile.path) != nil {
-                    Button("Inspect simulator apps and data") { model.inspectChildren(item, simulatorApps: true) }.disabled(model.running || model.preferences.excluded(item.profile.path))
-                    Text("Reads app, data and shared-group containers for this device. Stored metadata does not establish current boot state or whether saves are expendable.").font(.caption).foregroundStyle(.secondary)
+                    Button("Scan This Device's Apps") { model.inspectChildren(item, simulatorApps: true) }.disabled(model.running || model.preferences.excluded(item.profile.path))
+                    Text("Sizes each app and its data on this test device. It can't tell which saves still matter.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             ForEach((model.childrenParent == item.profile.path ? model.children : []).sorted { ($0.allocatedBytes ?? -1) > ($1.allocatedBytes ?? -1) }) { child in
@@ -553,21 +553,21 @@ struct PolicyEditor: View {
     }
     var body: some View {
         Form {
-            Text("Your context for this location").font(.title2)
-            Text(path).font(.caption).textSelection(.enabled)
-            Toggle("Watch this location", isOn: $value.isWatched)
+            Text("Tags and notes").font(.title2.weight(.semibold))
+            Text(path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            Toggle("On my watchlist", isOn: $value.isWatched)
             Toggle("This growth is expected", isOn: $value.expected)
-            Toggle("Review later", isOn: Binding(get: { value.reviewAfter != nil }, set: { value.reviewAfter = $0 ? Date().addingTimeInterval(86400) : nil }))
+            Toggle("Remind me later", isOn: Binding(get: { value.reviewAfter != nil }, set: { value.reviewAfter = $0 ? Date().addingTimeInterval(86400) : nil }))
             if value.reviewAfter != nil {
-                DatePicker("Review after", selection: Binding(get: { value.reviewAfter ?? Date() }, set: { value.reviewAfter = $0 }), displayedComponents: [.date, .hourAndMinute])
-                Text("Until this time, the location stays out of Growing, Rebuildable and priority checks. Manual scans remain available.").font(.caption).foregroundStyle(.secondary)
+                DatePicker("Remind me after", selection: Binding(get: { value.reviewAfter ?? Date() }, set: { value.reviewAfter = $0 }), displayedComponents: [.date, .hourAndMinute])
+                Text("Until then it's left out of Growing and scheduled checks. You can still scan it.").font(.caption).foregroundStyle(.secondary)
             }
             TextField("Tags, separated by commas", text: $tags)
-            TextField("Review threshold (GiB of growth)", text: $threshold)
-            if !validThreshold { Text("Enter a nonnegative number below 1,000,000 GiB, or leave blank.").font(.caption).foregroundStyle(Color.attention) }
+            TextField("Only flag growth above (GiB)", text: $threshold)
+            if !validThreshold { Text("Enter a number of GiB, or leave it blank.").font(.caption).foregroundStyle(Color.attention) }
             TextField("Notes", text: $value.note, axis: .vertical).lineLimit(3...6)
-            Text("Labels guide review. They never authorize file changes or deletion.").font(.caption).foregroundStyle(.secondary)
-            HStack { Button("Cancel") { dismiss() }; Spacer(); Button("Save Context") {
+            Text("Tags and notes are for you. Context Cleaner never deletes files.").font(.caption).foregroundStyle(.secondary)
+            HStack { Button("Cancel") { dismiss() }; Spacer(); Button("Save") {
                 value.tags = tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
                 value.growthThresholdBytes = Double(threshold).flatMap { $0.isFinite && $0 >= 0 && $0 < 1_000_000 ? Int64($0 * 1_073_741_824) : nil }
                 save(value)

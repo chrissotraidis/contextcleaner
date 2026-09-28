@@ -43,4 +43,14 @@ User screenshots and raw local folder reports were not added to the repository.
 - No new quantitative performance improvement is claimed. Native controls were exercised; this is not a comprehensive accessibility audit.
 - Scheduled checks run only while open. Builds are ad-hoc signed, not notarized. Apple Silicon/macOS 14+ remains the build target; older OS visual appearance was not tested on physical hardware.
 
-Release build provenance and final smoke-check results will be recorded after packaging from the committed source.
+## Final package and smoke checks
+
+- Source commit: `eea18556ac72f6b2651525ab94ab8e358cbbfc4f`; working tree clean when packaged.
+- `Context-Cleaner-0.8.0.dmg` passed `hdiutil verify` and SHA-256 readback.
+- DMG SHA-256: `aadb77b90b92615b3186f513a6468310a062e02aaa4927d04f97633c803a91c0`.
+- App passed `codesign --verify --deep --strict`; launched and packaged executable hashes match: `95b3b9236cfb139ecabab42de40da78e00dbc7e471ddd2680b8ec096d56c0d4a`.
+- Final app launched with the preserved records. Dark appearance, chart click, Show change reset, capacity Refresh and final report wording were verified.
+- Selected-folder scanning completed for npm download cache. Shift-selection of two folders showed a combined 2.84 GiB; the model tests cover nested-folder deduplication.
+- Latest app was left open on Overview with scheduled scans off and the user's dark appearance restored.
+
+The source commit was pushed to GitHub and remote parity verified. This validation-only follow-up does not change the compiled source. The DMG remains a local deliverable; no new public GitHub release was published.

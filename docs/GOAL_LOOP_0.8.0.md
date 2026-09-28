@@ -10,3 +10,7 @@ Assigned by the user on 2026-09-28. Nothing may be deleted, trashed, pruned, res
 6. Verify relevant arithmetic/state regressions plus all six suites, inspect native light/dark UI and scan controls, preserve versioned DMG, improve onboarding README, commit/push and verify remote parity.
 
 Each pass: inspect → change → verify → refine. Do not mark complete on compilation alone. Document any remaining limitations candidly.
+
+## Completed
+
+Implemented, exercised in the native app, and packaged as 0.8.0. All 167 regression checks passed. Source and README were committed and pushed; previous files and history remain preserved. See [validation and limits](validation/Final%20validation%200.8.0.md).

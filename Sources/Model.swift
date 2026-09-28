@@ -41,6 +41,12 @@ struct FolderRow: Identifiable {
     @Published var selected: String? { didSet { if let s = selected { if selection != [s] { selection = [s] } } else if !selection.isEmpty { selection = [] } } }
     /// Table selection. One item drives the inspector; several show a summed summary.
     @Published var selection: Set<String> = [] { didSet { if selection.count == 1, selected != selection.first { selected = selection.first } else if selection.isEmpty, selected != nil { selected = nil } } }
+    /// A changed view or filter must never leave actions targeting hidden rows.
+    func retainVisibleSelection() {
+        let visible = Set(rows.map(\.id))
+        let retained = selection.intersection(visible)
+        if retained != selection { selection = retained }
+    }
     @Published var section: AppSection = .overview
     @Published var locationFilter: LocationFilter = .all
     @Published var editing: String?

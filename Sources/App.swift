@@ -47,7 +47,13 @@ struct MainView: View {
         .frame(minWidth: 1100, minHeight: 700)
         .preferredColorScheme(appearance == "Light" ? .light : appearance == "Dark" ? .dark : nil)
         .onChange(of: model.selected) { _, _ in model.inspector = "Overview" }
-        .onChange(of: model.search) { _, value in if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil } }
+        .onChange(of: model.search) { _, value in
+            if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil }
+            model.retainVisibleSelection()
+        }
+        .onChange(of: model.section) { _, _ in model.retainVisibleSelection() }
+        .onChange(of: model.locationFilter) { _, _ in model.retainVisibleSelection() }
+        .onChange(of: model.categoryFilter) { _, _ in model.retainVisibleSelection() }
         .toolbar {
             ToolbarItemGroup {
                 Button { model.scan() } label: { Label("Scan Now", systemImage: "arrow.clockwise").labelStyle(.titleAndIcon) }.help("Measure every known and added location (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)

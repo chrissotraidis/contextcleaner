@@ -134,10 +134,15 @@ struct FolderRow: Identifiable {
         do { try store.save(next); preferences = next }
         catch { self.error = "Appearance could not be saved: \(error.localizedDescription)" }
     }
-    func setDaily(_ value: Bool) {
+    func setDaily(_ value: Bool) { updatePreferences { $0.dailyWhileOpen = value; $0.schedule = value ? "daily" : "off" } }
+    /// Single save path for every preference change; each save appends a new event.
+    func updatePreferences(_ change: (inout Preferences) -> Void) {
         guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return }
-        var next = preferences; next.dailyWhileOpen = value
-        do { try store.save(next); preferences = next } catch { self.error = error.localizedDescription }
+        var next = preferences; change(&next)
+        do { try store.save(next); preferences = next } catch { self.error = "Preferences were not saved: \(error.localizedDescription)" }
+    }
+    func toggleAppearance(current: ColorScheme) {
+        setAppearance(current == .dark ? "Light" : "Dark")
     }
     func checkScheduledPass(now: Date = Date()) {
         guard let store, !running, !inspecting, !discovering, ScanPlanner.dailyDue(preferences, now: now) else { return }
@@ -195,7 +200,7 @@ struct FolderRow: Identifiable {
         let known = discovery.profiles, history = records, now = Date()
         running = true; partial = []; completed = 0; targetCount = 0
         progress = selectedOnly ? "Checking selected location…" : "Discovering locations; macOS may request access…"
-        let scope = selectedOnly ? "Selected folder" : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to 12)" : "Known and selected locations"
+        let scope = selectedOnly ? "Selected folder" : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to \(preferences.effectivePriorityCount))" : "Known and selected locations"
         DispatchQueue.global(qos: .utility).async {
             let found: Discovery
             if selectedOnly, let path { found = Discovery(profiles: [Classifier.profile(path: path, home: home, preferences: prefs)], notes: ["Selected folder only; exclusions apply."]) }
@@ -207,7 +212,7 @@ struct FolderRow: Identifiable {
             } else { found = Inventory.discover(home: home, preferences: prefs, cancellation: token) { path in
                 DispatchQueue.main.async { if !token.stopped { self.progress = "Discovering: " + path + " · macOS may request access" } }
             } }
-            let profiles = priorityOnly ? ScanPlanner.priority(found.profiles, preferences: prefs, records: history, now: now) : found.profiles
+            let profiles = priorityOnly ? ScanPlanner.priority(found.profiles, preferences: prefs, records: history, now: now, limit: prefs.effectivePriorityCount) : found.profiles
             let rediscovered = !selectedOnly && !watchedOnly && (!priorityOnly || ScanPlanner.discoveryDue(prefs, now: now))
             DispatchQueue.main.async {
                 if !selectedOnly && !watchedOnly { self.acceptDiscovery(found) }
@@ -218,7 +223,7 @@ struct FolderRow: Identifiable {
                 DispatchQueue.main.async { self.error = "No included locations match this scan. Add a location or change your filters."; self.running = false }
                 return
             }
-            let record = ScanEngine.scan(profiles: profiles, preferences: prefs, scope: scope, notes: found.notes, cancellation: token, limits: priorityOnly ? .priority : .manual, totalSeconds: priorityOnly ? 90 : 900) { item, index, total in
+            let record = ScanEngine.scan(profiles: profiles, preferences: prefs, scope: scope, notes: found.notes, cancellation: token, limits: priorityOnly ? .priority : prefs.manualLimits, totalSeconds: priorityOnly ? 90 : 900) { item, index, total in
                 DispatchQueue.main.async { self.partial.append(item); self.completed = index; self.progress = item.profile.name }
             }
             DispatchQueue.main.async {

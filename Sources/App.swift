@@ -7,7 +7,8 @@ struct TracePoint: Identifiable {
     var id: String; var date: Date; var bytes: Int64; var segment: Int
 }
 struct MainView: View {
-    @StateObject var model = CleanerModel()
+    @ObservedObject var model: CleanerModel
+    @Environment(\.colorScheme) var colorScheme
     @State var sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)]
     var appearance: String { model.preferences.appearance ?? "System" }
     @State var simulatorSearch = ""
@@ -49,22 +50,12 @@ struct MainView: View {
         .onChange(of: model.search) { _, value in if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil } }
         .toolbar {
             ToolbarItemGroup {
-                Button { model.addRoot() } label: { Label("Add Location", systemImage: "folder.badge.plus") }.disabled(model.running || model.inspecting || model.discovering)
-                Menu {
-                    Button("Scan known and selected locations") { model.scan() }
-                    Button("Scan priority locations (up to 12)") { model.scan(priorityOnly: true) }
-                    Button("Scan watched locations") { model.scan(watchedOnly: true) }
-                    Button("Rescan selected folder") { model.scan(selectedOnly: true) }.disabled(model.selected == nil)
-                    Button("Rediscover locations") { model.discover() }
-                    Divider()
-                    Button("Access and scan limits…") { showingAccessHelp = true }
-                } label: { Label("Scan Scope", systemImage: "slider.horizontal.3") }.accessibilityLabel("Scan scope").help("Choose which locations to scan").disabled(model.running || model.inspecting || model.discovering)
-                Button { model.scan() } label: { Label("Scan Again", systemImage: "arrow.clockwise").labelStyle(.titleAndIcon) }.disabled(model.running || model.inspecting || model.discovering || model.store == nil).keyboardShortcut("r")
-                if model.running || model.discovering { Button(model.discovering ? "Cancel Discovery" : "Cancel Scan") { model.cancelWork() }.keyboardShortcut(.cancelAction) }
-                Button { model.exportReport() } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                Menu {
-                    Picker("Appearance", selection: Binding(get: { appearance }, set: { model.setAppearance($0) })) { ForEach(["System", "Light", "Dark"], id: \.self) { Text($0).tag($0) } }
-                } label: { Label("Appearance", systemImage: "circle.lefthalf.filled") }.accessibilityLabel("Appearance")
+                Button { model.addRoot() } label: { Label("Add Location", systemImage: "folder.badge.plus") }.help("Add a folder to measure (Shift-Command-O)").disabled(model.running || model.inspecting || model.discovering)
+                Button { model.scan() } label: { Label("Scan Now", systemImage: "arrow.clockwise").labelStyle(.titleAndIcon) }.help("Measure every known and added location (Command-R)").disabled(model.running || model.inspecting || model.discovering || model.store == nil)
+                Button { model.scan(selectedOnly: true) } label: { Label("Rescan This Folder", systemImage: "arrow.clockwise.circle") }.help("Measure only the selected folder (Shift-Command-R)").disabled(model.selected == nil || model.running || model.inspecting || model.discovering)
+                if model.running || model.discovering { Button(model.discovering ? "Cancel Discovery" : "Cancel Scan") { model.cancelWork() } }
+                Button { model.exportReport() } label: { Label("Export Report", systemImage: "square.and.arrow.up") }.help("Save a Markdown report of every location (Shift-Command-E)")
+                Button { model.toggleAppearance(current: colorScheme) } label: { Label(colorScheme == .dark ? "Switch to Light" : "Switch to Dark", systemImage: colorScheme == .dark ? "sun.max" : "moon") }.help("Toggle light and dark. Choose Match System in Settings.")
             }
         }
         .searchable(text: $model.search, prompt: "Folder, project, app or tag")
@@ -174,10 +165,10 @@ struct MainView: View {
                     DisclosureGroup("Folder path") { Text(item.profile.path).font(.system(.caption, design: .monospaced)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true).padding(.top, 5) }
                     HStack {
                         Button("Reveal in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) }.buttonStyle(.borderedProminent)
-                        Button("Rescan") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).help("Rescan only this folder (Shift-Command-R)").disabled(model.running || model.preferences.excluded(item.profile.path))
+                        Button("Rescan") { model.scan(selectedOnly: true) }.help("Rescan only this folder (Shift-Command-R)").disabled(model.running || model.preferences.excluded(item.profile.path))
                     }
                     HStack {
-                        Button("Tags & notes…") { model.editing = item.profile.path }.keyboardShortcut("t", modifiers: [.command, .shift])
+                        Button("Tags & notes…") { model.editing = item.profile.path }
                         Menu("More") { LocationActions(model: model, path: item.profile.path) }.frame(maxWidth: 110)
                     }
                     Text("Context Cleaner never deletes files. You control any action in Finder.").font(.caption).foregroundStyle(.secondary)
@@ -364,7 +355,8 @@ struct MainView: View {
             if model.running { ProgressView(value: Double(model.completed), total: Double(max(model.targetCount, 1))); Text("\(model.completed)/\(model.targetCount) · \(model.progress)").font(.caption) }
             if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled) }
             HStack {
-                Toggle("Check priority locations daily while open", isOn: Binding(get: { model.preferences.dailyWhileOpen }, set: { model.setDaily($0) })).toggleStyle(.checkbox)
+                Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking priority locations daily while open." : "Checking priority locations weekly while open.").font(.caption).foregroundStyle(.secondary)
+                SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
                 Spacer()
                 Text("\(model.discovery.profiles.count) known/selected locations · \(model.records.count) preserved scans").font(.caption).foregroundStyle(.secondary)
             }
@@ -415,7 +407,35 @@ struct PolicyEditor: View {
     }
 }
 @main struct ContextCleanerApp: App {
-    var body: some Scene { WindowGroup("Context Cleaner") { MainView() }.defaultSize(width: 1480, height: 920) }
+    @StateObject private var model = CleanerModel()
+    var body: some Scene {
+        WindowGroup("Context Cleaner") { MainView(model: model) }.defaultSize(width: 1480, height: 920)
+            .commands {
+                CommandGroup(replacing: .newItem) {}
+                CommandGroup(after: .importExport) {
+                    Button("Add Location…") { model.addRoot() }.keyboardShortcut("o", modifiers: [.command, .shift])
+                    Button("Export Report…") { model.exportReport() }.keyboardShortcut("e", modifiers: [.command, .shift])
+                }
+                CommandMenu("Scan") {
+                    Button("Scan Now") { model.scan() }.keyboardShortcut("r").disabled(model.running || model.inspecting || model.discovering)
+                    Button("Rescan This Folder") { model.scan(selectedOnly: true) }.keyboardShortcut("r", modifiers: [.command, .shift]).disabled(model.selected == nil || model.running || model.inspecting || model.discovering)
+                    Button("Scan Watched Locations") { model.scan(watchedOnly: true) }.disabled(model.running || model.inspecting || model.discovering)
+                    Button("Rediscover Locations") { model.discover() }.disabled(model.running || model.inspecting || model.discovering)
+                    Divider()
+                    Button("Cancel") { model.cancelWork() }.keyboardShortcut(".").disabled(!(model.running || model.discovering))
+                }
+                CommandMenu("Location") {
+                    if let path = model.selected {
+                        LocationActions(model: model, path: path)
+                    } else {
+                        Text("Select a location first")
+                    }
+                    Divider()
+                    Button("Tags and Notes…") { if let path = model.selected { model.editing = path } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(model.selected == nil)
+                }
+            }
+        Settings { SettingsView(model: model) }
+    }
 }
 
 struct AccessHelp: View {

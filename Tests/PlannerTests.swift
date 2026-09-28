@@ -30,6 +30,17 @@ import Foundation
         let child = Classifier.profile(path: "/fixture/parent/child", home: home, readMetadata: false)
         let neighbor = Classifier.profile(path: "/fixture/parent2", home: home, readMetadata: false)
         check(ScanPlanner.priority([parent, child, neighbor], preferences: Preferences(), records: [], now: now).count == 2, "priority pass avoids overlapping ancestor and child scans without dropping neighbors")
+        var schedule = Preferences()
+        check(!ScanPlanner.dailyDue(schedule, now: now), "no schedule means no scheduled pass")
+        schedule.schedule = "weekly"; schedule.lastScheduledAttempt = now.addingTimeInterval(-3 * 86400)
+        check(!ScanPlanner.dailyDue(schedule, now: now), "weekly schedule is not due after three days")
+        schedule.lastScheduledAttempt = now.addingTimeInterval(-8 * 86400)
+        check(ScanPlanner.dailyDue(schedule, now: now), "weekly schedule is due after eight days")
+        schedule.schedule = nil; schedule.dailyWhileOpen = true; schedule.lastScheduledAttempt = now.addingTimeInterval(-2 * 86400)
+        check(schedule.effectiveSchedule == "daily" && ScanPlanner.dailyDue(schedule, now: now), "legacy daily preference still maps to a daily schedule")
+        schedule.priorityCount = 1000; schedule.perLocationSeconds = 1; schedule.perLocationEntries = 1
+        check(schedule.effectivePriorityCount == 48 && schedule.manualLimits.seconds == 30 && schedule.manualLimits.entries == 100_000, "allowances are clamped to safe bounds")
+        check(ScanPlanner.priority(profiles, preferences: prefs, records: records, now: now, limit: 4).count == 4, "priority pass honors a configured location count")
         print("SUCCESS: \(count) planner checks; no filesystem mutations.")
     }
 }

@@ -99,6 +99,14 @@ struct Preferences: Codable {
     var lastDiscovery: Date? = nil
     var lastScheduledAttempt: Date? = nil
     var appearance: String? = nil
+    /// "off", "daily" or "weekly". Scheduled checks only run while the app is open.
+    var schedule: String? = nil
+    var priorityCount: Int? = nil
+    var perLocationSeconds: Int? = nil
+    var perLocationEntries: Int? = nil
+    var effectiveSchedule: String { schedule ?? (dailyWhileOpen ? "daily" : "off") }
+    var effectivePriorityCount: Int { min(max(priorityCount ?? 12, 4), 48) }
+    var manualLimits: ScanLimits { ScanLimits(seconds: TimeInterval(min(max(perLocationSeconds ?? 120, 30), 900)), entries: min(max(perLocationEntries ?? 1_000_000, 100_000), 10_000_000)) }
     func policy(_ path: String) -> LocationPolicy { locations[normalized(path)] ?? LocationPolicy() }
     func excluded(_ path: String) -> Bool {
         locations.contains { $0.value.excluded && containsPath($0.key, path) }

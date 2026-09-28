@@ -1,10 +1,13 @@
 import Foundation
 
 struct ScanPlanner {
+    static func scheduledInterval(_ preferences: Preferences) -> TimeInterval? {
+        switch preferences.effectiveSchedule { case "daily": return 86400; case "weekly": return 7 * 86400; default: return nil }
+    }
     static func dailyDue(_ preferences: Preferences, now: Date) -> Bool {
-        guard preferences.dailyWhileOpen else { return false }
+        guard let interval = scheduledInterval(preferences) else { return false }
         guard let last = preferences.lastScheduledAttempt else { return true }
-        return now.timeIntervalSince(last) >= 86400
+        return now.timeIntervalSince(last) >= interval
     }
     static func discoveryDue(_ preferences: Preferences, now: Date) -> Bool {
         guard let last = preferences.lastDiscovery else { return true }

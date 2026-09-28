@@ -213,7 +213,7 @@ struct FolderRow: Identifiable {
     var overview: OverviewSnapshot {
         let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
         if overviewCache.key == key && Date() < overviewCache.validUntil { return overviewCache.value }
-        let current = latest
+        let current = latest.map { withSimulatorFacts($0, devices: simDevices) }
         let excludedPaths = preferences.locations.filter { $0.value.excluded }.map { normalized($0.key) }
         func excluded(_ path: String) -> Bool { excludedPaths.contains { containsPath($0, path) } }
         let measured = current.filter { $0.state == .measured && !excluded($0.profile.path) && !gone.contains($0.profile.path) }
@@ -252,7 +252,7 @@ struct FolderRow: Identifiable {
         for (path, policy) in preferences.locations where policy.excluded && !measures.contains(where: { $0.profile.path == path }) {
             measures.append(FolderMeasurement(profile: Classifier.profile(path: path, home: home, readMetadata: false), observedAt: Date(), state: .excluded, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Excluded by you.", elapsedSeconds: 0))
         }
-        return measures.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path), advice: adviceFor($0), gone: gone.contains($0.profile.path)) }.filter { row in
+        return measures.map { withSimulatorFacts($0, devices: simDevices) }.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path), advice: adviceFor($0), gone: gone.contains($0.profile.path)) }.filter { row in
             let p = row.measurement.profile
             if let categoryFilter, p.category != categoryFilter { return false }
             guard search.isEmpty || (p.path + p.name + p.associatedApp + (p.project ?? "") + row.policy.tags.joined()).localizedCaseInsensitiveContains(search) else { return false }
@@ -304,7 +304,8 @@ struct FolderRow: Identifiable {
     func undoAutoWatch(_ path: String) { policy(path) { $0.isWatched = false; $0.autoWatched = nil; $0.autoWatchedBytes = nil }; lastAutoWatched.removeAll { $0 == path } }
     var chosen: FolderMeasurement? {
         guard let selected else { return nil }
-        return (latest.filter { $0.profile.path == selected } + [inspected[selected]].compactMap { $0 }).max { $0.observedAt < $1.observedAt } ?? rows.first(where: { $0.id == selected })?.measurement
+        let saved = (latest.filter { $0.profile.path == selected } + [inspected[selected]].compactMap { $0 }).max { $0.observedAt < $1.observedAt } ?? rows.first(where: { $0.id == selected })?.measurement
+        return saved.map { withSimulatorFacts($0, devices: simDevices) }
     }
     var lastScan: ScanRecord? { records.last }
     func policy(_ path: String, _ change: (inout LocationPolicy) -> Void) {

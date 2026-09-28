@@ -314,6 +314,38 @@ func simSummary(_ devices: [String: SimDevice], now: Date = Date(), idleDays: Do
     }
     return s
 }
+/// Marks a size that came from Xcode's live device list rather than a scan.
+let xcodeLiveScope = "xcode-live"
+/// Shows Xcode's current simulator facts in place of an older or missing scan: the device's own name,
+/// its size now, and for the Devices folder the current total. Display only; saved scans are never changed.
+func withSimulatorFacts(_ m: FolderMeasurement, devices: [String: SimDevice], now: Date = Date()) -> FolderMeasurement {
+    guard !devices.isEmpty, m.state == .measured || m.state == .pending else { return m }
+    var live = m
+    let path = m.profile.path
+    if path.hasSuffix("/CoreSimulator/Devices") {
+        let s = simSummary(devices, now: now)
+        guard s.bytes > 0 else { return m }
+        live.allocatedBytes = s.bytes
+        if m.state == .measured, let old = m.allocatedBytes, abs(old - s.bytes) > max(Int64(1) << 30, s.bytes / 5) {
+            live.diagnostic = "A scan \(ageText(m.observedAt, now: now)) measured \(byteLabel(old)) here; the size shown is Xcode's current count."
+        } else { live.diagnostic = nil }
+    } else if let root = SimulatorLocations.deviceRoot(path), root == path, let device = devices[URL(fileURLWithPath: root).lastPathComponent] {
+        live.profile.name = device.name + " · " + device.runtime
+        guard let bytes = device.dataBytes else { return live }
+        live.allocatedBytes = bytes
+        live.diagnostic = nil
+    } else { return m }
+    live.state = .measured
+    live.observedAt = now
+    live.logicalBytes = nil
+    live.scopeID = xcodeLiveScope
+    return live
+}
+/// "Size from 2 days ago", or "Size from Xcode, now" for live simulator facts.
+func sizeSourceText(_ m: FolderMeasurement) -> String? {
+    guard m.state == .measured else { return nil }
+    return m.scopeID == xcodeLiveScope ? "size from Xcode, now" : "size from " + ageText(m.observedAt)
+}
 /// The verdict rules. Evidence first (open files, your own marks, last use), then what the folder is.
 func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], now: Date = Date()) -> Advice {
     let path = m.profile.path
@@ -323,8 +355,16 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
     // Simulators: Xcode knows best.
     if path.hasSuffix("/CoreSimulator/Devices") {
         let s = simSummary(devices, now: now)
-        let reason = s.total == 0 ? "Virtual iPhones and iPads for testing apps. Xcode didn't report any devices." :
-            "Holds \(s.total) test \(s.total == 1 ? "device" : "devices") using \(byteLabel(s.bytes)) now. \(s.idle) \(s.idle == 1 ? "hasn't" : "haven't") been used in 30 days (\(byteLabel(s.idleBytes)))."
+        var reason = "Virtual iPhones and iPads for testing apps. Xcode didn't report any devices."
+        if s.total > 0 {
+            reason = "Holds \(s.total) test \(s.total == 1 ? "device" : "devices") using \(byteLabel(s.bytes)) now. "
+            if s.idle == 0 { reason += "All of them were used in the last 30 days." }
+            else {
+                reason += "\(s.idle) \(s.idle == 1 ? "hasn't" : "haven't") been used in 30 days and \(s.idle == 1 ? "uses" : "use") \(byteLabel(s.idleBytes)); those are safe to remove."
+                if s.idleBytes < s.bytes / 10 { reason += " Most of the space is in devices used this month, so check those first." }
+            }
+        }
+        if m.scopeID == xcodeLiveScope, let note = m.diagnostic { reason += " " + note }
         return Advice(verdict: .check, reason: reason, howTo: "Don't remove this whole folder. Remove single devices in Xcode › Window › Devices and Simulators: select one, then press Delete.", command: s.unavailable > 0 ? "xcrun simctl delete unavailable" : nil, lastUsed: devices.values.compactMap(\.lastUsed).max() ?? m.latestModifiedAt)
     }
     if let root = SimulatorLocations.deviceRoot(path) {
@@ -357,11 +397,19 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
     if policy.expected { return Advice(verdict: .keep, reason: "You marked its growth as expected.", howTo: "Change that in Tags and Notes if you want to review it.", command: nil, lastUsed: m.latestModifiedAt) }
     let idle = days(m.latestModifiedAt)
     let lastSeen = m.latestModifiedAt.map { " Last changed \(ageText($0, now: now))." } ?? ""
+    let project = m.profile.project ?? "its project"
+    /// Project build output: recreated by building again, but only call it safe once it's clearly idle.
+    func projectBuild() -> Advice {
+        guard let idle else { return Advice(verdict: .check, reason: "Build output for \(project), which a build recreates. When it was last used isn't known yet; scan it to find out.", howTo: trash, command: nil, lastUsed: nil) }
+        if idle < 7 { return Advice(verdict: .check, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). You're probably still building it.", howTo: "Wait until you're done with \(project). " + trash, command: nil, lastUsed: m.latestModifiedAt) }
+        return Advice(verdict: .safe, reason: "Build output for \(project). Building again recreates it.\(lastSeen)", howTo: "Move it to the Trash in Finder. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
+    }
     switch m.profile.category {
     case .packageCache:
         let cmd: String? = path.hasSuffix(".npm/_cacache") ? "npm cache clean --force" : path.hasSuffix("Caches/pip") ? "pip cache purge" : path.hasSuffix(".cache/uv") ? "uv cache clean" : path.hasSuffix("Caches/Homebrew") ? "brew cleanup --prune=all" : path.hasSuffix("Caches/Yarn") ? "yarn cache clean" : nil
         return Advice(verdict: .safe, reason: "A download cache. The tool downloads what it needs again, so the next install is a little slower.\(lastSeen)", howTo: cmd == nil ? trash : "Use the tool's own clean command, or: " + trash, command: cmd, lastUsed: m.latestModifiedAt)
     case .buildOutput:
+        guard path.contains("/DerivedData") else { return projectBuild() }
         return Advice(verdict: .safe, reason: "Xcode rebuilds this. The next build of each project takes longer.\(lastSeen)", howTo: "Quit Xcode, then move the folder's contents to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .installCache:
         return Advice(verdict: .safe, reason: "Saved pieces from installing \(name.replacingOccurrences(of: " install cache", with: "")) on an iPhone or iPad. It's recreated on the next install.\(lastSeen)", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
@@ -370,12 +418,7 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
         return Advice(verdict: .safe, reason: "Debug files for one iPhone or iPad and iOS version. Xcode copies them again the next time you connect it.\(lastSeen)", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .workspace:
         let rebuildable = ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) }
-        let project = m.profile.project ?? "its project"
-        if rebuildable {
-            guard let idle else { return Advice(verdict: .check, reason: "Build output for \(project), which a build recreates. When it was last used isn't known yet; scan it to find out.", howTo: trash, command: nil, lastUsed: nil) }
-            if idle < 7 { return Advice(verdict: .check, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). You're probably still building it.", howTo: "Wait until you're done with \(project). " + trash, command: nil, lastUsed: m.latestModifiedAt) }
-            return Advice(verdict: .safe, reason: "Build output for \(project). Building again recreates it.\(lastSeen)", howTo: "Move it to the Trash in Finder. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
-        }
+        if rebuildable { return projectBuild() }
         if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "A work folder for \(project). These can mix build files with inputs you made by hand.\(lastSeen)", howTo: "Look inside first. Remove what you know you can rebuild.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Project files for \(project). Some may be the only copy of your work.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
     case .backup:
@@ -394,6 +437,15 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
     case .unknown:
         return Advice(verdict: .check, reason: "Context Cleaner doesn't know what this folder is.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
     }
+}
+/// Where a project folder lives, so identical project names can be told apart:
+/// "Codex worktree kartpad-stabilization-20260918" or "GitHub/kartpad".
+func locationHint(_ path: String) -> String? {
+    let parts = path.split(separator: "/").map(String.init)
+    if let i = parts.firstIndex(of: "worktrees"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex worktree " + parts[i + 1] }
+    if let i = parts.firstIndex(of: "GitHub"), i + 1 < parts.count { return "GitHub/" + parts[i + 1] }
+    if let i = parts.firstIndex(of: "backups"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex backup" }
+    return nil
 }
 /// Paths that no longer exist on disk. Only reads metadata.
 func missingPaths(_ paths: [String]) -> Set<String> {

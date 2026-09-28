@@ -19,7 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         switch self {
         case .overview: return "How full your disk is, and what's filling it."
         case .locations: return "Every folder Context Cleaner knows, largest first."
-        case .watching: return "Folders you're keeping an eye on. Scheduled checks look at these first."
+        case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first, and the last column says whether each is safe to remove now."
         case .needsAttention: return "Folders a scan couldn't read, with a fix for each."
         case .history: return "Each scan: what it checked, when, and what it found."
         }
@@ -34,7 +34,7 @@ enum LocationFilter: String, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .all: return "Sizes from your latest scans. Each row says whether it's safe to remove."
-        case .safe: return "Caches, build files and unused test devices that tools recreate. Remove them yourself, in Finder or Xcode."
+        case .safe: return "Tools recreate these. Remove them yourself in Finder or Xcode."
         case .check: return "Might be fine to remove, but look first. Each one says what to check."
         case .keep: return "App libraries and history. Manage these inside their own apps."
         case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
@@ -103,13 +103,14 @@ struct VerdictBadge: View {
 /// "Can I remove it?" with the reason, the evidence and how to do it yourself.
 struct VerdictCard: View {
     let advice: Advice
-    let scannedAt: Date?
+    let sizeSource: String?
+    var neverUsed = false
     @State private var copied = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(advice.verdict.title, systemImage: advice.verdict.symbol).font(.headline).foregroundStyle(advice.verdict.tint)
             Text(advice.reason).font(.callout).fixedSize(horizontal: false, vertical: true)
-            Text(["Last used " + ageText(advice.lastUsed), scannedAt.map { "size from " + ageText($0) }].compactMap { $0 }.joined(separator: " · "))
+            Text([advice.lastUsed.map { "Last used " + ageText($0) } ?? (neverUsed ? "Never started" : "Last use not recorded yet"), sizeSource].compactMap { $0 }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
             Text("How to remove it yourself").font(.caption.weight(.semibold)).foregroundStyle(.secondary)

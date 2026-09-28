@@ -257,7 +257,10 @@ struct UsageChart: View {
                 let used = Double(last.reading.used) / gibibyte
                 PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor.opacity(0.2)).symbolSize(180)
                 PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(45)
-                    .annotation(position: .leading, alignment: .center, spacing: 8) { Text(byteLabel(last.reading.used)).font(.caption.weight(.semibold)).monospacedDigit() }
+                    .annotation(position: .bottom, alignment: .trailing, spacing: 6) {
+                        Text(byteLabel(last.reading.used)).font(.caption.weight(.semibold)).monospacedDigit()
+                            .padding(.horizontal, 6).padding(.vertical, 2).background(.regularMaterial, in: Capsule())
+                    }
             }
             if let picked {
                 let used = Double(picked.reading.used) / gibibyte
@@ -439,6 +442,7 @@ struct Dashboard: View {
     private var safeCard: some View {
         let overview = model.overview
         let names = overview.safe.prefix(3).map { $0.profile.displayName }.joined(separator: ", ")
+        let sizesFrom = overview.safe.map(\.observedAt).min()
         return HStack(spacing: 14) {
             Image(systemName: overview.safe.isEmpty ? "questionmark.circle" : "checkmark.circle.fill").font(.largeTitle)
                 .foregroundStyle(overview.safe.isEmpty ? Color.secondary : Verdict.safe.tint).accessibilityHidden(true)
@@ -446,7 +450,7 @@ struct Dashboard: View {
                 Text(overview.safe.isEmpty ? "Nothing is clearly safe to remove yet" : "About \(byteLabel(overview.safeBytes)) looks safe to remove")
                     .font(.title2.weight(.semibold)).monospacedDigit()
                 Text(overview.safe.isEmpty ? "Scan your folders so Context Cleaner can see when each was last used." :
-                     "\(overview.safe.count) \(overview.safe.count == 1 ? "folder" : "folders") that tools recreate, like \(names). You remove them yourself.")
+                     "\(overview.safe.count) \(overview.safe.count == 1 ? "folder" : "folders") that tools recreate, like \(names). Sizes from \(ageText(sizesFrom)); you remove them yourself.")
                     .font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 12)
@@ -526,7 +530,7 @@ struct Dashboard: View {
                         Image(systemName: item.profile.category.symbol).foregroundStyle(item.profile.category.tint).frame(width: 20).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(item.profile.displayName).font(.callout).lineLimit(1)
-                            Text(item.profile.category.displayName).font(.caption).foregroundStyle(.secondary)
+                            Text(locationHint(item.profile.path).map { $0 + " · " + item.profile.category.displayName } ?? item.profile.category.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 8)
                         Sparkline(values: values, tint: values.trendTint)

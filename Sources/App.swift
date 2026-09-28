@@ -172,12 +172,18 @@ struct MainView: View {
         }
     }
     func selectedRow(_ id: String) -> Bool { model.selection.contains(id) }
+    func lastUsedText(_ row: FolderRow) -> String {
+        if let date = row.advice.lastUsed { return ageText(date) }
+        if row.measurement.scopeID == xcodeLiveScope { return "Never" }
+        return row.measurement.state == .pending ? "—" : "Not recorded"
+    }
     var folderTable: some View {
         Table(model.rows.sorted(using: sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
-                    Text([row.app, row.category, row.status].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text([locationHint(row.id) ?? row.app, row.category, row.status].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .help(row.measurement.profile.path)
                 }
             }.width(min: 170, ideal: 240)
             TableColumn("Size", value: \.bytes) { row in
@@ -185,10 +191,12 @@ struct MainView: View {
             }.width(min: 80, ideal: 90)
             TableColumn("Last used", value: \.lastUsedKey) { row in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.advice.lastUsed.map { ageText($0) } ?? (row.measurement.state == .pending ? "—" : "Unknown")).font(.callout)
+                    Text(lastUsedText(row)).font(.callout)
                         .foregroundStyle(row.advice.lastUsed == nil ? Color.secondary : Color.primary)
-                    if row.measurement.state == .measured { Text("size from " + ageText(row.measurement.observedAt)).font(.caption).foregroundStyle(.secondary) }
-                }.help("Last used: the newest change a scan saw inside it, or when Xcode last ran a test device.")
+                    if let source = sizeSourceText(row.measurement) { Text(source).font(.caption).foregroundStyle(.secondary) }
+                }.help(row.advice.lastUsed == nil && row.measurement.state == .measured && row.measurement.scopeID != xcodeLiveScope
+                       ? "Older scans didn't record when files here last changed. Scan this folder to find out."
+                       : "Last used: the newest change a scan saw inside it, or when Xcode last ran a test device.")
             }.width(min: 90, ideal: 110)
             TableColumn("Can I remove it?", value: \.verdictRank) { row in
                 Group {
@@ -329,7 +337,7 @@ struct MainView: View {
             Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 42, height: 42).background(item.profile.category.tint.opacity(0.12), in: Circle()).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.profile.displayName).font(.headline).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                Text((item.profile.project ?? item.profile.associatedApp) + " · " + item.profile.category.displayName).font(.caption).foregroundStyle(.secondary)
+                Text((locationHint(item.profile.path) ?? item.profile.project ?? item.profile.associatedApp) + " · " + item.profile.category.displayName).font(.caption).foregroundStyle(.secondary).help(item.profile.path)
             }
         }
         HStack(alignment: .firstTextBaseline) {
@@ -344,7 +352,7 @@ struct MainView: View {
         if model.gone.contains(path) {
             Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)
         } else if item.state == .measured || simulatorRoot || SimulatorLocations.deviceRoot(path) != nil {
-            VerdictCard(advice: model.adviceFor(item), scannedAt: item.state == .measured ? item.observedAt : nil)
+            VerdictCard(advice: model.adviceFor(item), sizeSource: sizeSourceText(item), neverUsed: item.scopeID == xcodeLiveScope)
         }
         if simulatorRoot { simulatorDeviceList() }
         if item.state != .measured && item.state != .pending {

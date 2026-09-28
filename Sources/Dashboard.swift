@@ -81,7 +81,6 @@ extension Array where Element == Double {
     }
 }
 let gibibyte = 1_073_741_824.0
-func signedBytes(_ delta: Int64) -> String { (delta > 0 ? "+" : delta < 0 ? "−" : "") + byteLabel(abs(delta)) }
 extension View {
     /// Reports the date under the pointer while hovering a chart's plot area.
     func chartHover(_ date: Binding<Date?>) -> some View {

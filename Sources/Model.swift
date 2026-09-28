@@ -95,6 +95,12 @@ struct FolderRow: Identifiable {
         return folderGrowth(history: derived.history, profile: { self.preferences.excluded($0) ? nil : profiles[$0] }, from: from, to: to, limit: limit)
     }
     func sparkline(_ path: String) -> [Double] { sparklineValues(history(path)) }
+    /// A friendly name for any known folder, falling back to its last path component.
+    func displayName(_ path: String) -> String {
+        latest.first { $0.profile.path == path }?.profile.displayName
+            ?? discovery.profiles.first { $0.path == path }?.displayName
+            ?? URL(fileURLWithPath: path).lastPathComponent
+    }
     /// Opens a folder in the Folders list with the inspector showing it.
     func open(_ path: String) {
         categoryFilter = nil; search = ""; locationFilter = .all; section = .locations; selected = path
@@ -436,10 +442,14 @@ struct FolderRow: Identifiable {
     func buildReport() -> String {
         let stamp = Date().formatted(date: .long, time: .shortened)
         var text = "# Context Cleaner report\n\n\(stamp) · \(section == .overview || section == .history ? "All included folders" : section.rawValue)\(section == .locations ? " · \(locationFilter.rawValue)" : "")\(search.isEmpty ? "" : " · matching “\(search)”")\n\n"
-        if let v = volume { text += "Home volume: \(byteLabel(v.free)) free of \(byteLabel(v.total)) (checked \(v.date.formatted(date: .omitted, time: .shortened))).\n\n" }
-        text += "Context Cleaner never deletes files. Sizes are allocated-space estimates from the latest saved scan of each location; nested folders may overlap, and APFS shared blocks mean none of this is guaranteed reclaimable space.\n\n"
+        if let v = volume { text += "Disk: \(byteLabel(v.free)) free of \(byteLabel(v.total)), checked \(v.date.formatted(date: .omitted, time: .shortened)).\n\n" }
+        let week = UsageRange.week.window(endingAt: usage.last?.date ?? Date())
+        if let change = usageChange(usage, from: week.lowerBound, to: week.upperBound) {
+            text += "Space used in the last 7 days: \(signedBytes(change.delta)) (\(byteLabel(change.from.used)) on \(change.from.date.formatted(date: .abbreviated, time: .shortened)) → \(byteLabel(change.to.used)) on \(change.to.date.formatted(date: .abbreviated, time: .shortened))).\n\n"
+        }
+        text += "Context Cleaner never deletes files. Sizes are estimates from the latest scan of each folder. A folder inside another may appear in both rows, and APFS shares storage between files, so removing a folder can free less than its size.\n\n"
         let listed = rows.sorted(by: { $0.bytes > $1.bytes })
-        text += "| Location | Size | Change | Status | Owner |\n|---|---:|---:|---|---|\n"
+        text += "| Folder | Size | Change | Status | App or project |\n|---|---:|---:|---|---|\n"
         for row in listed {
             let change = row.change.delta.map { "\($0 >= 0 ? "+" : "−")\(byteLabel(abs($0)))" } ?? "—"
             text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(change) | \(row.status.isEmpty ? "Scanned" : row.status) | \(row.app) |\n"

@@ -470,43 +470,50 @@ struct MainView: View {
             }
         }
     }
-    /// Saved scan outcomes, with the scanned objects named before technical details.
+    /// Saved scans grouped by day, newest first. Each row names what was scanned and the result.
     var scanHistory: some View {
         let records = model.records.sorted { $0.finishedAt > $1.finishedAt }
+        let calendar = Calendar.current
+        let days = Dictionary(grouping: records.indices, by: { calendar.startOfDay(for: records[$0].finishedAt) }).sorted { $0.key > $1.key }
         return List {
-            ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
-                let previous = records.dropFirst(index + 1).first { $0.scope == record.scope && $0.complete }
-                let changes = scanDelta(record, previous: previous)
-                DisclosureGroup {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let changes {
-                            let delta = changes.grew.reduce(Int64(0)) { $0 + $1.delta } + changes.shrank.reduce(Int64(0)) { $0 + $1.delta }
-                            Text(delta == 0 ? "No overall size change in folders checked in both scans." : byteLabel(abs(delta)) + (delta > 0 ? " larger" : " smaller") + " across folders checked in both scans.").font(.callout)
-                        } else { Text("No earlier scan of the same folders to compare yet.").font(.callout).foregroundStyle(.secondary) }
-                        ForEach(record.measurements) { item in
-                            HStack(alignment: .top) {
-                                Text(item.profile.displayName).lineLimit(1).help(item.profile.path)
-                                Spacer()
-                                Text(item.state == .measured ? item.allocatedBytes.map(byteLabel) ?? "Unknown size" : item.state == .cancelled ? "Stopped" : item.state.rawValue.capitalized).foregroundStyle(.secondary)
-                            }.font(.caption)
-                        }
-                        if let free = record.freeBytes { Text("Disk space at the time: " + byteLabel(free) + " free").font(.caption).foregroundStyle(.secondary) }
-                        Text("Scan duration: " + elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt))).font(.caption).foregroundStyle(.secondary)
-                        if !record.discoveryNotes.isEmpty { DisclosureGroup("Scan details") { ForEach(Array(record.discoveryNotes.enumerated()), id: \.offset) { _, note in Text(note).font(.caption).textSelection(.enabled) } }.font(.caption) }
-                    }.padding(.vertical, 8)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: record.complete ? "checkmark.circle" : "stop.circle").foregroundStyle(record.complete ? Color.accentColor : .growing).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(record.folderSummary).font(.headline).lineLimit(1)
-                            Text(record.resultSummary).font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(record.finishedAt.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 6)
+            ForEach(days, id: \.key) { day, indices in
+                Section(calendar.isDateInToday(day) ? "Today" : calendar.isDateInYesterday(day) ? "Yesterday" : day.formatted(.dateTime.weekday(.wide).month(.wide).day())) {
+                    ForEach(indices, id: \.self) { index in historyRow(records, index) }
                 }
             }
-        }.overlay { if records.isEmpty { ContentUnavailableView("No scans yet", systemImage: "clock", description: Text("Completed and stopped folder scans will appear here.")) } }
+        }.overlay { if records.isEmpty { ContentUnavailableView("No scans yet", systemImage: "clock", description: Text("Choose Scan Folders… to take your first look. Each scan shows up here.")) } }
+    }
+    func historyRow(_ records: [ScanRecord], _ index: Int) -> some View {
+        let record = records[index]
+        let previous = records.dropFirst(index + 1).first { $0.scope == record.scope && $0.complete }
+        let changes = scanDelta(record, previous: previous)
+        return DisclosureGroup {
+            VStack(alignment: .leading, spacing: 8) {
+                if let changes {
+                    let delta = changes.grew.reduce(Int64(0)) { $0 + $1.delta } + changes.shrank.reduce(Int64(0)) { $0 + $1.delta }
+                    Text(delta == 0 ? "Same total size as the scan before." : signedBytes(delta) + " compared with the scan before, in folders both scans read.").font(.callout)
+                } else { Text("Nothing earlier to compare with yet.").font(.callout).foregroundStyle(.secondary) }
+                ForEach(record.measurements.prefix(40)) { item in
+                    HStack(alignment: .top) {
+                        Text(item.profile.displayName).lineLimit(1).help(item.profile.path)
+                        Spacer()
+                        Text(item.state == .measured ? item.allocatedBytes.map(byteLabel) ?? "Size unknown" : item.state == .cancelled ? "Stopped" : item.state.problem).monospacedDigit().foregroundStyle(item.state == .measured || item.state == .cancelled ? Color.secondary : Color.attention)
+                    }.font(.caption)
+                }
+                if record.measurements.count > 40 { Text("and \(record.measurements.count - 40) more").font(.caption).foregroundStyle(.secondary) }
+                Text([record.freeBytes.map { byteLabel($0) + " free on disk at the time" }, "took " + elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+            }.padding(.vertical, 6)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: record.complete ? "checkmark.circle" : "stop.circle").foregroundStyle(record.complete ? Color.accentColor : .growing).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.folderSummary).font(.headline).lineLimit(1)
+                    Text(record.resultSummary).font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(record.finishedAt.formatted(date: .omitted, time: .shortened)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            }.padding(.vertical, 4)
+        }
     }
     var footer: some View {
         VStack(alignment: .leading, spacing: 6) {

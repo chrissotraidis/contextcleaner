@@ -11,6 +11,7 @@ func byteLabel(_ bytes: Int64) -> String {
     while abs(amount) >= 1024 && index < units.count - 1 { amount /= 1024; index += 1 }
     return amount.formatted(.number.precision(.fractionLength(0...2))) + " " + units[index]
 }
+func signedBytes(_ delta: Int64) -> String { (delta > 0 ? "+" : delta < 0 ? "−" : "") + byteLabel(abs(delta)) }
 func elapsedLabel(_ interval: TimeInterval) -> String {
     let formatter = DateComponentsFormatter(); formatter.allowedUnits = [.day, .hour, .minute, .second]
     formatter.maximumUnitCount = 2; formatter.unitsStyle = .abbreviated

@@ -190,7 +190,7 @@ struct CoverageSettings: View {
                 ForEach(model.preferences.customRoots.filter { filter != .off || model.preferences.excluded($0) }, id: \.self) { path in
                     HStack {
                         Image(systemName: "folder").foregroundStyle(.secondary).frame(width: 18)
-                        Text(URL(fileURLWithPath: path).lastPathComponent).font(.callout).lineLimit(1).help(path)
+                        Text(model.displayName(path)).font(.callout).lineLimit(1).help(path)
                         Spacer()
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }.controlSize(.small)
                         Toggle(path, isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
@@ -199,7 +199,7 @@ struct CoverageSettings: View {
                 ForEach(others, id: \.self) { path in
                     HStack {
                         Image(systemName: "folder.badge.minus").foregroundStyle(.secondary).frame(width: 18)
-                        Text(URL(fileURLWithPath: path).lastPathComponent).font(.callout).lineLimit(1).help(path)
+                        Text(model.displayName(path)).font(.callout).lineLimit(1).help(path)
                         Text("turned off from Folders").font(.caption).foregroundStyle(.secondary)
                         Spacer()
                         Button("Turn On") { model.policy(path) { $0.excluded = false } }.controlSize(.small).disabled(busy)
@@ -241,7 +241,7 @@ struct ScanPlanView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: "person.crop.circle").foregroundStyle(Color.accentColor).frame(width: 18).accessibilityHidden(true)
                         Text("Your folders").font(.headline).frame(width: 150, alignment: .leading)
-                        Text(added.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                        Text(added.map { model.displayName($0) }.joined(separator: ", ")).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
                 DisclosureGroup("Exact paths") {

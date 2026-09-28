@@ -222,7 +222,7 @@ extension ScanRecord {
         let measured = measurements.filter { $0.state == .measured }.count
         let issues = measurements.filter { [.inaccessible, .limited, .missing, .failed].contains($0.state) }.count
         let target = requestedCount ?? measurements.count
-        if !complete { return "Stopped · \(measured) of \(target) folders scanned" }
+        if !complete { return "Stopped · \(measured) of \(target) \(target == 1 ? "folder" : "folders") scanned" }
         if issues > 0 { return "\(measured) scanned · \(issues) with issues" }
         return measured == 1 ? "1 folder scanned" : "\(measured) folders scanned"
     }

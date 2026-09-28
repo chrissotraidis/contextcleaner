@@ -21,3 +21,7 @@
 4. Final validation report, README, tag and remote verification. Do not mark the overarching goal complete before those gates.
 
 No files were deleted. Existing builds, outputs, fixtures, artwork, scan records and legacy history remain preserved. Scheduled scanning remains off on this machine. App is ad-hoc signed only, not notarized, and no multi-day monitoring result is claimed.
+
+## Aborted scrolling trace
+
+The Instruments Animation Hitches run attached to the test app with a 15-second recording limit, but finalization continued for several minutes and produced a 13 GiB trace at `work/cc-stage7-scroll-11-a.trace` in the original task directory. The owned profiler process was interrupted and then terminated; its shell session ended with exit 1. The trace is retained, is not accepted as scrolling evidence, and is a user-controlled manual deletion candidate. Do not repeat this broad trace. Prefer narrowly scoped profiling with explicit disk-growth monitoring. The successful launch trace is 167 MiB; the excluded older-build trace is 399 MiB.

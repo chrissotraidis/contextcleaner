@@ -12,24 +12,36 @@ struct FolderRow: Identifiable {
     var bytes: Int64 { measurement.allocatedBytes ?? -1 }
     var delta: Int64 { change.delta ?? Int64.min }
     var category: String { measurement.profile.category.rawValue }
+    var growing: Bool { (change.delta ?? 0) > 0 && (change.delta ?? 0) >= (policy.growthThresholdBytes ?? 0) && !policy.expected }
     var status: String {
         if policy.excluded { return "Excluded" }
         if measurement.state == .pending { return "Not scanned" }
         if measurement.state != .measured { return measurement.state.rawValue.capitalized }
         if (policy.reviewAfter ?? .distantPast) > Date() { return "Review later" }
         if policy.expected { return "Expected" }
+        if growing { return policy.autoWatched == true ? "Growing · watched" : "Growing" }
         if !measurement.processes.isEmpty { return "Open handles" }
-        
         if policy.recurring { return "Recurring review" }
-        if policy.watched { return "Watching" }
+        if policy.watched { return policy.autoWatched == true ? "Watching (auto)" : "Watching" }
         return "Measured"
+    }
+    /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
+    var statusTint: Color {
+        if policy.excluded || measurement.state == .pending { return .secondary }
+        if measurement.state != .measured { return .attention }
+        if growing { return .growing }
+        if policy.expected { return .stable }
+        if policy.watched || policy.recurring { return .accentColor }
+        return .secondary
     }
 }
 @MainActor final class CleanerModel: ObservableObject {
     @Published var records: [ScanRecord] = []
     @Published var preferences = Preferences()
     @Published var discovery = Discovery(profiles: [], notes: [])
-    @Published var selected: String?
+    @Published var selected: String? { didSet { if let s = selected { if selection != [s] { selection = [s] } } else if !selection.isEmpty { selection = [] } } }
+    /// Table selection. One item drives the inspector; several show a summed summary.
+    @Published var selection: Set<String> = [] { didSet { if selection.count == 1, selected != selection.first { selected = selection.first } else if selection.isEmpty, selected != nil { selected = nil } } }
     @Published var section: AppSection = .overview
     @Published var locationFilter: LocationFilter = .all
     @Published var editing: String?
@@ -117,6 +129,32 @@ struct FolderRow: Identifiable {
         for profile in discovery.profiles where !preferences.excluded(profile.path) && !current.contains(where: { $0.profile.path == profile.path }) { paths.insert(profile.path) }
         return paths.count
     }
+    /// Measurements for every selected row, with unique allocated bytes (nested folders counted once).
+    var selectionSummary: (items: [FolderMeasurement], bytes: Int64, unmeasured: Int)? {
+        guard selection.count > 1 else { return nil }
+        let items = latest.filter { selection.contains($0.profile.path) }
+        let measured = items.filter { $0.state == .measured }
+        return (items, uniqueAllocatedTotal(measured), selection.count - measured.count)
+    }
+    /// Growth over a comparable pair that is large enough to matter: at least 1 GiB or the location's own threshold.
+    static let autoWatchFloor: Int64 = 1_073_741_824
+    /// Adds locations that grew across two comparable scans to Watching, remembering that the app did it so the user can undo.
+    func autoWatch(after record: ScanRecord) {
+        guard let store else { return }
+        var next = preferences, added: [String] = []
+        for item in record.measurements where item.state == .measured {
+            let path = item.profile.path, policy = next.policy(path)
+            guard !policy.watched, !policy.expected, !next.excluded(path), let delta = growth(path, records: records).delta else { continue }
+            guard delta >= max(Self.autoWatchFloor, policy.growthThresholdBytes ?? 0) else { continue }
+            var updated = policy; updated.watched = true; updated.autoWatched = true; updated.autoWatchedBytes = delta
+            next.locations[normalized(path)] = updated; added.append(path)
+        }
+        guard !added.isEmpty else { return }
+        do { try store.save(next); preferences = next; lastAutoWatched = added }
+        catch { self.error = "Watching could not be saved: \(error.localizedDescription)" }
+    }
+    @Published var lastAutoWatched: [String] = []
+    func undoAutoWatch(_ path: String) { policy(path) { $0.watched = false; $0.autoWatched = nil; $0.autoWatchedBytes = nil }; lastAutoWatched.removeAll { $0 == path } }
     var chosen: FolderMeasurement? {
         guard let selected else { return nil }
         return (latest.filter { $0.profile.path == selected } + [inspected[selected]].compactMap { $0 }).max { $0.observedAt < $1.observedAt } ?? rows.first(where: { $0.id == selected })?.measurement
@@ -230,6 +268,7 @@ struct FolderRow: Identifiable {
                 self.records.append(record); self.refreshVolume()
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
+                self.autoWatch(after: record)
                 self.running = false; self.progress = record.complete ? "Scan complete" : "Scan preserved; open Needs Attention for incomplete locations"
             }
         }

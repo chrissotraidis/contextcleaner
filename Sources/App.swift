@@ -58,7 +58,7 @@ struct MainView: View {
                 Button { model.toggleAppearance(current: colorScheme) } label: { Label(colorScheme == .dark ? "Switch to Light" : "Switch to Dark", systemImage: colorScheme == .dark ? "sun.max" : "moon") }.help("Toggle light and dark. Choose Match System in Settings.")
             }
         }
-        .searchable(text: $model.search, prompt: "Folder, project, app or tag")
+        .searchable(text: $model.search, prompt: "Search names, projects, apps, tags")
         .sheet(item: Binding(get: { model.editing.map { EditTarget(id: $0) } }, set: { model.editing = $0?.id })) { target in
             PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; model.editing = nil }
         }
@@ -87,13 +87,34 @@ struct MainView: View {
             } else { CapsuleLabel(text: "Read-only by design", symbol: "lock.shield") }
         }.padding(.horizontal, 22).padding(.top, 12).padding(.bottom, 10)
     }
+    @ViewBuilder func multiActions(_ paths: [String]) -> some View {
+        Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
+        Button("Watch All") { for path in paths { model.policy(path) { $0.watched = true } } }
+        Button("Stop Watching All") { for path in paths { model.policy(path) { $0.watched = false; $0.autoWatched = nil } } }
+        Divider()
+        Button("Exclude All from Scans") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
+        Button("Clear Selection") { model.selection = [] }
+    }
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
             HStack(spacing: 12) {
                 Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 520)
                 Spacer()
-                Text(model.locationFilter.explanation).font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 360, alignment: .trailing)
-            }.padding(.horizontal, 16).padding(.bottom, 10)
+                Text(model.search.isEmpty ? model.locationFilter.explanation : "Matching “\(model.search)” in names, projects, apps and tags · \(model.rows.count) of \(model.locationFilter.rawValue.lowercased() == "all" ? "all" : model.locationFilter.rawValue.lowercased()) locations").font(.caption).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 380, alignment: .trailing)
+            }.padding(.horizontal, 16).padding(.bottom, 8)
+        } else if !model.search.isEmpty {
+            Text("Matching “\(model.search)” in names, projects, apps and tags · \(model.rows.count) locations").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 8)
+        }
+        if let summary = model.selectionSummary {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.circle").foregroundStyle(Color.accentColor).accessibilityHidden(true)
+                Text("\(model.selection.count) selected · \(byteLabel(summary.bytes))").font(.callout.weight(.semibold)).monospacedDigit()
+                Text(summary.unmeasured > 0 ? "nested folders counted once · \(summary.unmeasured) not measured" : "nested folders counted once").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.controlSize(.small)
+                Button("Watch All") { for path in model.selection { model.policy(path) { $0.watched = true } } }.controlSize(.small)
+                Button("Clear") { model.selection = [] }.controlSize(.small)
+            }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
         }
     }
     @ViewBuilder var categoryBanner: some View {
@@ -106,10 +127,10 @@ struct MainView: View {
         }
     }
     var folderTable: some View {
-        Table(model.rows.sorted(using: sortOrder), selection: $model.selected, sortOrder: $sortOrder) {
+        Table(model.rows.sorted(using: sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 3) {
-                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(model.selected == row.id ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
+                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(model.selection.contains(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
                     Text(row.app + " · " + row.category).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }.width(min: 190, ideal: 260)
@@ -117,10 +138,11 @@ struct MainView: View {
             TableColumn("Change", value: \.delta) { row in
                 Text(row.change.delta.map { "\($0 > 0 ? "+" : $0 < 0 ? "−" : "")\(byteLabel(abs($0)))" } ?? "No baseline").font(.caption).foregroundStyle((row.change.delta ?? 0) > 0 ? Color.growing : .secondary)
             }.width(min: 100, ideal: 110)
-            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selected == row.id ? Color.white : ![.measured, .excluded].contains(row.measurement.state) ? Color.attention : row.policy.watched ? Color.accentColor : .secondary) }.width(min: 85, ideal: 95)
+            TableColumn("Status", value: \.status) { row in Text(row.status).font(.caption).foregroundStyle(model.selection.contains(row.id) ? Color.white : row.statusTint) }.width(min: 85, ideal: 110)
         }
         .contextMenu(forSelectionType: String.self) { paths in
-            if let path = paths.first { LocationActions(model: model, path: path) }
+            if paths.count > 1 { multiActions(Array(paths)) }
+            else if let path = paths.first { LocationActions(model: model, path: path) }
         }
         .overlay {
             if model.rows.isEmpty { ContentUnavailableView("No matching locations", systemImage: "folder", description: Text("Change the filter, add a location, or run a scan. Excluded folders have their own section.")) }
@@ -129,7 +151,22 @@ struct MainView: View {
     var inspector: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let item = model.chosen {
+                if let summary = model.selectionSummary {
+                    Text("\(model.selection.count) locations selected").font(.title3.weight(.semibold))
+                    Text(byteLabel(summary.bytes)).font(.system(size: 32, weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text(summary.unmeasured > 0 ? "Measured sizes added, nested folders counted once. \(summary.unmeasured) selected \(summary.unmeasured == 1 ? "location has" : "locations have") no size yet." : "Measured sizes added, nested folders counted once.").font(.caption).foregroundStyle(.secondary)
+                    let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
+                    ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
+                        HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.rawValue).font(.caption); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
+                    }
+                    Divider()
+                    ForEach(summary.items.sorted { ($0.allocatedBytes ?? -1) > ($1.allocatedBytes ?? -1) }.prefix(12), id: \.profile.path) { item in
+                        HStack { Text(item.profile.name).font(.caption).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.caption).monospacedDigit() }
+                    }
+                    if summary.items.count > 12 { Text("and \(summary.items.count - 12) more").font(.caption).foregroundStyle(.secondary) }
+                    HStack { Button("Reveal All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { multiActions(Array(model.selection)) }.frame(maxWidth: 110) }
+                    Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
+                } else if let item = model.chosen {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: item.profile.category.symbol).font(.title2).foregroundStyle(item.profile.category.tint).frame(width: 46, height: 46).background(item.profile.category.tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12)).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
@@ -222,7 +259,14 @@ struct MainView: View {
             let policy = model.preferences.policy(item.profile.path)
             if !policy.tags.isEmpty { Text("Tags: " + policy.tags.joined(separator: ", ")).font(.callout) }
             if !policy.note.isEmpty { Text(policy.note).font(.callout).textSelection(.enabled) }
-            if policy.expected { CapsuleLabel(text: "Growth marked as expected", symbol: "checkmark.circle") }
+            if policy.expected { CapsuleLabel(text: "Growth marked as expected", symbol: "checkmark.circle", color: .stable) }
+            if policy.autoWatched == true {
+                HStack(spacing: 10) {
+                    CapsuleLabel(text: "Added to Watching automatically" + (policy.autoWatchedBytes.map { " · grew \(byteLabel($0))" } ?? ""), symbol: "eye", color: .growing)
+                    Button("Undo") { model.undoAutoWatch(item.profile.path) }.controlSize(.small)
+                }
+                Text("It grew between two comparable scans. Watched locations are checked first on every scan. Mark growth as expected to stop this.").font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
     func contents(_ item: FolderMeasurement) -> some View {

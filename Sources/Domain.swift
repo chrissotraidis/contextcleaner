@@ -90,6 +90,9 @@ struct LocationPolicy: Codable, Equatable {
     var growthThresholdBytes: Int64? = nil
     var tags: [String] = []
     var note = ""
+    /// Set when the app added this location to Watching because it grew; cleared by the user's undo.
+    var autoWatched: Bool? = nil
+    var autoWatchedBytes: Int64? = nil
 }
 struct Preferences: Codable {
     var schema = 1

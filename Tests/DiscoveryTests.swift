@@ -44,6 +44,28 @@ import Foundation
         appearanceRestart.setAppearance("Unexpected")
         check(appearanceRestart.preferences.appearance == "Light", "unrecognized appearance does not corrupt saved preference")
         check(appearanceRestart.preferences.excluded(selected), "appearance update preserves unrelated exclusions")
+        let grower = Classifier.profile(path: home + "/grower", home: home, readMetadata: false)
+        let steady = Classifier.profile(path: home + "/steady", home: home, readMetadata: false)
+        let expected = Classifier.profile(path: home + "/expected", home: home, readMetadata: false)
+        func measure(_ profile: FolderProfile, _ bytes: Int64, _ date: Date) -> FolderMeasurement {
+            var m = FolderMeasurement(profile: profile, observedAt: date, state: .measured, allocatedBytes: bytes, fileCount: 1, processes: [], activityCheckAvailable: true, elapsedSeconds: 0)
+            m.scopeID = "metadata-v1:"; return m
+        }
+        let t0 = Date().addingTimeInterval(-86400), t1 = Date()
+        let watchModel = CleanerModel(home: home, dataRoot: storage.root)
+        watchModel.policy(expected.path) { $0.expected = true }
+        let baseline = ScanRecord(id: "auto-baseline", startedAt: t0, finishedAt: t0, scope: "fixture", complete: true, measurements: [measure(grower, 1_000_000_000, t0), measure(steady, 5_000_000_000, t0), measure(expected, 1_000_000_000, t0)], discoveryNotes: [])
+        let laterScan = ScanRecord(id: "auto-later", startedAt: t1, finishedAt: t1, scope: "fixture", complete: true, measurements: [measure(grower, 3_000_000_000, t1), measure(steady, 5_000_000_100, t1), measure(expected, 9_000_000_000, t1)], discoveryNotes: [])
+        watchModel.records = [baseline, laterScan]
+        watchModel.autoWatch(after: laterScan)
+        check(watchModel.preferences.policy(grower.path).watched && watchModel.preferences.policy(grower.path).autoWatched == true, "a location that grew about 2 GB across comparable scans is watched automatically")
+        check(watchModel.preferences.policy(grower.path).autoWatchedBytes == 2_000_000_000, "the growth that triggered watching is recorded")
+        check(!watchModel.preferences.policy(steady.path).watched, "tiny growth below the floor is not auto-watched")
+        check(!watchModel.preferences.policy(expected.path).watched, "expected growth is never auto-watched")
+        watchModel.undoAutoWatch(grower.path)
+        check(!watchModel.preferences.policy(grower.path).watched && watchModel.preferences.policy(grower.path).autoWatched == nil, "undo removes the automatic watch")
+        let reopened = CleanerModel(home: home, dataRoot: storage.root)
+        check(!reopened.preferences.policy(grower.path).watched && reopened.preferences.policy(expected.path).expected, "undo and expected flags persist across restart")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

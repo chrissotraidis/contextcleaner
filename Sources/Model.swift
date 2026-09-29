@@ -214,6 +214,21 @@ struct FolderRow: Identifiable {
             ?? discovery.profiles.first { $0.path == path }?.displayName
             ?? URL(fileURLWithPath: path).lastPathComponent
     }
+    /// Shows the Folders list, optionally narrowed to one type or answer.
+    func showFolders(_ category: FolderCategory? = nil, filter: LocationFilter = .all) {
+        categoryFilter = category; search = ""; section = .locations
+        locationFilter = filter; selected = nil; inspector = "Overview"
+    }
+    /// The Overview chart's range and selected span, shared with "Where the space went".
+    @Published var chartRange: UsageRange = .week { didSet { chartSpan = nil } }
+    @Published var chartSpan: ClosedRange<Date>?
+    var chartWindow: ClosedRange<Date> { chartRange.window(endingAt: usage.last?.date ?? Date()) }
+    var chartActiveWindow: ClosedRange<Date> { chartSpan ?? chartWindow }
+    var chartWindowPhrase: String {
+        guard let span = chartSpan else { return "last " + chartRange.rawValue }
+        let style = Date.FormatStyle.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour()
+        return span.lowerBound.formatted(style) + " – " + span.upperBound.formatted(style)
+    }
     /// Opens a folder in the Folders list with the inspector showing it.
     func open(_ path: String) {
         categoryFilter = nil; search = ""; locationFilter = .all; section = .locations; selected = path
@@ -244,7 +259,7 @@ struct FolderRow: Identifiable {
             let storage = try AppendStore(root: root)
             let legacy = URL(fileURLWithPath: home + "/Library/Application Support/SpaceCheck/history.json")
             if FileManager.default.fileExists(atPath: legacy.path) { _ = try storage.importLegacy(legacy, home: home) }
-            records = storage.records(); preferences = storage.preferences()
+            records = droppingOldContents(storage.records()); preferences = storage.preferences()
             capacity = storage.capacityReadings()
             discovery = storage.learnedDiscovery() ?? Discovery(profiles: [], notes: [])
             store = storage
@@ -484,15 +499,14 @@ struct FolderRow: Identifiable {
     /// Where used space went since from, by place; plus the disk's own change over the same span.
     struct SpaceWent { var from: Date; var diskChange: Int64?; var places: [SpaceChange]; var explained: Int64 { places.reduce(0) { $0 + $1.bytes } } }
     private var wentCache: (key: String, value: SpaceWent?) = ("", nil)
-    func spaceWent(days: Double = 7) -> SpaceWent? {
-        let key = "\(recordsVersion)|\(discoveryVersion)|\(preferencesVersion)|\(usage.count)|\(days)"
+    func spaceWent(from start: Date, to end: Date) -> SpaceWent? {
+        let key = "\(recordsVersion)|\(discoveryVersion)|\(preferencesVersion)|\(usage.count)|\(Int(start.timeIntervalSince1970))|\(Int(end.timeIntervalSince1970))"
         if wentCache.key == key { return wentCache.value }
         refreshDerived()
         let readings = usage
-        let start = Date().addingTimeInterval(-days * 86400)
-        guard let first = readings.first(where: { $0.date >= start }), let last = readings.last else { wentCache = (key, nil); return nil }
+        guard let first = readings.first(where: { $0.date >= start && $0.date <= end }), let last = readings.last(where: { $0.date <= end && $0.date >= start }), first.date < last.date else { wentCache = (key, nil); return nil }
         let current = derived.saved.values.filter { !preferences.excluded($0.profile.path) && !gone.contains($0.profile.path) }
-        let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, home: home)
+        let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, to: last.date, home: home)
         let value = SpaceWent(from: first.date, diskChange: last.used - first.used, places: places)
         wentCache = (key, value)
         return value
@@ -707,7 +721,7 @@ struct FolderRow: Identifiable {
                 }
             }
             DispatchQueue.main.async {
-                self.records.append(record); self.refreshVolume(); self.refreshGone(); self.loadSimDevices(); self.refreshProjects()
+                self.records = droppingOldContents(self.records + [record]); self.refreshVolume(); self.refreshGone(); self.loadSimDevices(); self.refreshProjects()
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
                 self.autoWatch(after: record)
@@ -738,7 +752,7 @@ struct FolderRow: Identifiable {
                     DispatchQueue.main.async { self.children.append(child); self.inspected[child.profile.path] = child }
                 }
                 DispatchQueue.main.async {
-                    self.records.append(record); self.refreshVolume()
+                    self.records = droppingOldContents(self.records + [record]); self.refreshVolume()
                     do { try self.store?.append(record) } catch { self.error = "Inspection could not be saved: \(error.localizedDescription)" }
                 }
             } catch { DispatchQueue.main.async { self.error = error.localizedDescription } }

@@ -14,7 +14,7 @@
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-0A84FF?logo=apple">
   <img alt="Built with SwiftUI" src="https://img.shields.io/badge/SwiftUI-native-FF9F0A?logo=swift&amp;logoColor=white">
   <img alt="Never deletes files" src="https://img.shields.io/badge/deletes%20files-never-30D158">
-  <img alt="Version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-5E5CE6">
+  <img alt="Version 0.13.0" src="https://img.shields.io/badge/version-0.13.0-5E5CE6">
   <img alt="Preview, not notarized" src="https://img.shields.io/badge/status-preview%2C%20not%20notarized-FFD60A">
 </p>
 
@@ -55,15 +55,18 @@ Context Cleaner answers those questions for the places where this kind of data p
 | **Deletes** | Nothing, ever. You remove things in Finder, and space comes back when you empty the Trash |
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
-## What's new in 0.12
+## What's new in 0.13
 
-- **"You can get back about 614 GiB"**, where 0.11 said 11 GiB. The Overview now counts everything that costs you at most a rebuild: safe folders, old items inside folders, and rebuildable build output.
-- **Old experiments inside build folders.** Codex worktrees and project `build`, `generated` and `work` folders keep one subfolder per build or experiment. Each subfolder untouched for 7+ days is listed with its date and size, such as `evening-20260921` at 33 GiB.
-- **Four answers ranked by cost**: Safe to remove, Rebuildable, Your call, Keep. Build output in a project you're still working on is Rebuildable. Uncommitted work lives in tracked files, so it doesn't hold build output back.
-- **Git evidence for build folders**: "Git ignores this folder". A build folder git tracks is treated as possible source.
-- **Where the space went**: the week's change, split by place (Codex worktrees, task outputs, simulators and more), with new folders counted in full.
+- **One color system.** Green means safe or freed. Soft green is old items, cyan is rebuildable, orange is your call, gray is keep, and purple is ignored. Blue means used space and growth, and red means a scan couldn't read something. Each color means the same thing everywhere.
+- **Where the space went, clickable.** Click a place, such as Codex worktrees, to see its biggest folders, each one click from its card. It follows the chart: pick 24 hours, 7 days or 30 days, click a day, or drag across a span.
+- **A calmer Start here**: five rows per tab with one line of explanation, and the Trash note as a single footer line.
+- **One Scan button**, in the toolbar. The Overview's top line only says how fresh the sizes are.
+- **Scan History you can read.** Each scan shows its net change, the folders that grew and shrank most, and anything it couldn't read. It no longer lists every folder.
+- **Kept is now Ignored**, covering folders you keep out of suggestions and folders you don't scan.
+- **Shorter answers**, written to say what a folder is, what removing it costs, and one thing to do.
+- **Lighter.** Old scans no longer hold their folder listings in memory, and a scan update takes 8.9 ms.
 
-See the [0.12 validation record](docs/validation/Final%20validation%200.12.0.md) for details and limits.
+See the [0.13 validation record](docs/validation/Final%20validation%200.13.0.md).
 
 ## Can I remove it?
 
@@ -86,7 +89,7 @@ The answers come from evidence, not just folder names:
 - **Finished worktrees.** A worktree that's merged, clean and quiet for two weeks says it looks finished and offers `git worktree remove`, which git refuses if anything is uncommitted.
 - **Git ignores it?** Build folders are checked with `git check-ignore`, read-only. Ignored output is rebuildable; a tracked folder named build may be source, so it's your call.
 
-Right-click any folder to **Always Keep This Folder**, **Watch for Growth**, say **Its Growth Is Normal**, or **Stop Scanning This Folder**. Kept and turned-off folders move to the **Kept** view, with their own total.
+Right-click any folder to **Always Keep This Folder**, **Watch for Growth**, say **Its Growth Is Normal**, or **Stop Scanning This Folder**. Kept and turned-off folders move to the **Ignored** view, with their own total.
 
 ## Screenshots
 
@@ -166,7 +169,7 @@ From where the folder is. Each place in [What it looks at](#what-it-looks-at) ha
 
 ### Can I stop it suggesting a folder?
 
-Yes. Right-click it and choose **Always Keep This Folder**, or **Stop Scanning This Folder** to leave it out of scans. Both are listed in **Kept**, with their total.
+Yes. Right-click it and choose **Always Keep This Folder**, or **Stop Scanning This Folder** to leave it out of scans. Both are listed in **Ignored**, with their total.
 
 ### Does it run in the background?
 

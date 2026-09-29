@@ -211,6 +211,10 @@ import Foundation
         let went = spaceChanges(history: history, latest: [grown, fresh, unknown, inner], created: [fresh.profile.path: now.addingTimeInterval(-86400), unknown.profile.path: now.addingTimeInterval(-300 * 86400)], from: from, home: "/Users/x")
         check(went.count == 1 && went.first?.title == "Codex · Worktrees" && went.first?.bytes == 40 * gib && went.first?.newFolders == 1,
               "growth since a date groups by place, counts new folders in full, counts nested folders once, and skips folders first scanned later")
+        var laterGrown = grown; laterGrown.observedAt = now
+        let past = spaceChanges(history: [grown.profile.path: [point(grown.profile.path, 5, 30 * gib), point(grown.profile.path, 2, 35 * gib), point(grown.profile.path, 0, 50 * gib)]],
+                                latest: [laterGrown], created: [:], from: now.addingTimeInterval(-4 * 86400), to: now.addingTimeInterval(-86400), home: "/Users/x")
+        check(past.first?.bytes == 5 * gib, "a span that ended in the past uses the last scan before it ended")
         check(locationHint("/Users/x/.codex/worktrees/kartpad-stab/android/app/build") == "Codex worktree kartpad-stab" && locationHint("/Users/x/GitHub/kartpad/build") == "GitHub/kartpad" && locationHint("/tmp/x") == nil, "same-named projects are told apart by where they live")
         let single = record("single", [cache])
         check(single.folderSummary == cache.profile.displayName, "single-folder scan history identifies the folder")

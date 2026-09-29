@@ -399,7 +399,7 @@ func sizeSourceText(_ m: FolderMeasurement) -> String? {
 /// The verdict: your own choice first, then the folder rules, then what git says about its project.
 func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, now: Date = Date()) -> Advice {
     if policy.isKept {
-        var kept = Advice(verdict: .keep, reason: "You chose to keep this, so it's never suggested for removal.", howTo: "Choose Stop Keeping to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
+        var kept = Advice(verdict: .keep, reason: "You chose to keep this. It's never suggested for removal.", howTo: "Choose Stop Keeping to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
         kept.short = "Kept by you"
         return kept
     }
@@ -484,8 +484,8 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
         }
     } else if project.finished(now: now) {
         let whole = project.removeWorktreeCommand
-        let reason = result.reason + " \(label) looks finished."
-        let howTo = whole == nil ? result.howTo : "The whole worktree looks finished. Removing it with git keeps the repository tidy, and git refuses if anything is uncommitted. Or: " + result.howTo
+        let reason = result.reason + " \(label) looks finished: merged, clean and quiet for two weeks."
+        let howTo = whole == nil ? result.howTo : "Remove the whole worktree with git (it refuses if anything is uncommitted), or just this folder: " + result.howTo.prefix(1).lowercased() + result.howTo.dropFirst()
         result = Advice(verdict: result.verdict, reason: reason, howTo: howTo, command: result.command ?? whole, lastUsed: lastActivity)
     } else {
         result = Advice(verdict: result.verdict, reason: result.reason, howTo: result.howTo, command: result.command, lastUsed: lastActivity)
@@ -501,7 +501,7 @@ func isProjectOutput(_ path: String) -> Bool { isProjectBuildOutput(path) || pat
 private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], now: Date) -> Advice {
     let path = m.profile.path
     let name = m.profile.displayName
-    let trash = "Quit the app that uses it, then move it to the Trash in Finder. Empty the Trash when you're sure."
+    let trash = "Quit the app that uses it, then move it to the Trash."
     let days: (Date?) -> Double? = { $0.map { now.timeIntervalSince($0) / 86400 } }
     // Simulators: Xcode knows best.
     if path.hasSuffix("/CoreSimulator/Devices") {
@@ -543,54 +543,54 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     }
     let openApps = Array(Set(m.processes.map { friendlyApp($0.command) })).sorted().prefix(2).joined(separator: " and ")
     if !m.processes.isEmpty && m.profile.category != .virtualMachine {
-        return Advice(verdict: .check, reason: "\(openApps) had files open here during the last scan, so it's in use right now.", howTo: "Quit \(openApps) first. " + trash, command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "\(openApps) had files open here at the last scan.", howTo: "Quit \(openApps), then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     }
     if policy.expected { return Advice(verdict: .keep, reason: "You said its growth is normal.", howTo: "Right-click it and choose Warn Me When It Grows to get suggestions again.", command: nil, lastUsed: m.latestModifiedAt) }
     let idle = days(m.latestModifiedAt)
-    let lastSeen = m.latestModifiedAt.map { " Last changed \(ageText($0, now: now))." } ?? ""
+    // The card shows when it was last used, so reasons don't repeat it.
     let project = m.profile.project ?? "its project"
     /// Project build output: recreated by building again, but only call it safe once it's clearly idle.
     func projectBuild() -> Advice {
         guard let idle else { return Advice(verdict: .rebuild, reason: "Build output for \(project). The next build recreates it.", howTo: trash, command: nil, lastUsed: nil) }
         if idle < 7 { return Advice(verdict: .rebuild, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). The next build recreates it.", howTo: "Move it to the Trash between builds. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt) }
-        return Advice(verdict: .safe, reason: "Build output for \(project). Building again recreates it.\(lastSeen)", howTo: "Move it to the Trash in Finder. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .safe, reason: "Build output for \(project), last changed \(ageText(m.latestModifiedAt, now: now)). Building again recreates it.", howTo: "Move it to the Trash. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
     }
     /// Caches a tool used this week: removing them now just means downloading or rebuilding what you're using.
     func recentlyUsed(_ what: String) -> Advice? {
         guard let idle, idle < 7 else { return nil }
-        return Advice(verdict: .rebuild, reason: "\(what), used \(ageText(m.latestModifiedAt, now: now)). If you remove it, the tool downloads or rebuilds what it needs, so the next run is slower.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .rebuild, reason: "\(what), still in use. Remove it and the next run is slower while it's rebuilt.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
     }
     switch m.profile.category {
     case .packageCache:
         if let recent = recentlyUsed("This download cache") { return recent }
         let cmd: String? = path.hasSuffix(".npm/_cacache") ? "npm cache clean --force" : path.hasSuffix("Caches/pip") ? "pip cache purge" : path.hasSuffix(".cache/uv") ? "uv cache clean" : path.hasSuffix("Caches/Homebrew") ? "brew cleanup --prune=all" : path.hasSuffix("Caches/Yarn") ? "yarn cache clean" : nil
-        return Advice(verdict: .safe, reason: "A download cache. The tool downloads what it needs again, so the next install is a little slower.\(lastSeen)", howTo: cmd == nil ? trash : "Use the tool's own clean command, or: " + trash, command: cmd, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .safe, reason: "A download cache. The tool fetches what it needs again.", howTo: cmd == nil ? trash : "Run the tool's own clean command, or: " + trash.lowercased(), command: cmd, lastUsed: m.latestModifiedAt)
     case .buildOutput:
         guard path.contains("/DerivedData") else { return projectBuild() }
         if let recent = recentlyUsed("Xcode's build data") { return recent }
-        return Advice(verdict: .safe, reason: "Xcode rebuilds this. The next build of each project takes longer.\(lastSeen)", howTo: "Quit Xcode, then move the folder's contents to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .safe, reason: "Xcode's build data. Xcode rebuilds it; the next build takes longer.", howTo: "Quit Xcode, then move the folder's contents to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .installCache:
         if let recent = recentlyUsed("This install cache") { return recent }
-        return Advice(verdict: .safe, reason: "Saved pieces from installing \(name.replacingOccurrences(of: " install cache", with: "")) on an iPhone or iPad. It's recreated on the next install.\(lastSeen)", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .safe, reason: "Left over from installing \(name.replacingOccurrences(of: " install cache", with: "")) on an iPhone or iPad. The next install recreates it.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
     case .debugSymbols:
         if let idle, idle < 30 { return Advice(verdict: .rebuild, reason: "Debug files for a device you connected \(ageText(m.latestModifiedAt, now: now)). Xcode copies them again the next time you connect it.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
-        return Advice(verdict: .safe, reason: "Debug files for one iPhone or iPad and iOS version. Xcode copies them again the next time you connect it.\(lastSeen)", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .safe, reason: "Debug files for one device and iOS version. Xcode copies them again when you connect it.", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .workspace:
         let rebuildable = ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) }
         if rebuildable { return projectBuild() }
-        if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch output for \(project): logs, test installs and experiments. It can also hold inputs you made by hand.\(lastSeen)", howTo: "Remove old experiment folders you're done with; keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
-        return Advice(verdict: .check, reason: "Project files for \(project). Some may be the only copy of your work.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
+        if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch space for \(project): logs, test installs and experiments. It can also hold files you made by hand.", howTo: "Remove the experiment folders you're done with. Keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
+        return Advice(verdict: .check, reason: "Files in the \(project) project. Some may be your only copy.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     case .backup:
-        return Advice(verdict: .check, reason: "A recovery copy made before a risky change. It may hold the only copy of unfinished work.\(lastSeen)", howTo: "Compare it with the project. If the project has everything, move this to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "Codex copied this before a risky change. Once that work is safely in the project, you don't need it.", howTo: "Open the project and check the change is there. Then move this copy to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .history:
-        return Advice(verdict: .keep, reason: "Your past conversations. Removing them loses that history for good.", howTo: "Archive old conversations in the app instead.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .keep, reason: "Your past conversations. Removing them loses them for good.", howTo: "Archive old conversations in the app instead.", command: nil, lastUsed: m.latestModifiedAt)
     case .model:
-        return Advice(verdict: .check, reason: "Downloaded AI models. You can download them again, but they're large.\(lastSeen)", howTo: "Remove models you don't use from inside \(m.profile.associatedApp).", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "AI models you downloaded. You can get them again, but they're large.", howTo: "Remove models you don't use from inside \(m.profile.associatedApp).", command: nil, lastUsed: m.latestModifiedAt)
     case .appData:
         let app = m.profile.associatedApp
-        return Advice(verdict: .keep, reason: "\(app)'s own library: things like games, saves and settings. Removing the folder can break \(app).", howTo: "Remove what you don't need from inside \(app) instead.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .keep, reason: "\(app)'s own library: games, saves and settings. Removing the folder can break \(app).", howTo: "Remove what you don't need from inside \(app).", command: nil, lastUsed: m.latestModifiedAt)
     case .download:
-        return Advice(verdict: .check, reason: "Files you downloaded. Old installers (.dmg, .pkg, .zip) are usually safe; documents may be your only copy.\(lastSeen)", howTo: "Sort by date in Finder and remove what you recognize.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "Files you downloaded. Old installers (.dmg, .pkg, .zip) are usually safe to remove; documents may be your only copy.", howTo: "In Finder, sort by date and remove what you recognize.", command: nil, lastUsed: m.latestModifiedAt)
     case .virtualMachine:
         let app = m.profile.associatedApp
         let docker = app == "Docker Desktop"
@@ -598,11 +598,11 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
             : app == "Parallels Desktop" ? "In Parallels Desktop's Control Center, delete old snapshots or use Reclaim Disk Space to shrink it. To remove the whole machine, right-click it › Remove."
             : "Remove or shrink it inside \(app)."
         let running = m.processes.isEmpty ? "" : " It's running right now."
-        return Advice(verdict: .check, reason: "A whole virtual computer in \(app). Removing it deletes everything inside it.\(running)\(lastSeen)", howTo: howTo, command: docker ? "docker system df" : nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "A whole virtual computer in \(app). Removing it deletes everything inside.\(running)", howTo: howTo, command: docker ? "docker system df" : nil, lastUsed: m.latestModifiedAt)
     case .simulator:
-        return Advice(verdict: .check, reason: "Simulator data outside a device folder.\(lastSeen)", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "Simulator data outside a device folder.", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
     case .unknown:
-        return Advice(verdict: .check, reason: "Context Cleaner doesn't know what this folder is.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .check, reason: "Context Cleaner doesn't recognize this folder.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     }
 }
 /// Where a project folder lives, so identical project names can be told apart:
@@ -765,7 +765,7 @@ struct SpaceChange: Identifiable, Equatable {
 /// Splits growth since from across places. A folder counts if it was scanned before from (the change since),
 /// or was created after from (its whole size). Folders first scanned later but older than from are unknown and skipped.
 /// Nested folders count once, through their outermost scanned folder.
-func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement], created: [String: Date], from: Date, home: String) -> [SpaceChange] {
+func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement], created: [String: Date], from: Date, to: Date? = nil, home: String) -> [SpaceChange] {
     let measured = latest.filter { $0.state == .measured && $0.allocatedBytes != nil }.sorted { $0.profile.path.count < $1.profile.path.count }
     var accepted: Set<String> = []
     var groups: [String: SpaceChange] = [:]
@@ -773,10 +773,15 @@ func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement]
         let path = normalized(item.profile.path)
         guard !hasAncestor(in: accepted, path) else { continue }
         accepted.insert(path)
-        let now = item.allocatedBytes ?? 0
+        // The size at the end of the span: the latest scan, or the last scan before the span ended.
+        var now = item.allocatedBytes ?? 0
+        if let to, item.observedAt > to {
+            guard let atEnd = history[item.profile.path]?.last(where: { $0.date <= to && $0.bytes != nil })?.bytes else { continue }
+            now = atEnd
+        }
         var delta: Int64, isNew = false
         if let before = history[item.profile.path]?.last(where: { $0.date <= from && $0.bytes != nil })?.bytes { delta = now - before }
-        else if let born = created[item.profile.path], born >= from { delta = now; isNew = true }
+        else if let born = created[item.profile.path], born >= from, born <= (to ?? .distantFuture) { delta = now; isNew = true }
         else { continue }
         guard delta != 0 else { continue }
         let title = changePlace(item, home: home)
@@ -786,7 +791,7 @@ func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement]
         group.examples.append((item.profile.displayName, item.profile.path, delta))
         groups[title] = group
     }
-    return groups.values.map { g in var g = g; g.examples = g.examples.sorted { $0.bytes > $1.bytes }.prefix(3).map { $0 }; return g }
+    return groups.values.map { g in var g = g; g.examples = g.examples.sorted { g.bytes >= 0 ? $0.bytes > $1.bytes : $0.bytes < $1.bytes }.prefix(5).map { $0 }; return g }
         .sorted { $0.bytes > $1.bytes }
 }
 /// The place a folder belongs to, for grouping changes: its Coverage place, or its app.

@@ -4,14 +4,14 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Kept", needsAttention = "Couldn't Scan", history = "Scan History"
+    case overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "Scan History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .overview: return "square.grid.2x2"
         case .locations: return "folder"
         case .watching: return "eye"
-        case .kept: return "hand.raised"
+        case .kept: return "eye.slash"
         case .needsAttention: return "exclamationmark.triangle"
         case .history: return "clock"
         }
@@ -21,9 +21,9 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .overview: return "How full your disk is, and what's filling it."
         case .locations: return "Every folder Context Cleaner knows. Big folders you haven't used lately come first."
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
-        case .kept: return "Folders you chose to keep or not scan. They're never suggested for removal."
+        case .kept: return "Folders you keep out of suggestions, or don't scan at all. Context Cleaner leaves them alone."
         case .needsAttention: return "Folders a scan couldn't read, with a fix for each."
-        case .history: return "Each scan: what it checked, when, and what it found."
+        case .history: return "What each scan found: which folders grew, which shrank, and what couldn't be read."
         }
     }
     /// Sidebar icons use a status hue only where the destination is itself a status.
@@ -77,7 +77,7 @@ extension FolderMeasurement {
 
 extension Color {
     /// Old items inside folders: a softer green than Safe, since they cost at most a rebuild.
-    static let insideTint = Color.green.opacity(0.55)
+    static let insideTint = Color(red: 0.52, green: 0.80, blue: 0.56)
 }
 extension Verdict {
     /// Green: nothing lost. Teal: costs a rebuild. Orange: your call. Gray: leave it to its app.
@@ -218,9 +218,16 @@ struct VerdictCard: View {
 
 extension Color {
     /// Reserved status colors. Never used as category hues.
+    /// Red: a scan couldn't read something. Nothing else is red.
     static let attention = Color.red
-    static let growing = Color.orange
+    /// Blue: used space, and growth in it. The chart's used area is the same blue.
+    static let growing = Color.blue
+    /// Green: free space, and space freed.
     static let stable = Color.green
+    /// Orange: needs you. Your call, and warnings like an old scan or a waiting permission dialog.
+    static let caution = Color.orange
+    /// Purple: folders you keep out of suggestions or don't scan.
+    static let ignored = Color.purple
 }
 
 extension FolderCategory {
@@ -272,7 +279,7 @@ struct LocationActions: View {
         Button("Scan Again") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
         Button(policy.isKept ? "Stop Keeping" : "Always Keep This Folder") { model.policy(path) { $0.isKept.toggle() } }
-            .help(policy.isKept ? "Suggest this folder again when it looks safe to remove" : "Keep this folder out of every suggestion. It moves to Kept.")
+            .help(policy.isKept ? "Suggest this folder again when it looks safe to remove" : "Keep this folder out of every suggestion. It moves to Ignored.")
         Button(policy.isWatched ? "Stop Watching" : "Watch for Growth") { model.policy(path) { $0.isWatched.toggle() } }
             .help("Watched folders are scanned first and listed in Watchlist")
         Button(policy.expected ? "Warn Me When It Grows" : "Its Growth Is Normal") { model.policy(path) { $0.expected.toggle() } }

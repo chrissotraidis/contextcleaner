@@ -29,6 +29,20 @@ struct ChildChange: Identifiable {
     var event: String
     var delta: Int64?
 }
+/// Keeps each folder's child listing only for its most recent scans, in memory. Sizes and dates stay for history;
+/// the saved scan files are never changed.
+func droppingOldContents(_ records: [ScanRecord], keep: Int = 2) -> [ScanRecord] {
+    var seen: [String: Int] = [:]
+    var result = records
+    for r in result.indices.sorted(by: { result[$0].finishedAt > result[$1].finishedAt }) {
+        for m in result[r].measurements.indices where result[r].measurements[m].contents != nil {
+            let path = result[r].measurements[m].profile.path
+            seen[path, default: 0] += 1
+            if seen[path]! > keep { result[r].measurements[m].contents = nil }
+        }
+    }
+    return result
+}
 func childChanges(_ path: String, records: [ScanRecord]) -> [ChildChange]? {
     let measures = records.flatMap(\.measurements).filter { $0.profile.path == path }.sorted { $0.observedAt < $1.observedAt }
     guard measures.count >= 2 else { return nil }

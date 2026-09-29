@@ -132,7 +132,7 @@ struct MainView: View {
             // Reading another app's data or a protected folder makes macOS ask once, and the scan waits for the answer.
             if protectedPlace(model.progress) {
                 HStack(alignment: .top, spacing: 10) {
-                    Image(systemName: "hand.raised.fill").foregroundStyle(Color.growing).accessibilityHidden(true)
+                    Image(systemName: "hand.raised.fill").foregroundStyle(Color.caution).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("macOS may be asking for permission").font(.callout.weight(.semibold))
                         Text("If a dialog asks to access data from other apps or your Documents, Desktop or Downloads folder, the scan waits for your answer. Allow includes those folders; Don't Allow skips them. Either way it only reads sizes.")
@@ -143,14 +143,14 @@ struct MainView: View {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
                     }.controlSize(.small)
                         .help("Opens Privacy & Security › Full Disk Access. Turning Context Cleaner on there lets it read sizes everywhere without asking each time. Your choice; it still never changes files.")
-                }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.growing.opacity(0.10))
+                }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.caution.opacity(0.10))
             }
             }
         } else if let result = model.lastResult {
             let stopped = result.hasPrefix("Stopped")
             let unreadable = result.contains("couldn't be read")
             HStack(spacing: 10) {
-                Image(systemName: stopped ? "stop.circle" : unreadable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").foregroundStyle(stopped ? Color.growing : unreadable ? Color.attention : Color.accentColor).accessibilityHidden(true)
+                Image(systemName: stopped ? "stop.circle" : unreadable ? "exclamationmark.triangle.fill" : "checkmark.circle.fill").foregroundStyle(stopped ? Color.caution : unreadable ? Color.attention : Color.accentColor).accessibilityHidden(true)
                 Text(result).font(.callout.weight(.medium))
                 Spacer()
                 if model.overview.growthCount > 0 { Button("Show Growing") { model.categoryFilter = nil; model.search = ""; model.section = .locations; model.locationFilter = .growing }.controlSize(.small) }
@@ -230,19 +230,23 @@ struct MainView: View {
             .menuStyle(.borderlessButton).fixedSize().font(.caption)
             .help("Biggest unused first weighs each folder's size by how long it's gone unused, so big forgotten folders come first")
     }
-    /// The Kept view: what you've set aside, and how much of the disk it is.
+    /// The Ignored view: folders you keep out of suggestions, and folders you don't scan, with their share of the disk.
     var keptBanner: some View {
         let summary = model.keptSummary
         let total = Double(max(model.volume?.total ?? 1, 1))
         func share(_ bytes: Int64) -> String { (Double(bytes) / total).formatted(.percent.precision(.fractionLength(0...1))) }
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                VerdictTile(title: "Kept by you", value: byteLabel(summary.keptBytes), detail: "\(summary.kept.count) \(summary.kept.count == 1 ? "folder" : "folders") · \(share(summary.keptBytes)) of your disk", symbol: "hand.raised.fill", tint: .purple, selected: false) {}
-                    .allowsHitTesting(false)
-                VerdictTile(title: "Not scanned", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) · last known size", symbol: "eye.slash", tint: .secondary, selected: false) {}
-                    .allowsHitTesting(false)
+                if !summary.kept.isEmpty {
+                    VerdictTile(title: "Never suggested", value: byteLabel(summary.keptBytes), detail: "\(summary.kept.count) \(summary.kept.count == 1 ? "folder" : "folders") · \(share(summary.keptBytes)) of your disk", symbol: "hand.raised.fill", tint: .ignored, selected: false) {}
+                        .allowsHitTesting(false)
+                }
+                if !summary.off.isEmpty {
+                    VerdictTile(title: "Not scanned", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) of your disk · last known size", symbol: "eye.slash", tint: .ignored, selected: false) {}
+                        .allowsHitTesting(false)
+                }
             }
-            Text("Right-click any folder and choose Always Keep This Folder. Kept folders are still measured so you can see what they hold; they just never show up as something to remove.")
+            Text("Add a folder by right-clicking it: Always Keep This Folder, or Stop Scanning This Folder. Right-click it here to undo.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 16).padding(.bottom, 8)
     }
@@ -274,7 +278,7 @@ struct MainView: View {
                 Group {
                     if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
                     else if row.policy.excluded { Label("Not scanned", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
-                    else if row.policy.isKept { Label("Kept by you", systemImage: "hand.raised.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.purple) }
+                    else if row.policy.isKept { Label("Never suggested", systemImage: "hand.raised.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.ignored) }
                     else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
                     else {
                         VStack(alignment: .leading, spacing: 2) {
@@ -398,7 +402,7 @@ struct MainView: View {
             Text("Each row says why and offers one fix. Nothing is changed until you choose it.").font(.callout).foregroundStyle(.secondary)
         } else {
             Text(byteLabel(uniqueAllocatedTotal(measured))).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
-            Text("in \(measured.count) scanned \(measured.count == 1 ? "folder" : "folders")\(pending > 0 ? " · \(pending) not scanned yet" : "")").font(.callout).foregroundStyle(.secondary)
+            Text(model.section == .kept ? "in \(model.keptSummary.kept.count + model.keptSummary.off.count) \(model.keptSummary.kept.count + model.keptSummary.off.count == 1 ? "folder" : "folders") you set aside, last known sizes" : "in \(measured.count) scanned \(measured.count == 1 ? "folder" : "folders")\(pending > 0 ? " · \(pending) not scanned yet" : "")").font(.callout).foregroundStyle(.secondary)
             if let biggest, let bytes = biggest.allocatedBytes {
                 Divider()
                 Text("Biggest").font(.headline)
@@ -442,7 +446,7 @@ struct MainView: View {
             Button { model.policy(path) { $0.isWatched.toggle() } } label: { Label(policy.isWatched ? "Watching" : "Watch", systemImage: policy.isWatched ? "eye.fill" : "eye") }
                 .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")
             Button { model.policy(path) { $0.isKept.toggle() } } label: { Label(policy.isKept ? "Kept" : "Keep", systemImage: policy.isKept ? "hand.raised.fill" : "hand.raised") }
-                .help(policy.isKept ? "Stop keeping: suggest it again when it looks safe to remove" : "Keep this folder: it's never suggested for removal and moves to Kept")
+                .help(policy.isKept ? "Stop keeping: suggest it again when it looks safe to remove" : "Keep this folder: it's never suggested for removal and moves to Ignored")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
         (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -635,33 +639,57 @@ struct MainView: View {
         let previous = records.dropFirst(index + 1).first { $0.scope == record.scope && $0.complete }
         let changes = scanDelta(record, previous: previous)
         return DisclosureGroup {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
+                let unreadable = record.measurements.filter { [.inaccessible, .limited, .failed].contains($0.state) }
                 if let changes {
-                    let delta = changes.grew.reduce(Int64(0)) { $0 + $1.delta } + changes.shrank.reduce(Int64(0)) { $0 + $1.delta }
-                    Text(delta == 0 ? "Same total size as the scan before." : signedBytes(delta) + " compared with the scan before, in folders both scans read.").font(.callout)
-                } else { Text("Nothing earlier to compare with yet.").font(.callout).foregroundStyle(.secondary) }
-                ForEach(record.measurements.prefix(40)) { item in
-                    HStack(alignment: .top) {
-                        Text(item.profile.displayName).lineLimit(1).help(item.profile.path)
-                        Spacer()
-                        Text(item.state == .measured ? item.allocatedBytes.map(byteLabel) ?? "Size unknown" : item.state == .cancelled ? "Stopped" : item.state.problem).monospacedDigit().foregroundStyle(item.state == .measured || item.state == .cancelled ? Color.secondary : Color.attention)
-                    }.font(.caption)
+                    let grew = changes.grew.reduce(Int64(0)) { $0 + $1.delta }, shrank = changes.shrank.reduce(Int64(0)) { $0 + $1.delta }
+                    Text(grew + shrank == 0 ? "No change from the scan before." : "\(signedBytes(grew + shrank)) since the scan before: \(changes.grew.count) grew, \(changes.shrank.count) shrank, the rest unchanged.")
+                        .font(.callout)
+                    if !changes.grew.isEmpty { historyChanges("Grew most", changes.grew.prefix(6).map { ($0.path, $0.delta) }, tint: .growing) }
+                    if !changes.shrank.isEmpty { historyChanges("Shrank most", changes.shrank.prefix(4).map { ($0.path, $0.delta) }, tint: .stable) }
+                } else {
+                    Text("The first scan of these places. Biggest folders it found:").font(.callout)
+                    let biggest = record.measurements.filter { $0.state == .measured }.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }.prefix(5)
+                    historyChanges(nil, biggest.map { ($0.profile.path, $0.allocatedBytes ?? 0) }, tint: .secondary, signed: false)
                 }
-                if record.measurements.count > 40 { Text("and \(record.measurements.count - 40) more").font(.caption).foregroundStyle(.secondary) }
+                if !unreadable.isEmpty {
+                    Label("\(unreadable.count) couldn't be read: " + unreadable.prefix(3).map(\.profile.displayName).joined(separator: ", ") + (unreadable.count > 3 ? "…" : ""), systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(Color.attention)
+                }
                 Text([record.freeBytes.map { byteLabel($0) + " free on disk at the time" }, "took " + elapsedLabel(record.finishedAt.timeIntervalSince(record.startedAt))].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
-            }.padding(.vertical, 6)
+            }.padding(.vertical, 6).padding(.leading, 26)
         } label: {
             HStack(spacing: 12) {
                 let problem = !record.wasStopped && record.measurements.contains { [.inaccessible, .limited, .failed].contains($0.state) }
                 Image(systemName: record.wasStopped ? "stop.circle" : problem ? "exclamationmark.triangle" : "checkmark.circle")
-                    .foregroundStyle(record.wasStopped ? Color.growing : problem ? Color.attention : Color.accentColor).accessibilityHidden(true)
+                    .foregroundStyle(record.wasStopped ? Color.caution : problem ? Color.attention : Color.accentColor).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.folderSummary).font(.headline).lineLimit(1)
                     Text(record.resultSummary).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text(record.finishedAt.formatted(date: .omitted, time: .shortened)).font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                if let changes {
+                    let net = changes.grew.reduce(Int64(0)) { $0 + $1.delta } + changes.shrank.reduce(Int64(0)) { $0 + $1.delta }
+                    if net != 0 { Text(signedBytes(net)).font(.callout).monospacedDigit().foregroundStyle(net > 0 ? Color.growing : .stable) }
+                }
+                Text(record.finishedAt.formatted(date: .omitted, time: .shortened)).font(.callout).foregroundStyle(.secondary).monospacedDigit().frame(minWidth: 72, alignment: .trailing)
             }.padding(.vertical, 4)
+        }
+    }
+    /// A few folders with their change (or size), each one click from its card.
+    func historyChanges(_ title: String?, _ items: [(String, Int64)], tint: Color, signed: Bool = true) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let title { Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+            ForEach(items, id: \.0) { path, bytes in
+                Button { model.open(path) } label: {
+                    HStack(spacing: 8) {
+                        Text(model.displayName(path)).lineLimit(1)
+                        if let hint = locationHint(path) { Text(hint).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                        Spacer(minLength: 8)
+                        Text(signed ? signedBytes(bytes) : byteLabel(bytes)).monospacedDigit().foregroundStyle(tint)
+                    }.font(.callout).frame(maxWidth: 560, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).help(path)
+            }
         }
     }
     var footer: some View {

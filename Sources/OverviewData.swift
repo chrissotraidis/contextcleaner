@@ -360,11 +360,11 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
     let label = project.isWorktree ? "Worktree \(project.name)" : "Project \(project.name)"
     let evidence = label + ": " + project.summary(now: now) + "."
     if project.active(now: now) {
-        let reason = "You're still working on \(project.name): " + project.summary(now: now) + "."
-        result = Advice(verdict: .check, reason: reason, howTo: result.verdict == .safe ? "Wait until you're done with \(project.name). " + result.howTo : result.howTo, command: result.command, lastUsed: lastActivity)
+        let reason = "\(label) has recent activity, so you're probably still using it."
+        result = Advice(verdict: .check, reason: reason, howTo: "Wait until you're done with \(project.name). " + result.howTo, command: result.command, lastUsed: lastActivity)
     } else if project.finished(now: now) {
         let whole = project.removeWorktreeCommand
-        let reason = result.reason + " \(label) looks finished: " + project.summary(now: now) + "."
+        let reason = result.reason + " \(label) looks finished."
         let howTo = whole == nil ? result.howTo : "The whole worktree looks finished. Removing it with git keeps the repository tidy, and git refuses if anything is uncommitted. Or: " + result.howTo
         result = Advice(verdict: result.verdict, reason: reason, howTo: howTo, command: result.command ?? whole, lastUsed: lastActivity)
     } else {

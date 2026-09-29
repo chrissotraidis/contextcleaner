@@ -19,7 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .overview: return "How full your disk is, and what's filling it."
-        case .locations: return "Every folder Context Cleaner knows, largest first."
+        case .locations: return "Every folder Context Cleaner knows. Big folders you haven't used lately come first."
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
         case .kept: return "Folders you chose to keep or not scan. They're never suggested for removal."
         case .needsAttention: return "Folders a scan couldn't read, with a fix for each."

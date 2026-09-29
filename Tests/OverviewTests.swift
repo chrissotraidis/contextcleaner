@@ -99,7 +99,7 @@ import Foundation
         // Git evidence: an active project is never called safe; a finished worktree offers git's own removal.
         let activeProject = ProjectActivity(root: "/fixture/kartpad", isWorktree: false, mainRepository: nil, registered: nil, branch: "codex/x", defaultBranch: "main", lastCommit: now.addingTimeInterval(-86400), merged: false, uncommitted: 3)
         let activeAdvice = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
-        check(activeAdvice.verdict == .check && activeAdvice.reason.contains("still working on kartpad") && activeAdvice.evidence.first?.contains("3 uncommitted changes") == true && activeAdvice.lastUsed == activeProject.lastCommit,
+        check(activeAdvice.verdict == .check && activeAdvice.reason.contains("probably still using it") && activeAdvice.evidence.first?.contains("3 uncommitted changes") == true && activeAdvice.lastUsed == activeProject.lastCommit,
               "build output of a project with fresh commits or uncommitted changes is check first, with the evidence")
         let finishedWorktree = ProjectActivity(root: "/fixture/wt/kartpad-diag", isWorktree: true, mainRepository: "/fixture/kartpad", registered: true, branch: "codex/diag", defaultBranch: "main", lastCommit: now.addingTimeInterval(-20 * 86400), merged: true, uncommitted: 0)
         let finishedAdvice = advice(for: folder("/fixture/wt/kartpad-diag/work", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: finishedWorktree, now: now)

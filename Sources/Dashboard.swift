@@ -566,34 +566,40 @@ struct Dashboard: View {
         return Panel(title: "How long it's sat unused", symbol: "hourglass") {
             Text(stale > 0 ? "\(byteLabel(stale)) hasn't been touched in a month or more; \(byteLabel(staleSafe)) of it looks safe to remove." : "Most scanned space was used this month.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Chart {
-                ForEach(buckets) { bucket in
-                    ForEach(Verdict.allCases) { verdict in
-                        BarMark(x: .value("Last used", bucket.title), y: .value("Size", Double(bucket.bytes[verdict] ?? 0) / gibibyte))
-                            .foregroundStyle(by: .value("Answer", verdict.title))
-                            .cornerRadius(3)
-                            .opacity(hoveredBucket == nil || hoveredBucket == bucket.title ? 1 : 0.4)
-                    }
+            let largest = Double(max(buckets.map(\.total).max() ?? 1, 1))
+            VStack(spacing: 7) {
+                ForEach(buckets.filter { $0.total > 0 }) { bucket in
+                    let breakdown = Verdict.allCases.compactMap { v in (bucket.bytes[v] ?? 0) > 0 ? "\(v.title) \(byteLabel(bucket.bytes[v]!))" : nil }.joined(separator: " · ")
+                    Button { show(filter: .all) } label: {
+                        HStack(spacing: 10) {
+                            Text(bucket.title).frame(width: 92, alignment: .leading)
+                            GeometryReader { geo in
+                                HStack(spacing: 1) {
+                                    ForEach(Verdict.allCases) { verdict in
+                                        let bytes = bucket.bytes[verdict] ?? 0
+                                        if bytes > 0 { Rectangle().fill(verdict.tint).frame(width: max(3, geo.size.width * Double(bytes) / largest)) }
+                                    }
+                                    Spacer(minLength: 0)
+                                }.clipShape(RoundedRectangle(cornerRadius: 3))
+                            }.frame(height: 14)
+                            Text(byteLabel(bucket.total)).monospacedDigit().foregroundStyle(.secondary).frame(width: 84, alignment: .trailing)
+                        }.font(.callout).padding(.vertical, 2).contentShape(Rectangle())
+                            .opacity(hoveredBucket == nil || hoveredBucket == bucket.title ? 1 : 0.55)
+                    }.buttonStyle(.plain)
+                        .onHover { inside in hoveredBucket = inside ? bucket.title : (hoveredBucket == bucket.title ? nil : hoveredBucket) }
+                        .help(breakdown)
+                        .accessibilityLabel("\(bucket.title): \(byteLabel(bucket.total)). \(breakdown)")
                 }
             }
-            .chartForegroundStyleScale(domain: Verdict.allCases.map(\.title), range: Verdict.allCases.map(\.tint))
-            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
-                AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))).font(.caption) } }
-            } }
-            .chartLegend(position: .bottom, alignment: .leading)
-            .chartOverlay { proxy in
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        if case .active(let point) = phase { hoveredBucket = proxy.value(atX: point.x, as: String.self) } else { hoveredBucket = nil }
-                    }
-                    .onTapGesture { show(filter: .all) }
-            }
-            .frame(height: 170)
-            .accessibilityLabel("Scanned space by time since last use: " + buckets.map { "\($0.title) \(byteLabel($0.total))" }.joined(separator: ", "))
+            HStack(spacing: 12) {
+                ForEach(Verdict.allCases) { verdict in
+                    HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(verdict.tint).frame(width: 9, height: 9); Text(verdict.title) }
+                }
+                Spacer()
+            }.font(.caption).foregroundStyle(.secondary)
             Text(hoveredBucket.flatMap { title in buckets.first { $0.title == title } }.map { bucket in
-                "\(bucket.title): \(byteLabel(bucket.total)) · " + Verdict.allCases.compactMap { v in (bucket.bytes[v] ?? 0) > 0 ? "\(v.title) \(byteLabel(bucket.bytes[v]!))" : nil }.joined(separator: " · ")
-            } ?? "Folders are listed biggest and longest unused first. Click the chart to see them.")
+                "\(bucket.title): " + Verdict.allCases.compactMap { v in (bucket.bytes[v] ?? 0) > 0 ? "\(v.title) \(byteLabel(bucket.bytes[v]!))" : nil }.joined(separator: " · ")
+            } ?? "Last used means the newest file change or git commit. Click a row to see those folders.")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }

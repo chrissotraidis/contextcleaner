@@ -162,10 +162,11 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
-                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "everything except what you keep", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
+                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "except what you keep", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
                     ForEach(Verdict.allCases) { verdict in
                         let total = model.verdictTotal(verdict)
-                        VerdictTile(title: verdict.title, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders") · \(verdict.meaning)", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
+                        VerdictTile(title: verdict.title, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders")", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
+                            .help(verdict.title + ": " + verdict.meaning)
                     }
                 }
                 HStack(spacing: 12) {
@@ -272,7 +273,8 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(lastUsedText(row)).font(.callout)
                         .foregroundStyle(row.advice.lastUsed == nil ? Color.secondary : Color.primary)
-                    if let source = sizeSourceText(row.measurement) { Text(source).font(.caption).foregroundStyle(.secondary) }
+                    // Only say where the size came from when it isn't today's scan.
+                    if let source = sizeSourceText(row.measurement), source != "size from today" { Text(source).font(.caption).foregroundStyle(.secondary) }
                 }.help(row.advice.lastUsed == nil && row.measurement.state == .measured && row.measurement.scopeID != xcodeLiveScope
                        ? "Older scans didn't record when files here last changed. Scan this folder to find out."
                        : "Last used: the newest change a scan saw inside it, or when Xcode last ran a test device.")
@@ -414,6 +416,7 @@ struct MainView: View {
         }
         HStack(alignment: .firstTextBaseline) {
             Text(item.state == .pending ? "Not scanned" : item.allocatedBytes.map(byteLabel) ?? "Size unknown").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.5)
             Spacer()
             Button { model.policy(path) { $0.isWatched.toggle() } } label: { Label(policy.isWatched ? "Watching" : "Watch", systemImage: policy.isWatched ? "eye.fill" : "eye") }
                 .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")

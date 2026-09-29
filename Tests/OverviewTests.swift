@@ -120,8 +120,22 @@ import Foundation
         check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 0.2, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "build output changed today is check first")
         check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "unknown last use is never called safe")
         check(advice(for: folder("/fixture/kartpad/work", .workspace, lastChanged: 90), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "work folders may hold hand-made inputs")
-        let npm = advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 1), policy: LocationPolicy(), devices: [:], now: now)
-        check(npm.verdict == .safe && npm.command == "npm cache clean --force", "package caches are safe and offer the tool's own clean command")
+        let npm = advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 10), policy: LocationPolicy(), devices: [:], now: now)
+        check(npm.verdict == .safe && npm.command == "npm cache clean --force" && npm.short == "Unused for 10 days", "an idle package cache is safe and offers the tool's own clean command")
+        let freshCache = advice(for: folder("/fixture/.gradle/caches", .packageCache, lastChanged: 0.2), policy: LocationPolicy(), devices: [:], now: now)
+        check(freshCache.verdict == .check && freshCache.short == "Used today" && freshCache.reason.contains("still relying on it"), "a cache a tool used today is never called safe")
+        var derived = folder("/fixture/Library/Developer/Xcode/DerivedData", .buildOutput, lastChanged: 0.1)
+        derived.contents = FolderContents(children: [
+            ChildSummary(name: "OldGame-abc", directory: true, identity: "1", bytes: 3 * gib, files: 10, modifiedAt: now.addingTimeInterval(-60 * 86400)),
+            ChildSummary(name: "Current-def", directory: true, identity: "2", bytes: 5 * gib, files: 10, modifiedAt: now),
+            ChildSummary(name: "Tiny-ghi", directory: true, identity: "3", bytes: 1_000, files: 1, modifiedAt: now.addingTimeInterval(-90 * 86400))],
+            fileTypes: [], listedChildren: 3, retainedLimit: 512, omittedEntries: 0)
+        let derivedAdvice = advice(for: derived, policy: LocationPolicy(), devices: [:], now: now)
+        check(derivedAdvice.verdict == .check && derivedAdvice.staleItems.map(\.name) == ["OldGame-abc"] && derivedAdvice.staleBytes == 3 * gib && derivedAdvice.short == "3 GiB unused inside",
+              "a busy cache points at the old items inside it, ignoring tiny ones")
+        check(trashCommand(["/a/it's here", "/b"]) == #"mv -n '/a/it'\''s here' '/b' ~/.Trash/"#, "the Trash command quotes every path and never overwrites")
+        check(usedPercentText(0.995) == "99.5%" && usedPercentText(0.5) == "50%" && usedPercentText(0.9999) == "99.9%" && usedPercentText(1) == "100%", "a nearly full disk never reads as 100% used")
+        check(friendlyApp("prl_vm_app") == "Parallels Desktop" && friendlyApp("node") == "node", "processes get the names people know")
         check(advice(for: folder("/fixture/Library/Application Support/OpenEmu", .appData, lastChanged: 200), policy: LocationPolicy(), devices: [:], now: now).verdict == .keep, "app libraries are kept however old")
         check(advice(for: folder("/fixture/.codex/backups/x", .backup, lastChanged: 300), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "recovery copies are never called safe")
         var busy = folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50); busy.processes = [ProcessEvidence(pid: 1, command: "node", access: "r", path: "/fixture/.npm/_cacache/x")]

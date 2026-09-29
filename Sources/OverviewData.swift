@@ -302,7 +302,7 @@ func ageText(_ date: Date?, now: Date = Date()) -> String {
 struct Advice: Equatable {
     let verdict: Verdict
     /// Why, in one sentence.
-    let reason: String
+    var reason: String
     /// How to remove it yourself, safely.
     let howTo: String
     /// Optional Terminal command the user may run themselves.
@@ -311,6 +311,43 @@ struct Advice: Equatable {
     let lastUsed: Date?
     /// Plain sentences behind the answer, for example what git says about the project.
     var evidence: [String] = []
+    /// A few words for the list: "Used today", "Open in Parallels Desktop", "12 GiB unused inside".
+    var short: String = ""
+    /// Items inside a folder you're still using that haven't changed in 30+ days. You may remove these yourself.
+    var staleItems: [StaleItem] = []
+    var staleBytes: Int64 { staleItems.reduce(0) { $0 + $1.bytes } }
+}
+struct StaleItem: Equatable, Identifiable {
+    var id: String { path }
+    let path: String
+    let name: String
+    let bytes: Int64
+    let modifiedAt: Date?
+}
+/// A command that moves items to the Trash (reversible; nothing is erased). Context Cleaner only copies it.
+func trashCommand(_ paths: [String]) -> String {
+    let quoted = paths.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    return "mv -n " + quoted.joined(separator: " ") + " ~/.Trash/"
+}
+/// Readable names for processes that hold files open.
+func friendlyApp(_ command: String) -> String {
+    let c = command.lowercased()
+    if c.hasPrefix("prl_") || c.contains("parallels") { return "Parallels Desktop" }
+    if c.contains("docker") || c.hasPrefix("com.docke") || c == "vpnkit" || c.contains("virtualization") { return "Docker Desktop" }
+    if c == "java" { return "Gradle or Android Studio" }
+    if c.hasPrefix("xcode") || c == "xcbbuildservice" || c == "sourcekit-lsp" { return "Xcode" }
+    if c.contains("simulator") || c == "launchd_sim" { return "Simulator" }
+    if c.hasPrefix("lm studio") || c.hasPrefix("lmstudio") { return "LM Studio" }
+    if c.hasPrefix("steam") { return "Steam" }
+    return command
+}
+/// Items at the top level of a folder that haven't changed in 30+ days, biggest first. From the last scan's contents.
+func staleChildren(_ m: FolderMeasurement, now: Date, days: Double = 30, minimum: Int64 = 50 * 1_048_576) -> [StaleItem] {
+    guard let children = m.contents?.children else { return [] }
+    return children.filter { child in
+        guard child.bytes >= minimum, let modified = child.modifiedAt else { return false }
+        return now.timeIntervalSince(modified) >= days * 86400
+    }.sorted { $0.bytes > $1.bytes }.map { StaleItem(path: m.profile.path + "/" + $0.name, name: $0.name, bytes: $0.bytes, modifiedAt: $0.modifiedAt) }
 }
 /// Summary of the simulators Xcode knows about, for the Devices folder.
 struct SimSummary: Equatable { var total = 0; var idle = 0; var idleBytes: Int64 = 0; var bytes: Int64 = 0; var unavailable = 0 }
@@ -358,8 +395,66 @@ func sizeSourceText(_ m: FolderMeasurement) -> String? {
 /// The verdict: your own choice first, then the folder rules, then what git says about its project.
 func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, now: Date = Date()) -> Advice {
     if policy.isKept {
-        return Advice(verdict: .keep, reason: "You chose to keep this, so it's never suggested for removal.", howTo: "Choose Stop Keeping to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
+        var kept = Advice(verdict: .keep, reason: "You chose to keep this, so it's never suggested for removal.", howTo: "Choose Stop Keeping to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
+        kept.short = "Kept by you"
+        return kept
     }
+    var result = projectAdvice(for: m, policy: policy, devices: devices, project: project, now: now)
+    // A folder you're still using may hold old items that tools recreate. Point at those instead of the whole folder.
+    let rebuildable: Bool = {
+        switch m.profile.category {
+        case .packageCache, .installCache, .buildOutput, .debugSymbols, .model: return true
+        case .workspace: return ["/build", "/generated", "/intermediates", "/.cxx"].contains { m.profile.path.hasSuffix($0) }
+        default: return false
+        }
+    }()
+    if result.verdict == .check, rebuildable, m.state == .measured {
+        let stale = staleChildren(m, now: now)
+        let total = stale.reduce(Int64(0)) { $0 + $1.bytes }
+        if total >= 1 << 30 {
+            let names = stale.prefix(2).map(\.name).joined(separator: ", ")
+            result.reason += " Inside it, \(byteLabel(total)) hasn't changed in 30+ days: \(stale.count) \(stale.count == 1 ? "item" : "items"), like \(names)." + (m.profile.category == .model ? " Removing a model means downloading it again if you need it." : " Its tool recreates them if they're needed again.")
+            result.staleItems = stale
+        }
+    }
+    result.short = shortReason(result, m: m, project: project, now: now)
+    return result
+}
+/// A few words for the Folders list, matching the reason.
+private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActivity?, now: Date) -> String {
+    if !a.staleItems.isEmpty { return "\(byteLabel(a.staleBytes)) unused inside" }
+    if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return "Open in \(app)" }
+    if let project, [.workspace, .buildOutput].contains(m.profile.category) {
+        if let u = project.uncommitted, u > 0 { return "Uncommitted work" }
+        if project.active(now: now) { return "Active project" }
+        if project.finished(now: now) { return "Project finished" }
+    }
+    let idle = a.lastUsed.map { now.timeIntervalSince($0) / 86400 }
+    switch a.verdict {
+    case .safe:
+        guard let idle, idle >= 2 else { return "Its tool recreates it" }
+        return "Unused for " + ageText(a.lastUsed, now: now).replacingOccurrences(of: " ago", with: "")
+    case .keep:
+        switch m.profile.category {
+        case .history: return "Your chat history"
+        case .appData: return "App's own library"
+        default: return "Growth expected"
+        }
+    case .check:
+        if let idle, idle < 7 { return "Used " + ageText(a.lastUsed, now: now) }
+        switch m.profile.category {
+        case .backup: return "May be the only copy"
+        case .workspace: return m.profile.path.hasSuffix("/work") ? "Mixed work files" : "Project files"
+        case .model: return "Re-download to restore"
+        case .download: return "Your downloads"
+        case .virtualMachine: return "Whole computer"
+        case .simulator: return "Has apps and saves"
+        default: return m.state == .pending ? "Not scanned yet" : "Look inside first"
+        }
+    }
+}
+/// The folder rules plus what git says about the project.
+private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity?, now: Date) -> Advice {
     var result = ruleAdvice(for: m, policy: policy, devices: devices, now: now)
     guard let project, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData"), m.state == .measured else { return result }
     let lastActivity = [m.latestModifiedAt, project.lastCommit].compactMap { $0 }.max()
@@ -423,11 +518,11 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     case .inaccessible, .limited, .failed: return Advice(verdict: .check, reason: "It couldn't be read completely, so what's inside is unknown.", howTo: "Open it in Finder and look before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     default: break
     }
-    if !m.processes.isEmpty {
-        let apps = Array(Set(m.processes.map(\.command))).sorted().prefix(2).joined(separator: " and ")
-        return Advice(verdict: .check, reason: "\(apps) had files open here during the last scan.", howTo: "Quit \(apps) first. " + trash, command: nil, lastUsed: m.latestModifiedAt)
+    let openApps = Array(Set(m.processes.map { friendlyApp($0.command) })).sorted().prefix(2).joined(separator: " and ")
+    if !m.processes.isEmpty && m.profile.category != .virtualMachine {
+        return Advice(verdict: .check, reason: "\(openApps) had files open here during the last scan, so it's in use right now.", howTo: "Quit \(openApps) first. " + trash, command: nil, lastUsed: m.latestModifiedAt)
     }
-    if policy.expected { return Advice(verdict: .keep, reason: "You marked its growth as expected.", howTo: "Change that in Tags and Notes if you want to review it.", command: nil, lastUsed: m.latestModifiedAt) }
+    if policy.expected { return Advice(verdict: .keep, reason: "You said its growth is normal.", howTo: "Right-click it and choose Warn Me When It Grows to get suggestions again.", command: nil, lastUsed: m.latestModifiedAt) }
     let idle = days(m.latestModifiedAt)
     let lastSeen = m.latestModifiedAt.map { " Last changed \(ageText($0, now: now))." } ?? ""
     let project = m.profile.project ?? "its project"
@@ -437,14 +532,22 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         if idle < 7 { return Advice(verdict: .check, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). You're probably still building it.", howTo: "Wait until you're done with \(project). " + trash, command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .safe, reason: "Build output for \(project). Building again recreates it.\(lastSeen)", howTo: "Move it to the Trash in Finder. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
     }
+    /// Caches a tool used this week: removing them now just means downloading or rebuilding what you're using.
+    func recentlyUsed(_ what: String) -> Advice? {
+        guard let idle, idle < 7 else { return nil }
+        return Advice(verdict: .check, reason: "\(what) was used \(ageText(m.latestModifiedAt, now: now)), so a tool is still relying on it. Removing it now only means waiting while it's rebuilt or downloaded again.", howTo: "Wait until you're done with that work. " + trash, command: nil, lastUsed: m.latestModifiedAt)
+    }
     switch m.profile.category {
     case .packageCache:
+        if let recent = recentlyUsed("This download cache") { return recent }
         let cmd: String? = path.hasSuffix(".npm/_cacache") ? "npm cache clean --force" : path.hasSuffix("Caches/pip") ? "pip cache purge" : path.hasSuffix(".cache/uv") ? "uv cache clean" : path.hasSuffix("Caches/Homebrew") ? "brew cleanup --prune=all" : path.hasSuffix("Caches/Yarn") ? "yarn cache clean" : nil
         return Advice(verdict: .safe, reason: "A download cache. The tool downloads what it needs again, so the next install is a little slower.\(lastSeen)", howTo: cmd == nil ? trash : "Use the tool's own clean command, or: " + trash, command: cmd, lastUsed: m.latestModifiedAt)
     case .buildOutput:
         guard path.contains("/DerivedData") else { return projectBuild() }
+        if let recent = recentlyUsed("Xcode's build data") { return recent }
         return Advice(verdict: .safe, reason: "Xcode rebuilds this. The next build of each project takes longer.\(lastSeen)", howTo: "Quit Xcode, then move the folder's contents to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .installCache:
+        if let recent = recentlyUsed("This install cache") { return recent }
         return Advice(verdict: .safe, reason: "Saved pieces from installing \(name.replacingOccurrences(of: " install cache", with: "")) on an iPhone or iPad. It's recreated on the next install.\(lastSeen)", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
     case .debugSymbols:
         if let idle, idle < 30 { return Advice(verdict: .check, reason: "Debug files for a device you connected \(ageText(m.latestModifiedAt, now: now)). Xcode copies them again if you remove them.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
@@ -471,7 +574,8 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         let howTo = docker ? "In Docker Desktop, remove images and containers you no longer need, or lower the disk limit in Settings › Resources. This command shows how much is reclaimable:"
             : app == "Parallels Desktop" ? "In Parallels Desktop's Control Center, delete old snapshots or use Reclaim Disk Space to shrink it. To remove the whole machine, right-click it › Remove."
             : "Remove or shrink it inside \(app)."
-        return Advice(verdict: .check, reason: "A whole virtual computer in \(app). Removing it deletes everything inside it.\(lastSeen)", howTo: howTo, command: docker ? "docker system df" : nil, lastUsed: m.latestModifiedAt)
+        let running = m.processes.isEmpty ? "" : " It's running right now."
+        return Advice(verdict: .check, reason: "A whole virtual computer in \(app). Removing it deletes everything inside it.\(running)\(lastSeen)", howTo: howTo, command: docker ? "docker system df" : nil, lastUsed: m.latestModifiedAt)
     case .simulator:
         return Advice(verdict: .check, reason: "Simulator data outside a device folder.\(lastSeen)", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
     case .unknown:
@@ -597,4 +701,13 @@ func readProjectActivity(_ root: String) -> ProjectActivity {
     let uncommitted = gitOutput(root, ["status", "--porcelain", "--untracked-files=no"]).map { $0.isEmpty ? 0 : min(999, $0.split(separator: "\n").count) }
     return ProjectActivity(root: root, isWorktree: isWorktree, mainRepository: mainRepository, registered: registered, branch: branch,
                            defaultBranch: defaultBranch.map { $0.hasPrefix("origin/") ? String($0.dropFirst(7)) : $0 }, lastCommit: lastCommit, merged: merged, uncommitted: uncommitted)
+}
+
+/// Share of the disk in use, never rounded up to a full disk: 18 GiB free on 3.6 TiB reads "99.5%", not "100%".
+func usedPercentText(_ fraction: Double) -> String {
+    let clamped = min(max(fraction, 0), 1)
+    let digits = clamped >= 0.99 && clamped < 1 ? 1 : 0
+    let scale = digits == 1 ? 1000.0 : 100.0
+    let value = (clamped * scale).rounded(.down) / scale
+    return value.formatted(.percent.precision(.fractionLength(digits)))
 }

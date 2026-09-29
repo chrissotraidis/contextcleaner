@@ -506,7 +506,9 @@ struct Dashboard: View {
                 tracked += total.bytes
             }
             let kept = model.keptSummary
-            list.append(Segment(id: "kept", title: "Kept by you", detail: "Never suggested", bytes: kept.keptBytes + kept.offBytes, color: .purple, action: { model.search = ""; model.categoryFilter = nil; model.section = .kept }))
+            // Name it by what's in it: folders you keep, folders you turned off, or both.
+            let keptTitle = kept.offBytes == 0 ? "Kept by you" : kept.keptBytes == 0 ? "Turned off by you" : "Kept or turned off"
+            list.append(Segment(id: "kept", title: keptTitle, detail: "Your choice, never suggested", bytes: kept.keptBytes + kept.offBytes, color: .purple, action: { model.search = ""; model.categoryFilter = nil; model.section = .kept }))
             tracked += kept.keptBytes + kept.offBytes
         }
         list.append(Segment(id: "other", title: "Everything else", detail: "macOS, apps and files outside the scanned folders", bytes: max(0, volume.used - tracked), color: Color.primary.opacity(0.16), action: nil))

@@ -21,7 +21,9 @@ Every folder gets a plain answer, with the reason and how to do it yourself:
 - **Check first** (orange): might be fine; the folder's card says exactly what to look at.
 - **Keep** (gray): app libraries and history. Remove things from inside their own app instead.
 
-The Folders list shows each folder's size, when it was **last used**, and the answer. "Not recorded" means an older scan didn't note when files last changed; scanning that folder fills it in.
+The Folders page opens with the answer: **Safe to remove**, **Check first** and **Keep**, each with a total you can click to list those folders. Every row shows its answer next to its name, its size and when it was **last used**. "Not recorded" means the size came from an older scan that didn't note when files last changed; a full scan fills it in, because it re-measures every saved folder. The Overview's **Safe to remove** panel lists the biggest safe folders with a Finder button for each.
+
+The first full scan may bring up macOS dialogs asking whether Context Cleaner can read data from other apps (for example iPhone install caches) or your Documents folder. The scan waits for your answer and says so in an orange banner. Allow includes those folders; Don't Allow skips them. Either way it only reads sizes.
 
 Test devices get special care. Each one is listed by its real name ("iPhone 17 Pro · iOS 26.5") with its size and last use taken from Xcode right now, so no scan is needed and the numbers are never stale. The whole Simulator folder is never offered for removal; its card says how many devices are idle and how much they use, and you remove single devices in Xcode › Window › Devices and Simulators or with the copied `xcrun simctl delete` command.
 

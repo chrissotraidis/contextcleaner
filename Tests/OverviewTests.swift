@@ -89,6 +89,8 @@ import Foundation
         check(scanOutcome(blocked, grew: 0) == "1 folder couldn't be read" && blocked.resultSummary == "1 folder couldn't be read", "an unreadable folder is reported as unreadable, not as a stopped scan")
         var stoppedOne = record("stopped-one", [item("/fixture/a", .appData, nil, .cancelled)]); stoppedOne.complete = false; stoppedOne.requestedCount = 1
         check(scanOutcome(stoppedOne, grew: 0) == "Stopped after 0 of 1 folder", "a stopped one-folder scan uses the singular")
+        let withGone = record("with-gone", [cache, item("/fixture/deleted", .appData, nil, .missing)])
+        check(scanOutcome(withGone, grew: 0) == "Scanned 1 folder · 1 no longer on disk" && withGone.resultSummary == "1 folder scanned · 1 no longer on disk", "folders you deleted are reported plainly, never as problems")
         // Can I remove it?
         let now = start.addingTimeInterval(100 * 86400)
         func folder(_ path: String, _ category: FolderCategory, lastChanged daysAgo: Double?, project: String? = nil) -> FolderMeasurement {

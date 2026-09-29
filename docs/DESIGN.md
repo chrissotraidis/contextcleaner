@@ -156,3 +156,14 @@ Use the native toolbar material and grouping. Keep content backgrounds quiet; ap
 - Reveal explanation when needed. Default folder details show size, purpose and one next action. No empty chart on a never-scanned folder. History is a compact outcome list with expandable details.
 - Use normal words: folders rather than locations, scanned rather than measured, storage on your Mac rather than home volume, scan issues rather than needs attention. Commands state their object.
 - Keep system typography, controls and materials. Preserve the Blue C icon and category palette. Red marks failures, not the existence of personal files.
+
+
+## 0.10: evidence, Keep, idle order, disk map
+
+- **Evidence before verdicts.** Project folders read git, read-only (no index refresh): last commit, merged into the default branch, uncommitted changes, and whether a worktree is still registered. Recent activity (a commit in the last 7 days or anything uncommitted) is always Check first. Merged or unregistered, clean and quiet for 14 days is "looks finished", which offers git's own worktree removal. Evidence shows as one line under the reason, with a branch icon.
+- **Order.** Folders default to big and unused first: size × days idle (capped at 90), unknown idle time weighs a third, and app-managed Keep folders weigh a quarter. The Order menu offers Largest, Longest unused and Name.
+- **Keep.** "Keep, Never Suggest" is a user choice stored as an optional flag. It overrides every rule, removes the folder from Folders, Safe and Check first, and lists it in **Kept** (purple) with turned-off folders, a total and a share of the disk.
+- **Disk map.** One bar for the whole disk, with outlined Free space, By answer or By type. Hovering explains a segment and clicking opens it. It replaces the old safe banner and category panel.
+- **How long it's sat unused.** Labeled rows (this week, this month, 1–3 months, 3+ months, unknown), stacked by answer and sized linearly with the number written beside each row.
+- **Gone means gone.** Missing folders leave every list, total and Couldn't Scan.
+- **Virtual machines** are a type (steel blue, desktop icon). They're never safe; the advice points to the app's own tools.

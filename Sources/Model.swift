@@ -622,16 +622,17 @@ struct FolderRow: Identifiable {
             text += "Space used in the last 7 days: \(signedBytes(change.delta)) (\(byteLabel(change.from.used)) on \(change.from.date.formatted(date: .abbreviated, time: .shortened)) → \(byteLabel(change.to.used)) on \(change.to.date.formatted(date: .abbreviated, time: .shortened))).\n\n"
         }
         text += "Context Cleaner never deletes files. Sizes are estimates from the latest scan of each folder. A folder inside another may appear in both rows, and APFS shares storage between files, so removing a folder can free less than its size.\n\n"
-        let listed = rows.sorted(by: { $0.bytes > $1.bytes })
-        text += "| Folder | Size | Change | Status | App or project |\n|---|---:|---:|---|---|\n"
+        // Same order as Folders: big folders you haven't used lately first.
+        let listed = rows.sorted(by: { $0.idleScore == $1.idleScore ? $0.bytes > $1.bytes : $0.idleScore > $1.idleScore })
+        text += "| Folder | Can I remove it? | Size | Last used | App or project |\n|---|---|---:|---|---|\n"
         for row in listed {
-            let change = row.change.delta.map { "\($0 >= 0 ? "+" : "−")\(byteLabel(abs($0)))" } ?? "—"
-            text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(change) | \(row.status.isEmpty ? "Scanned" : row.status) | \(row.app) |\n"
+            let answer = row.policy.excluded ? "Not scanned" : row.policy.isKept ? "Kept by you" : row.measurement.state == .pending ? "Scan first" : row.advice.verdict.title
+            text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(answer) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(row.advice.lastUsed.map { ageText($0) } ?? "not recorded") | \(row.app) |\n"
         }
         text += "\n"
         for row in listed {
             let p = row.measurement.profile
-            text += "## \(p.name)\n\n`\(p.path)`\n\n\(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status.isEmpty ? "Scanned" : row.status)\n\n\(p.explanation)\n\nBefore any manual change: \(p.consequence)\n\n"
+            text += "## \(p.name)\n\n`\(p.path)`\n\n\(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status.isEmpty ? "Scanned" : row.status)\n\n**\(row.advice.verdict.title).** \(row.advice.reason)\n\n" + row.advice.evidence.map { "- \($0)\n" }.joined() + "\nHow to remove it yourself: \(row.advice.howTo)\(row.advice.command.map { " `\($0)`" } ?? "")\n\n\(p.explanation) Before any manual change: \(p.consequence)\n\n"
             for e in p.evidence { text += "- \(e.level.rawValue): \(e.label) — \(e.value)\n" }
             let policy = preferences.policy(p.path)
             if !policy.tags.isEmpty { text += "\nTags: \(policy.tags.joined(separator: ", "))\n" }

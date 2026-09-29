@@ -139,6 +139,10 @@ struct MainView: View {
                             .font(.caption).foregroundStyle(.secondary).lineLimit(3)
                     }
                     Spacer(minLength: 0)
+                    Button("Stop These Questions…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+                    }.controlSize(.small)
+                        .help("Opens Privacy & Security › Full Disk Access. Turning Context Cleaner on there lets it read sizes everywhere without asking each time. Your choice; it still never changes files.")
                 }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.growing.opacity(0.10))
             }
             }
@@ -262,6 +266,8 @@ struct MainView: View {
             TableColumn("Can I remove it?", value: \.verdictRank) { row in
                 Group {
                     if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
+                    else if row.policy.excluded { Label("Not scanned", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
+                    else if row.policy.isKept { Label("Kept by you", systemImage: "hand.raised.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.purple) }
                     else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
                     else { VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id)) }
                 }.help(row.advice.reason)
@@ -314,7 +320,7 @@ struct MainView: View {
                 ContentUnavailableView {
                     Label("Nothing to fix", systemImage: "checkmark.circle")
                 } description: {
-                    Text("Every scanned folder was read completely. If macOS blocks a folder, or one is too large or goes missing, it shows up here with a fix.")
+                    Text("Every scanned folder was read completely. If macOS blocks a folder or one is too large, it shows up here with a fix. Folders you delete simply leave the lists.")
                 }
             }
         }
@@ -631,7 +637,7 @@ struct MainView: View {
             }.padding(.vertical, 6)
         } label: {
             HStack(spacing: 12) {
-                let problem = !record.wasStopped && record.measurements.contains { [.inaccessible, .limited, .missing, .failed].contains($0.state) }
+                let problem = !record.wasStopped && record.measurements.contains { [.inaccessible, .limited, .failed].contains($0.state) }
                 Image(systemName: record.wasStopped ? "stop.circle" : problem ? "exclamationmark.triangle" : "checkmark.circle")
                     .foregroundStyle(record.wasStopped ? Color.growing : problem ? Color.attention : Color.accentColor).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {

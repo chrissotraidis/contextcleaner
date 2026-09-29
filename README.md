@@ -2,15 +2,15 @@
 
 **See what's filling your Mac, and when. Then decide for yourself.**
 
-Context Cleaner is a native macOS app that shows how full your disk is, how that changed this week, and which folders are taking the space. It covers the places apps quietly pile up data: AI tools, Xcode and simulators, package caches, game libraries and your downloads.
+Context Cleaner is a native macOS app that shows how full your disk is, how that changed this week, and which folders are taking the space. It covers the places apps quietly pile up data: AI tools, Xcode and simulators, package caches, virtual machines, game libraries and your downloads.
 
 **It never deletes files.** There's no cleanup, Trash, uninstall or reset button anywhere. You decide what to do, in Finder.
 
 ## Start here
 
 1. Choose **Scan Folders…** (⌘R). The sheet lists the apps and paths it will read. Choose **Start Scan**; a bar under the title shows progress, and you can stop at any time.
-2. On **Overview**, read the headline above the chart, for example "+24 GiB more space used". Then look at **What's taking space** and **Largest folders**.
-3. Click any category or folder to open it in **Folders**. The panel on the right says what the folder is, how its size has changed, and offers **Scan Folder** and **Show in Finder**.
+2. On **Overview**, read the headline above the chart, for example "+24 GiB more space used". The disk map below it splits your whole disk into Safe to remove, Check first, Keep, Kept by you, Everything else and Free; point at a color for details and click it to list those folders. **How long it's sat unused** shows where idle space is.
+3. Click any part of the map or any folder to open it in **Folders**, where big folders you haven't used lately come first. The panel on the right says what the folder is, how its size has changed, and offers **Scan Folder** and **Show in Finder**.
 4. Add folders you care about to your **Watchlist**. Optional daily or weekly checks are in **Context Cleaner › Settings…** (⌘,). They run only while the app is open and are off by default.
 
 ## Can I remove it?
@@ -27,7 +27,13 @@ The first full scan may bring up macOS dialogs asking whether Context Cleaner ca
 
 Test devices get special care. Each one is listed by its real name ("iPhone 17 Pro · iOS 26.5") with its size and last use taken from Xcode right now, so no scan is needed and the numbers are never stale. The whole Simulator folder is never offered for removal; its card says how many devices are idle and how much they use, and you remove single devices in Xcode › Window › Devices and Simulators or with the copied `xcrun simctl delete` command.
 
-The Overview shows how much looks safe to remove, and **Review Safe Folders** lists them. Context Cleaner never deletes anything; it tells you where, why and how.
+**Is it still in use?** For project folders in GitHub repositories and Codex worktrees, the answer also reads git, read-only: the last commit, whether the branch is merged into main, uncommitted changes, and whether the worktree is still registered. For example: "Worktree kartpad-stabilization-20260918: last commit 3 days ago · merged into main · 1 uncommitted change." Recent activity means Check first. A worktree that's merged, clean and quiet for two weeks says it looks finished and offers `git worktree remove`, which git refuses if anything is uncommitted. "Last used" is the newest of the folder's file changes and its last commit.
+
+**Keep it out of the way.** Right-click any folder, or use the **Keep** button, to choose **Keep, Never Suggest**, for example your OpenEmu or CrossOver libraries. Kept folders leave every suggestion and move to the **Kept** view, which shows their total and share of your disk next to folders you turned off. **Stop Keeping** brings a folder back.
+
+**Virtual machines** (Parallels, Docker Desktop's disk, UTM) are measured too. They're never called safe, because removing one deletes a whole computer; the card points to the app's own tools, such as `docker system df` to see what Docker can reclaim.
+
+Folders that no longer exist leave every list and total, including Couldn't Scan. The Overview shows how much looks safe to remove, and **Review Safe Folders** lists them. Context Cleaner never deletes anything; it tells you where, why and how.
 
 ## How to read the chart
 
@@ -39,13 +45,14 @@ The Overview shows how much looks safe to remove, and **Review Safe Folders** li
 - **Change per day** switches to bars: orange means more space used, green means space was freed.
 - **Where readings come from:** Context Cleaner notes your disk space every hour while it's open, and at every scan. Gaps in the line are times when the app wasn't running. Nothing is filled in or guessed.
 
-## The five views
+## The six views
 
 | View | What it answers |
 |---|---|
 | **Overview** | How full is my disk, how did that change, and what's taking the space? |
-| **Folders** | How big is each folder, is it growing, and what is it? Select several with ⌘‑click or ⇧‑click to add their sizes. |
+| **Folders** | Can I remove it, how big is it, when did I last use it, and what is it? Big unused folders come first; **Order** changes that. Select several with ⌘‑click or ⇧‑click to add their sizes. |
 | **Watchlist** | Which folders am I keeping an eye on? |
+| **Kept** | Which folders did I choose to keep or not scan, and how much of my disk is that? |
 | **Couldn't Scan** | Which folders couldn't be read, and what's the fix? Each row gives a plain reason and one button. Folders that simply haven't been scanned yet aren't listed here. |
 | **Scan History** | What did each scan check, and what did it find? Grouped by day. |
 

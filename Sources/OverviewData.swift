@@ -202,13 +202,15 @@ func sparklineValues(_ points: [HistoryPoint], limit: Int = 12) -> [Double] {
 /// One-line result shown after a scan finishes.
 func scanOutcome(_ record: ScanRecord, grew: Int) -> String {
     let measured = record.measurements.filter { $0.state == .measured }.count
-    let issues = record.measurements.filter { [.inaccessible, .limited, .missing, .failed].contains($0.state) }.count
+    let issues = record.measurements.filter { [.inaccessible, .limited, .failed].contains($0.state) }.count
+    let gone = record.measurements.filter { $0.state == .missing }.count
     let target = record.requestedCount ?? record.measurements.count
     if !record.complete && record.wasStopped { return "Stopped after \(measured) of \(target) \(target == 1 ? "folder" : "folders")" }
     if measured == 0 && issues > 0 { return issues == 1 ? "1 folder couldn't be read" : "\(issues) folders couldn't be read" }
     var parts = [measured == 1 ? "Scanned 1 folder" : "Scanned \(measured) folders"]
     if grew > 0 { parts.append("\(grew) grew") }
     if issues > 0 { parts.append("\(issues) couldn't be read") }
+    if gone > 0 { parts.append("\(gone) no longer on disk") }
     return parts.joined(separator: " · ")
 }
 extension ScanRecord {
@@ -223,12 +225,16 @@ extension ScanRecord {
     }
     var resultSummary: String {
         let measured = measurements.filter { $0.state == .measured }.count
-        let issues = measurements.filter { [.inaccessible, .limited, .missing, .failed].contains($0.state) }.count
+        // Folders you deleted aren't problems; they're reported plainly and never in red.
+        let issues = measurements.filter { [.inaccessible, .limited, .failed].contains($0.state) }.count
+        let gone = measurements.filter { $0.state == .missing }.count
         let target = requestedCount ?? measurements.count
         if !complete && wasStopped { return "Stopped · \(measured) of \(target) \(target == 1 ? "folder" : "folders") scanned" }
         if measured == 0 && issues > 0 { return issues == 1 ? "1 folder couldn't be read" : "\(issues) folders couldn't be read" }
-        if issues > 0 { return "\(measured) scanned · \(issues) with issues" }
-        return measured == 1 ? "1 folder scanned" : "\(measured) folders scanned"
+        var parts = [measured == 1 ? "1 folder scanned" : "\(measured) folders scanned"]
+        if issues > 0 { parts.append("\(issues) couldn't be read") }
+        if gone > 0 { parts.append("\(gone) no longer on disk") }
+        return parts.joined(separator: " · ")
     }
     /// True when the user stopped the scan, as opposed to folders that couldn't be read.
     var wasStopped: Bool {

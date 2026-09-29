@@ -452,6 +452,10 @@ func missingPaths(_ paths: [String]) -> Set<String> {
     Set(paths.filter { path in var st = stat(); return lstat(path, &st) != 0 && (errno == ENOENT || errno == ENOTDIR) })
 }
 /// Known paths that are files rather than folders, such as Xcode's device_set.plist. Metadata only.
+/// Places macOS guards with a one-time permission dialog: other apps' data and the Documents, Desktop and Downloads folders.
+func protectedPlace(_ text: String) -> Bool {
+    ["/Library/Containers/", "/Library/Group Containers/", "/Documents/", "/Desktop/", "/Downloads"].contains { text.contains($0) }
+}
 /// Saved folders a full scan should re-measure alongside what discovery found: each once, none already discovered.
 func savedProfilesToRefresh(_ saved: [FolderProfile], discovered: [FolderProfile]) -> [FolderProfile] {
     var seen = Set(discovered.map { normalized($0.path) })

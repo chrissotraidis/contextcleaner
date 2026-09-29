@@ -138,6 +138,7 @@ import Foundation
         check(ageText(now.addingTimeInterval(-3600), now: now) == "today" && ageText(now.addingTimeInterval(-86400 * 1.5), now: now) == "yesterday" && ageText(now.addingTimeInterval(-86400 * 20), now: now) == "2 weeks ago" && ageText(nil, now: now) == "unknown", "ages read like a person would say them")
         check(missingPaths(["/fixture-definitely-missing/x", "/"]) == ["/fixture-definitely-missing/x"], "missing folders are found by metadata only")
         check(fileOnlyPaths(["/etc/hosts", "/", "/fixture-definitely-missing/x"]) == ["/etc/hosts"], "files such as device_set.plist are told apart from folders by metadata only")
+        check(protectedPlace("Discovering: /Users/x/Library/Containers/com.apple.CoreDevice/Data") && protectedPlace("Discovering: /Users/x/Documents/Codex") && !protectedPlace("Discovering: /Users/x/.npm/_cacache"), "the permission hint appears only for places macOS asks about")
         let legacyBuild = FolderProfile(path: "/fixture/kartpad/build", name: "build", category: .workspace, project: "kartpad", associatedApp: "Compiler", explanation: "", consequence: "", evidence: [])
         let discoveredBuild = FolderProfile(path: "/fixture/kartpad/build/intermediates", name: "intermediates", category: .buildOutput, project: "kartpad", associatedApp: "Gradle", explanation: "", consequence: "", evidence: [])
         let refreshed = savedProfilesToRefresh([legacyBuild, discoveredBuild, legacyBuild], discovered: [discoveredBuild])

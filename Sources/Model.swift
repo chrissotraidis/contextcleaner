@@ -189,7 +189,7 @@ struct FolderRow: Identifiable {
         refreshGone()
     }
     // Derived state is rebuilt only when its inputs change; SwiftUI reads these many times per frame.
-    private struct Derived { var key = ""; var latest: [FolderMeasurement] = []; var history: [String: [HistoryPoint]] = [:]; var growth: [String: GrowthSummary] = [:] }
+    private struct Derived { var key = ""; var historyKey = -1; var saved: [String: FolderMeasurement] = [:]; var latest: [FolderMeasurement] = []; var history: [String: [HistoryPoint]] = [:]; var growth: [String: GrowthSummary] = [:] }
     private var derived = Derived()
     private var rowsCache: (key: String, validUntil: Date, rows: [FolderRow]) = ("", .distantPast, [])
     private var preferencesVersion = 0
@@ -204,13 +204,19 @@ struct FolderRow: Identifiable {
     private func refreshDerived() {
         let key = derivedKey
         guard derived.key != key else { return }
-        var byPath: [String: FolderMeasurement] = [:]
-        for record in records.sorted(by: { $0.finishedAt < $1.finishedAt }) {
-            for item in record.measurements where item.state != .cancelled { byPath[item.profile.path] = item }
+        // History, growth and the saved sizes change only when a scan is saved; progress during a scan only overlays partial results.
+        if derived.historyKey != recordsVersion {
+            var saved: [String: FolderMeasurement] = [:]
+            for record in records.sorted(by: { $0.finishedAt < $1.finishedAt }) {
+                for item in record.measurements where item.state != .cancelled { saved[item.profile.path] = item }
+            }
+            let history = historyIndex(records)
+            derived.historyKey = recordsVersion; derived.saved = saved
+            derived.history = history; derived.growth = history.mapValues { growth(points: $0) }
         }
+        var byPath = derived.saved
         if running { for item in partial { byPath[item.profile.path] = item } }
-        let history = historyIndex(records)
-        derived = Derived(key: key, latest: Array(byPath.values), history: history, growth: history.mapValues { growth(points: $0) })
+        derived.key = key; derived.latest = Array(byPath.values)
     }
     var latest: [FolderMeasurement] { refreshDerived(); return derived.latest }
     /// Everything the Overview needs, computed once per change of records or preferences.
@@ -453,14 +459,27 @@ struct FolderRow: Identifiable {
             DispatchQueue.main.async {
                 if !selectedOnly && !watchedOnly { self.acceptDiscovery(found) }
                 if rediscovered { self.recordDiscovery() }
-                self.targetCount = profiles.count; self.progress = "Preparing the folder scan…"
+                self.progress = "Preparing the folder scan…"
             }
             guard !profiles.isEmpty else {
                 DispatchQueue.main.async { self.error = "No included locations match this scan. Add a location or change your filters."; self.running = false }
                 return
             }
-            let record = ScanEngine.scan(profiles: profiles, preferences: prefs, scope: scope, notes: found.notes, cancellation: token, limits: priorityOnly ? .priority : prefs.manualLimits, totalSeconds: priorityOnly ? 90 : 1800) { item, index, total in
-                DispatchQueue.main.async { self.partial.append(item); self.completed = index; self.progress = item.profile.name }
+            // Ask macOS about protected folders before the timed scan starts, so a waiting dialog can't use up the time.
+            for root in ["Documents", "Desktop", "Downloads"].map({ home + "/" + $0 }) where !token.stopped && profiles.contains(where: { containsPath(root, $0.path) }) {
+                DispatchQueue.main.async { self.progress = "Asking macOS for access to " + root + "/" }
+                _ = try? DirectoryCursor(root)
+            }
+            DispatchQueue.main.async { self.targetCount = profiles.count; self.progress = "Preparing the folder scan…" }
+            // Finished folders reach the interface in small batches, so a fast scan doesn't redraw the window for every folder.
+            let batch = ScanBatch()
+            let record = ScanEngine.scan(profiles: profiles, preferences: prefs, scope: scope, notes: found.notes, cancellation: token, limits: priorityOnly ? .priority : prefs.manualLimits, totalSeconds: priorityOnly ? 90 : 1800, concurrency: priorityOnly ? 1 : 4) { item, done, total in
+                guard batch.add(item, done: done) else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    let (items, count) = batch.drain()
+                    guard !items.isEmpty else { return }
+                    self.partial.append(contentsOf: items); self.completed = max(self.completed, count); self.progress = items.last!.profile.name
+                }
             }
             DispatchQueue.main.async {
                 self.records.append(record); self.refreshVolume(); self.refreshGone(); self.loadSimDevices()

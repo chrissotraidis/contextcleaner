@@ -48,21 +48,47 @@ struct ActivitySnapshot {
             note: complete ? "Open handles observed at scan start. Handle access modes do not establish actual writes or inactivity." : outputLimited ? "Open-file output exceeded its 16 MiB allowance; activity is unknown." : "Open-file helper failed, was cancelled or timed out; activity is unknown.")
     }
 }
+/// Collects finished folders from scan workers until the interface takes them.
+/// add returns true when the caller should schedule a delivery (the first item since the last drain).
+final class ScanBatch {
+    private let lock = NSLock()
+    private var items: [FolderMeasurement] = [], done = 0, scheduled = false
+    func add(_ item: FolderMeasurement, done count: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        items.append(item); done = max(done, count)
+        if scheduled { return false }
+        scheduled = true; return true
+    }
+    func drain() -> ([FolderMeasurement], Int) {
+        lock.lock(); defer { lock.unlock() }
+        let result = (items, done); items = []; scheduled = false
+        return result
+    }
+}
 struct ScanEngine {
     static func scan(profiles: [FolderProfile], preferences: Preferences, scope: String, notes: [String], cancellation: Cancellation,
-                     limits: ScanLimits = .manual, totalSeconds: TimeInterval = 900, onItem: @escaping (FolderMeasurement, Int, Int) -> Void) -> ScanRecord {
+                     limits: ScanLimits = .manual, totalSeconds: TimeInterval = 900, concurrency: Int = 1, onItem: @escaping (FolderMeasurement, Int, Int) -> Void) -> ScanRecord {
         let start = Date(), started = ProcessInfo.processInfo.systemUptime, activity = ActivitySnapshot.capture(cancellation: cancellation)
-        var measurements: [FolderMeasurement] = []
-        for (index, profile) in profiles.enumerated() {
-            if cancellation.stopped { break }
-            let remaining = totalSeconds - (ProcessInfo.processInfo.systemUptime - started)
-            if remaining <= 0 { break }
-            var allowance = limits; allowance.seconds = min(allowance.seconds, remaining)
-            let item = TreeMeasure.measure(profile, preferences: preferences, cancellation: cancellation,
-                activity: activity.observations, activityAvailable: activity.available, limits: allowance)
-            measurements.append(item); onItem(item, index + 1, profiles.count)
-            if cancellation.stopped { break }
+        // Workers take the next folder in list order. One slow or blocked folder no longer holds up the rest.
+        // Results keep list order; onItem reports how many have finished.
+        let lock = NSLock()
+        var results: [Int: FolderMeasurement] = [:], next = 0
+        let workers = max(1, min(concurrency, profiles.count))
+        DispatchQueue.concurrentPerform(iterations: workers) { _ in
+            while true {
+                lock.lock()
+                let remaining = totalSeconds - (ProcessInfo.processInfo.systemUptime - started)
+                guard next < profiles.count, !cancellation.stopped, remaining > 0 else { lock.unlock(); return }
+                let index = next; next += 1
+                lock.unlock()
+                var allowance = limits; allowance.seconds = min(allowance.seconds, remaining)
+                let item = TreeMeasure.measure(profiles[index], preferences: preferences, cancellation: cancellation,
+                    activity: activity.observations, activityAvailable: activity.available, limits: allowance)
+                lock.lock(); results[index] = item; let done = results.count; lock.unlock()
+                onItem(item, done, profiles.count)
+            }
         }
+        let measurements = results.keys.sorted().map { results[$0]! }
         let free = ((try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())[.systemFreeSize]) as? NSNumber)?.int64Value
         return ScanRecord(id: UUID().uuidString, startedAt: start, finishedAt: Date(), scope: scope,
             complete: !cancellation.stopped && measurements.count == profiles.count && !measurements.contains(where: { [.limited, .cancelled, .inaccessible, .failed].contains($0.state) }), freeBytes: free, measurements: measurements,

@@ -59,6 +59,17 @@ import Darwin
         check(!early.available && early.observations.isEmpty, "pre-cancelled activity lookup returns without a helper")
         let stopped = ScanEngine.scan(profiles: [profile], preferences: Preferences(), scope: "cancel fixture", notes: [], cancellation: token) { _,_,_ in preconditionFailure("Cancelled engine cannot deliver a measurement") }
         check(!stopped.complete && stopped.measurements.isEmpty && stopped.requestedCount == 1 && stopped.stopReason == "Cancelled by you", "cancelled pass preserves requested coverage and explicit stop reason")
+        let stoppedParallel = ScanEngine.scan(profiles: [profile, deepProfile], preferences: Preferences(), scope: "cancel fixture", notes: [], cancellation: token, concurrency: 4) { _,_,_ in preconditionFailure("Cancelled engine cannot deliver a measurement") }
+        check(stoppedParallel.measurements.isEmpty && stoppedParallel.stopReason == "Cancelled by you", "a cancelled parallel pass delivers nothing")
+        let folders = ["wide", "deep", "deep/a", "deep/a/b", "deep/a/b/c"].map { Classifier.profile(path: root.appendingPathComponent($0).path, home: root.path) }
+        let serial = ScanEngine.scan(profiles: folders, preferences: Preferences(), scope: "serial", notes: [], cancellation: Cancellation(), concurrency: 1) { _,_,_ in }
+        let deliveries = NSLock(); var delivered = 0, highest = 0
+        let parallel = ScanEngine.scan(profiles: folders, preferences: Preferences(), scope: "parallel", notes: [], cancellation: Cancellation(), concurrency: 4) { _, done, _ in
+            deliveries.lock(); delivered += 1; highest = max(highest, done); deliveries.unlock()
+        }
+        check(parallel.measurements.map(\.profile.path) == folders.map(\.path) && zip(serial.measurements, parallel.measurements).allSatisfy { $0.allocatedBytes == $1.allocatedBytes && $0.fileCount == $1.fileCount && $0.state == $1.state },
+              "four workers measure the same sizes as one, reported in list order")
+        check(delivered == folders.count && highest == folders.count && parallel.complete, "each folder is reported once and the pass completes")
         var preferences = Preferences(); preferences.dailyWhileOpen = true
         check(ScanPlanner.dailyDue(preferences, now: date), "first enabled daily attempt is due")
         preferences.lastScheduledAttempt = date

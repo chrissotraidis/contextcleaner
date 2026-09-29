@@ -130,7 +130,7 @@ struct MainView: View {
                 Button("Stop") { model.cancelWork() }.controlSize(.small)
             }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.accentColor.opacity(0.08))
             // Reading another app's data or a protected folder makes macOS ask once, and the scan waits for the answer.
-            if model.discovering || (model.running && model.targetCount == 0), protectedPlace(model.progress) {
+            if protectedPlace(model.progress) {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "hand.raised.fill").foregroundStyle(Color.growing).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {

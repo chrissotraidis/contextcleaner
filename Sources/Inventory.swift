@@ -82,12 +82,20 @@ struct ScanLimits {
 }
 // Directory handles are bounded by traversal depth and closed on every return path.
 // Only directory metadata is read; no file payload is opened.
+/// Repeats a system call interrupted by a signal (EINTR). Interrupted calls are routine and must not be read as "no access".
+@inline(__always) func retryingInterrupted(_ call: () -> Int32) -> Int32 {
+    var result: Int32
+    repeat { result = call() } while result == -1 && errno == EINTR
+    return result
+}
 final class DirectoryCursor {
     let path: String
+    /// The folder's top-level child this directory sits under, so each entry is credited without re-reading its path.
+    var top: String?
     private var pointer: UnsafeMutablePointer<DIR>?
     init(_ path: String) throws {
         self.path = path
-        let fd = Darwin.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        let fd = retryingInterrupted { Darwin.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
         guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         guard let pointer = fdopendir(fd) else { let code = errno; Darwin.close(fd); throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO) }
         self.pointer = pointer
@@ -98,6 +106,7 @@ final class DirectoryCursor {
         while true {
             errno = 0
             guard let entry = readdir(pointer) else {
+                if errno == EINTR { continue }
                 if errno != 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
                 return nil
             }
@@ -150,9 +159,9 @@ struct TreeMeasure {
         if preferences.excluded(profile.path) { return result(.excluded, diagnostic: "Excluded by your preference.") }
         if cancellation.stopped { return result(.cancelled, diagnostic: "Cancelled before reading this location.") }
         var rootStat = stat()
-        guard lstat(profile.path, &rootStat) == 0 else { return result(errno == ENOENT ? .missing : .inaccessible, diagnostic: String(cString: strerror(errno))) }
+        guard retryingInterrupted({ lstat(profile.path, &rootStat) }) == 0 else { return result(errno == ENOENT ? .missing : .inaccessible, diagnostic: String(cString: strerror(errno))) }
         guard MetadataReader.hasNoSymlinkComponents(profile.path) else { return result(.excluded, diagnostic: "Symbolic links, including parent path components, are not traversed.") }
-        var stack: [DirectoryCursor] = [], nextPath: String? = profile.path
+        var stack: [DirectoryCursor] = [], nextPath: String? = profile.path, nextName = Substring((profile.path as NSString).lastPathComponent), nextTop: String?
         var bytes: Int64 = 0, logical: Int64 = 0, files = 0, entries = 0, latestSeconds: Int = Int.min
         // Turned-off folders inside this one, prepared once. Child paths are built from directory names,
         // so a plain prefix test matches containsPath without normalizing every entry.
@@ -164,10 +173,10 @@ struct TreeMeasure {
             for (index, excluded) in excludedInside.enumerated() where path == excluded || path.hasPrefix(excludedPrefixes[index]) { return true }
             return false
         }
-        let rootPrefixLength = profile.path == "/" ? 1 : profile.path.count + 1
         var childMap: [String: ChildSummary] = [:], typeMap: [String: FileTypeSummary] = [:]
         var retainedNames: Set<String> = [], listedChildren = 0
-        var seen: Set<String> = [], failures: [String] = [], omitted = 0
+        struct FileIdentity: Hashable { let device: Int32; let inode: UInt64 }
+        var seen: Set<FileIdentity> = [], failures: [String] = [], omitted = 0
         func incomplete(_ reason: String) -> FolderMeasurement {
             result(.limited, diagnostic: "\(reason) after \(entries.formatted()) entries. Partial sizes are withheld. Measure a smaller child folder or run a manual scan with its larger allowance.")
         }
@@ -189,6 +198,8 @@ struct TreeMeasure {
                             }
                         }
                         nextPath = child
+                        nextName = Substring(name)
+                        nextTop = cursor.top ?? (cursor.path == profile.path ? name : nil)
                     } else { stack.removeLast(); continue }
                 } catch { if failures.count < 3 { failures.append(cursor.path + ": " + error.localizedDescription) }; stack.removeLast(); continue }
             }
@@ -196,26 +207,23 @@ struct TreeMeasure {
             if entries >= limits.entries { return incomplete("Entry allowance reached") }
             entries += 1
             var st = stat()
-            guard lstat(path, &st) == 0 else { if failures.count < 3 { failures.append(path + ": " + String(cString: strerror(errno))) }; continue }
+            guard retryingInterrupted({ lstat(path, &st) }) == 0 else { if failures.count < 3 { failures.append(path + ": " + String(cString: strerror(errno))) }; continue }
             if (st.st_mode & S_IFMT) == S_IFLNK || st.st_dev != rootStat.st_dev { omitted += 1; continue }
             if st.st_nlink > 1 && (st.st_mode & S_IFMT) == S_IFREG {
-                let key = "\(st.st_dev):\(st.st_ino)"
-                if !seen.insert(key).inserted { continue }
+                if !seen.insert(FileIdentity(device: st.st_dev, inode: st.st_ino)).inserted { continue }
             }
             let allocated = Int64(st.st_blocks) * 512, isDirectory = (st.st_mode & S_IFMT) == S_IFDIR
             let modifiedSeconds = st.st_mtimespec.tv_sec
-            let relative = path == profile.path ? Substring("") : path.dropFirst(rootPrefixLength)
-            let firstComponent = String(relative.prefix { $0 != "/" })
-            if retainedNames.contains(firstComponent) {
-                if childMap[firstComponent] == nil { childMap[firstComponent] = ChildSummary(name: firstComponent, directory: isDirectory, identity: "\(st.st_dev):\(st.st_ino)") }
-                childMap[firstComponent]!.bytes += allocated
-                if !isDirectory { childMap[firstComponent]!.files += 1 }
-                if childMap[firstComponent]!.modifiedAt.map({ Double(modifiedSeconds) > $0.timeIntervalSince1970 }) ?? true {
-                    childMap[firstComponent]!.modifiedAt = Date(timeIntervalSince1970: Double(modifiedSeconds))
-                }
+            let top = nextTop
+            if let top, retainedNames.contains(top) {
+                var child = childMap[top] ?? ChildSummary(name: top, directory: isDirectory, identity: "\(st.st_dev):\(st.st_ino)")
+                child.bytes += allocated
+                if !isDirectory { child.files += 1 }
+                if child.modifiedAt.map({ Double(modifiedSeconds) > $0.timeIntervalSince1970 }) ?? true { child.modifiedAt = Date(timeIntervalSince1970: Double(modifiedSeconds)) }
+                childMap[top] = child
             }
             if !isDirectory {
-                let name = path.lastIndex(of: "/").map { path[path.index(after: $0)...] } ?? Substring(path)
+                let name = nextName
                 let dot = name.lastIndex(of: ".")
                 let ext = dot.map { name[name.index(after: $0)...] } ?? ""
                 var type = ext.isEmpty || dot == name.startIndex ? "No extension" : "." + String(ext.prefix(32)).lowercased()
@@ -227,7 +235,7 @@ struct TreeMeasure {
             if modifiedSeconds > latestSeconds { latestSeconds = modifiedSeconds }
             if isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
-                do { stack.append(try DirectoryCursor(path)) }
+                do { let cursor = try DirectoryCursor(path); cursor.top = top; stack.append(cursor) }
                 catch { if failures.count < 3 { failures.append(path + ": " + error.localizedDescription) } }
             } else { files += 1 }
             if entries % 4000 == 0 { Thread.sleep(forTimeInterval: 0.002) }

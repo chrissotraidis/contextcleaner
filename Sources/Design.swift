@@ -199,6 +199,7 @@ extension FolderCategory {
         case .history: return .mint
         case .model: return .yellow
         case .download: return Color(hue: 0.13, saturation: 0.35, brightness: 0.72)
+        case .virtualMachine: return Color(hue: 0.58, saturation: 0.35, brightness: 0.75)
         case .appData: return .gray
         case .unknown: return .secondary
         }

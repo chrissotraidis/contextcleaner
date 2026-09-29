@@ -49,6 +49,12 @@ struct Classifier {
                 assign(.packageCache, rule.1, rule.2, "Downloaded dependencies or generated package assets in a recognized tool cache.", "Future commands may require fresh downloads or rebuilds. Avoid manual changes while the tool is running.")
             } else if containsPath(home + "/Downloads", path) {
                 assign(.download, "Downloads · " + url.lastPathComponent, "Multiple applications", "Downloaded files may include installers, documents and unique user data.", "Review each item; being in Downloads does not establish that another copy exists.")
+            } else if containsPath(home + "/Parallels", path) {
+                assign(.virtualMachine, url.deletingPathExtension().lastPathComponent + " virtual machine", "Parallels Desktop", "A whole virtual computer: its disk, memory image and snapshots.", "Removing it deletes everything inside the virtual machine. Use Parallels Desktop to reclaim space or remove it.")
+            } else if containsPath(home + "/Library/Containers/com.docker.docker/Data/vms", path) {
+                assign(.virtualMachine, "Docker Desktop disk", "Docker Desktop", "The disk image that holds every Docker image, container and volume.", "Removing it deletes all containers, images and volumes. Clean up inside Docker Desktop instead.")
+            } else if containsPath(home + "/Library/Containers/com.utmapp.UTM/Data/Documents", path) {
+                assign(.virtualMachine, url.deletingPathExtension().lastPathComponent + " virtual machine", "UTM", "A whole virtual computer and its disks.", "Removing it deletes everything inside the virtual machine. Remove it inside UTM.")
             } else if path.contains("/Library/Application Support/") {
                 let app = String(path.components(separatedBy: "/Library/Application Support/")[1].split(separator: "/").first ?? "Unknown")
                 assign(.appData, app + " data", app, "Data stored beneath the application's support directory. May include preferences, libraries, databases and saves.", "Preserve by default. Use the application's content management where appropriate.")

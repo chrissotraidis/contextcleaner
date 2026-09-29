@@ -17,12 +17,13 @@ struct CoverageEntry: Identifiable, Hashable {
 }
 
 enum CoverageGroup: String, CaseIterable, Identifiable {
-    case ai = "AI tools", developer = "Developer tools", games = "Games & emulators", downloads = "Downloads"
+    case ai = "AI tools", developer = "Developer tools", virtual = "Virtual machines", games = "Games & emulators", downloads = "Downloads"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .ai: return "sparkles"
         case .developer: return "hammer"
+        case .virtual: return "desktopcomputer"
         case .games: return "gamecontroller"
         case .downloads: return "arrow.down.circle"
         }
@@ -52,6 +53,9 @@ enum Coverage {
         CoverageEntry(writer: "Simulator", relativePath: "Library/Developer/CoreSimulator/Devices", kind: .children, category: .simulator, writes: "One folder per virtual device: installed apps, their data, saves and photos.", name: "Test devices", group: .developer),
         CoverageEntry(writer: "CoreDevice", relativePath: "Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/AppInstallationBinaryDeltas", kind: .children, category: .installCache, writes: "Binary deltas cached when installing apps on physical iPhones and iPads.", name: "Install cache", group: .developer),
         CoverageEntry(writer: "npm", relativePath: ".npm/_cacache", kind: .folder, category: .packageCache, writes: "Downloaded package tarballs and metadata.", name: "Package cache", group: .developer),
+        CoverageEntry(writer: "Parallels", relativePath: "Parallels", kind: .children, category: .virtualMachine, writes: "Virtual machines: each .pvm holds a whole computer's disk and snapshots.", name: "Virtual machines", group: .virtual),
+        CoverageEntry(writer: "Docker", relativePath: "Library/Containers/com.docker.docker/Data/vms", kind: .folder, category: .virtualMachine, writes: "The disk image holding Docker images, containers and volumes.", name: "Docker disk", group: .virtual),
+        CoverageEntry(writer: "UTM", relativePath: "Library/Containers/com.utmapp.UTM/Data/Documents", kind: .children, category: .virtualMachine, writes: "Virtual machines created in UTM.", name: "Virtual machines", group: .virtual),
         CoverageEntry(writer: "npm", relativePath: ".npm/_npx", kind: .folder, category: .packageCache, writes: "Temporary installs made by npx.", name: "npx installs", group: .developer),
         CoverageEntry(writer: "pip", relativePath: "Library/Caches/pip", kind: .folder, category: .packageCache, writes: "Downloaded wheels and HTTP cache.", name: "Package cache", group: .developer),
         CoverageEntry(writer: "uv", relativePath: ".cache/uv", kind: .folder, category: .packageCache, writes: "Python package archives and built wheels.", name: "Package cache", group: .developer),

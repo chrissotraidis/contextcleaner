@@ -16,6 +16,7 @@ extension FolderCategory {
         case .model: return "cpu"
         case .appData: return "app.dashed"
         case .download: return "arrow.down.circle"
+        case .virtualMachine: return "desktopcomputer"
         case .unknown: return "questionmark.folder"
         }
     }
@@ -32,6 +33,7 @@ extension FolderCategory {
         case .model: return "Downloaded AI models and datasets used by local tools."
         case .appData: return "App libraries, settings, databases and saves. Being large doesn't make them disposable."
         case .download: return "Installers, documents and other downloads. Some may be the only copy."
+        case .virtualMachine: return "Virtual computers and container disks. Each holds a whole system and its files."
         case .unknown: return "A folder whose purpose isn't known yet."
         }
     }

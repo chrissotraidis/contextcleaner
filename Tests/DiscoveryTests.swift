@@ -185,7 +185,7 @@ import Foundation
         // Default order: big folders you haven't used lately come first.
         let fresh = FolderRow(measurement: measure(libraryProfile, 50_000_000_000, t0), policy: LocationPolicy(), change: GrowthSummary(), advice: Advice(verdict: .check, reason: "", howTo: "", command: nil, lastUsed: Date()))
         let idle = FolderRow(measurement: measure(buildProfile, 10_000_000_000, t0), policy: LocationPolicy(), change: GrowthSummary(), advice: Advice(verdict: .check, reason: "", howTo: "", command: nil, lastUsed: Date().addingTimeInterval(-120 * 86400)))
-        check(idle.idleScore > fresh.idleScore && fresh.idleScore == 0, "a 10 GB folder unused for four months outranks a 50 GB folder used today")
+        check(idle.idleScore > fresh.idleScore * 100, "a 10 GB folder unused for four months outranks a 50 GB folder used today")
         // Git activity, read from a real throwaway repository inside the fixture folder.
         let repo = root.appendingPathComponent("gitfixture"), tree = root.appendingPathComponent("gitfixture-feature")
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)

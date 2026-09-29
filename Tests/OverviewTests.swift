@@ -107,6 +107,12 @@ import Foundation
               "a finished worktree says so and offers git's own removal, which refuses uncommitted work")
         check(finishedWorktree.summary(now: now) == "Last commit 2 weeks ago on codex/diag · merged into main · nothing uncommitted", "git evidence reads as one plain sentence")
         var keepPolicy = LocationPolicy(); keepPolicy.isKept = true
+        let pvm = Classifier.profile(path: "/Users/x/Parallels/Windows 11.pvm", home: "/Users/x", readMetadata: false)
+        let dockerDisk = Classifier.profile(path: "/Users/x/Library/Containers/com.docker.docker/Data/vms", home: "/Users/x", readMetadata: false)
+        check(pvm.category == .virtualMachine && pvm.name == "Windows 11 virtual machine" && dockerDisk.category == .virtualMachine && dockerDisk.associatedApp == "Docker Desktop", "virtual machines and Docker's disk are recognized")
+        var dockerItem = item(dockerDisk.path, .virtualMachine, 40 * gib); dockerItem.profile = dockerDisk
+        let dockerAdvice = advice(for: dockerItem, policy: LocationPolicy(), devices: [:], now: now)
+        check(dockerAdvice.verdict == .check && dockerAdvice.command == "docker system df", "a virtual machine is never called safe, and Docker's advice starts with seeing what's reclaimable")
         check(advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50), policy: keepPolicy, devices: [:], now: now).verdict == .keep, "your Keep wins over every rule")
         check(staleBuild.verdict == .safe && staleBuild.reason.contains("kartpad") && staleBuild.reason.contains("2 weeks ago"), "build output idle for weeks is safe and says which project and when")
         check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 0.2, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "build output changed today is check first")

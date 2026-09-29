@@ -55,7 +55,7 @@ enum FolderCategory: String, Codable, CaseIterable {
     case packageCache = "Package cache", buildOutput = "Build output", installCache = "Installation cache"
     case simulator = "Simulator data", debugSymbols = "Debugging symbols", workspace = "Mixed workspace"
     case backup = "Recovery backup", history = "Conversation history", model = "Model library"
-    case appData = "Application data", download = "Downloads", unknown = "Unclassified"
+    case appData = "Application data", download = "Downloads", virtualMachine = "Virtual machine", unknown = "Unclassified"
     var displayName: String {
         switch self {
         case .workspace: return "Project files"
@@ -69,6 +69,7 @@ enum FolderCategory: String, Codable, CaseIterable {
         case .packageCache: return "Package downloads"
         case .debugSymbols: return "Debug files"
         case .download: return "Downloads"
+        case .virtualMachine: return "Virtual machines"
         case .unknown: return "Other files"
         }
     }

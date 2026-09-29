@@ -459,6 +459,13 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         return Advice(verdict: .keep, reason: "\(app)'s own library: things like games, saves and settings. Removing the folder can break \(app).", howTo: "Remove what you don't need from inside \(app) instead.", command: nil, lastUsed: m.latestModifiedAt)
     case .download:
         return Advice(verdict: .check, reason: "Files you downloaded. Old installers (.dmg, .pkg, .zip) are usually safe; documents may be your only copy.\(lastSeen)", howTo: "Sort by date in Finder and remove what you recognize.", command: nil, lastUsed: m.latestModifiedAt)
+    case .virtualMachine:
+        let app = m.profile.associatedApp
+        let docker = app == "Docker Desktop"
+        let howTo = docker ? "In Docker Desktop, remove images and containers you no longer need, or lower the disk limit in Settings › Resources. This command shows how much is reclaimable:"
+            : app == "Parallels Desktop" ? "In Parallels Desktop's Control Center, delete old snapshots or use Reclaim Disk Space to shrink it. To remove the whole machine, right-click it › Remove."
+            : "Remove or shrink it inside \(app)."
+        return Advice(verdict: .check, reason: "A whole virtual computer in \(app). Removing it deletes everything inside it.\(lastSeen)", howTo: howTo, command: docker ? "docker system df" : nil, lastUsed: m.latestModifiedAt)
     case .simulator:
         return Advice(verdict: .check, reason: "Simulator data outside a device folder.\(lastSeen)", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
     case .unknown:

@@ -21,14 +21,18 @@ Every folder gets a plain answer, with the reason and how to do it yourself:
 - **Check first** (orange): might be fine; the folder's card says exactly what to look at.
 - **Keep** (gray): app libraries and history. Remove things from inside their own app instead.
 
-The Overview shows how much looks safe to remove, and **Review Safe Folders** lists them. Simulator details come straight from Xcode, so they're always current. Context Cleaner never deletes anything; it tells you where, why and how.
+The Folders list shows each folder's size, when it was **last used**, and the answer. "Not recorded" means an older scan didn't note when files last changed; scanning that folder fills it in.
+
+Test devices get special care. Each one is listed by its real name ("iPhone 17 Pro · iOS 26.5") with its size and last use taken from Xcode right now, so no scan is needed and the numbers are never stale. The whole Simulator folder is never offered for removal; its card says how many devices are idle and how much they use, and you remove single devices in Xcode › Window › Devices and Simulators or with the copied `xcrun simctl delete` command.
+
+The Overview shows how much looks safe to remove, and **Review Safe Folders** lists them. Context Cleaner never deletes anything; it tells you where, why and how.
 
 ## How to read the chart
 
 ![Space used chart](docs/images/overview-chart.png)
 
 - **The blue area is used space.** It rises when your disk fills up. The dashed line at the top is your disk's capacity; the gap between them is your free space. The dot on the right is today.
-- **The headline is the change** for the range you picked: 24 hours, 7 days or 30 days.
+- **The headline is the change** for the range you picked: 24 hours, 7 days or 30 days. If readings began partway through that range, the chart starts at the first reading and says so, instead of drawing empty days.
 - **Point at the chart** to see the exact reading at that moment. **Drag across it** to see the change between two times, plus the scanned folders that grew most in that span. Click **Clear Selection** to go back.
 - **Change per day** switches to bars: orange means more space used, green means space was freed.
 - **Where readings come from:** Context Cleaner notes your disk space every hour while it's open, and at every scan. Gaps in the line are times when the app wasn't running. Nothing is filled in or guessed.

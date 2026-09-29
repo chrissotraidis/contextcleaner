@@ -238,11 +238,11 @@ struct UsageChart: View {
     }
     private func xStride(_ domain: ClosedRange<Date>) -> (Calendar.Component, Int) {
         let days = domain.upperBound.timeIntervalSince(domain.lowerBound) / 86400
-        return days <= 1.5 ? (.hour, 6) : days <= 3 ? (.hour, 12) : days <= 8 ? (.day, 1) : (.day, 5)
+        return days <= 1.05 ? (.hour, 6) : days <= 3 ? (.hour, 8) : days <= 8 ? (.day, 1) : (.day, 5)
     }
     private func xFormat(_ domain: ClosedRange<Date>) -> Date.FormatStyle {
         let days = domain.upperBound.timeIntervalSince(domain.lowerBound) / 86400
-        return days <= 1.5 ? .dateTime.hour() : days <= 3 ? .dateTime.weekday(.abbreviated).hour() : days <= 8 ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day()
+        return days <= 1.05 ? .dateTime.hour() : days <= 3 ? .dateTime.weekday(.abbreviated).hour() : days <= 8 ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day()
     }
     private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
         let axis = usageAxis(points.map(\.reading))

@@ -244,6 +244,21 @@ struct UsageChart: View {
         let days = domain.upperBound.timeIntervalSince(domain.lowerBound) / 86400
         return days <= 1.05 ? .dateTime.hour() : days <= 3 ? .dateTime.weekday(.abbreviated).hour() : days <= 8 ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day()
     }
+    /// Axis dates on round hours or days, leaving out any too close to the edges to show in full.
+    private func xTicks(_ domain: ClosedRange<Date>) -> [Date] {
+        let (component, step) = xStride(domain)
+        let calendar = Calendar.current
+        let span = domain.upperBound.timeIntervalSince(domain.lowerBound)
+        var date = calendar.dateInterval(of: component == .hour ? .hour : .day, for: domain.lowerBound)?.start ?? domain.lowerBound
+        if component == .hour { while calendar.component(.hour, from: date) % step != 0 { date = date.addingTimeInterval(3600) } }
+        var ticks: [Date] = []
+        while date <= domain.upperBound, ticks.count < 60 {
+            let fromStart = date.timeIntervalSince(domain.lowerBound), toEnd = domain.upperBound.timeIntervalSince(date)
+            if fromStart >= span * 0.04 && toEnd >= span * 0.09 { ticks.append(date) }
+            date = calendar.date(byAdding: component, value: step, to: date) ?? domain.upperBound.addingTimeInterval(1)
+        }
+        return ticks
+    }
     private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
         let axis = usageAxis(points.map(\.reading))
         let capacity = axis.upperBound
@@ -290,7 +305,7 @@ struct UsageChart: View {
         }
         .chartXScale(domain: domain)
         .chartYScale(domain: axis)
-        .chartXAxis { AxisMarks(values: .stride(by: xStride(domain).0, count: xStride(domain).1)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
+        .chartXAxis { AxisMarks(values: xTicks(domain)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
         .chartYAxis {
             AxisMarks(position: .leading, values: ticks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))

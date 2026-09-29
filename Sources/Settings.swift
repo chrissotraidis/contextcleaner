@@ -59,11 +59,11 @@ struct ScanningSettings: View {
             }
             Section {
                 DisclosureGroup("Advanced", isExpanded: $advanced) {
-                    Picker("Time per folder", selection: Binding(get: { model.preferences.perLocationSeconds ?? 120 }, set: { value in model.updatePreferences { $0.perLocationSeconds = value } })) {
-                        Text("30 seconds").tag(30); Text("1 minute").tag(60); Text("2 minutes (default)").tag(120); Text("5 minutes").tag(300); Text("15 minutes").tag(900)
+                    Picker("Time per folder", selection: Binding(get: { model.preferences.perLocationSeconds ?? 300 }, set: { value in model.updatePreferences { $0.perLocationSeconds = value } })) {
+                        Text("30 seconds").tag(30); Text("1 minute").tag(60); Text("2 minutes").tag(120); Text("5 minutes (default)").tag(300); Text("15 minutes").tag(900)
                     }
-                    Picker("Files per folder", selection: Binding(get: { model.preferences.perLocationEntries ?? 1_000_000 }, set: { value in model.updatePreferences { $0.perLocationEntries = value } })) {
-                        Text("100 thousand").tag(100_000); Text("500 thousand").tag(500_000); Text("1 million (default)").tag(1_000_000); Text("5 million").tag(5_000_000)
+                    Picker("Files per folder", selection: Binding(get: { model.preferences.perLocationEntries ?? 5_000_000 }, set: { value in model.updatePreferences { $0.perLocationEntries = value } })) {
+                        Text("100 thousand").tag(100_000); Text("500 thousand").tag(500_000); Text("1 million").tag(1_000_000); Text("5 million (default)").tag(5_000_000)
                     }
                     Text("A folder that hits a limit keeps its earlier size and appears in Couldn't Scan.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -241,7 +241,8 @@ struct ScanPlanView: View {
                         }
                     }
                 }
-                let added = model.preferences.customRoots.filter { !model.preferences.excluded($0) }
+                // Folders you added that are no longer on disk aren't listed; there's nothing left to scan.
+                let added = model.preferences.customRoots.filter { !model.preferences.excluded($0) && !model.gone.contains($0) }
                 if !added.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: "person.crop.circle").foregroundStyle(Color.accentColor).frame(width: 18).accessibilityHidden(true)
@@ -253,7 +254,7 @@ struct ScanPlanView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(included) { entry in Text("~/" + entry.relativePath).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                            ForEach(model.preferences.customRoots.filter { !model.preferences.excluded($0) }, id: \.self) { path in Text(path).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                            ForEach(added, id: \.self) { path in Text(path).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(maxHeight: 140)
                 }.font(.callout)

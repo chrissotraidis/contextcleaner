@@ -153,7 +153,18 @@ struct TreeMeasure {
         guard lstat(profile.path, &rootStat) == 0 else { return result(errno == ENOENT ? .missing : .inaccessible, diagnostic: String(cString: strerror(errno))) }
         guard MetadataReader.hasNoSymlinkComponents(profile.path) else { return result(.excluded, diagnostic: "Symbolic links, including parent path components, are not traversed.") }
         var stack: [DirectoryCursor] = [], nextPath: String? = profile.path
-        var bytes: Int64 = 0, logical: Int64 = 0, files = 0, entries = 0, latest: Date?
+        var bytes: Int64 = 0, logical: Int64 = 0, files = 0, entries = 0, latestSeconds: Int = Int.min
+        // Turned-off folders inside this one, prepared once. Child paths are built from directory names,
+        // so a plain prefix test matches containsPath without normalizing every entry.
+        let root = normalized(profile.path)
+        let excludedInside = preferences.locations.filter { $0.value.excluded }.map { normalized($0.key) }.filter { containsPath(root, $0) }
+        let excludedPrefixes = excludedInside.map { $0 == "/" ? "/" : $0 + "/" }
+        func isExcluded(_ path: String) -> Bool {
+            guard !excludedInside.isEmpty else { return false }
+            for (index, excluded) in excludedInside.enumerated() where path == excluded || path.hasPrefix(excludedPrefixes[index]) { return true }
+            return false
+        }
+        let rootPrefixLength = profile.path == "/" ? 1 : profile.path.count + 1
         var childMap: [String: ChildSummary] = [:], typeMap: [String: FileTypeSummary] = [:]
         var retainedNames: Set<String> = [], listedChildren = 0
         var seen: Set<String> = [], failures: [String] = [], omitted = 0
@@ -169,7 +180,7 @@ struct TreeMeasure {
                 do {
                     if let name = try cursor.next() {
                         let child = cursor.path == "/" ? "/" + name : cursor.path + "/" + name
-                        if preferences.excluded(child) { omitted += 1; entries += 1; if entries >= limits.entries { return incomplete("Entry allowance reached") }; continue }
+                        if isExcluded(child) { omitted += 1; entries += 1; if entries >= limits.entries { return incomplete("Entry allowance reached") }; continue }
                         if cursor.path == profile.path {
                             listedChildren += 1
                             if retainedNames.count < 512 { retainedNames.insert(name) }
@@ -184,7 +195,6 @@ struct TreeMeasure {
             guard let path = nextPath else { continue }; nextPath = nil
             if entries >= limits.entries { return incomplete("Entry allowance reached") }
             entries += 1
-            if preferences.excluded(path) { omitted += 1; continue }
             var st = stat()
             guard lstat(path, &st) == 0 else { if failures.count < 3 { failures.append(path + ": " + String(cString: strerror(errno))) }; continue }
             if (st.st_mode & S_IFMT) == S_IFLNK || st.st_dev != rootStat.st_dev { omitted += 1; continue }
@@ -193,25 +203,28 @@ struct TreeMeasure {
                 if !seen.insert(key).inserted { continue }
             }
             let allocated = Int64(st.st_blocks) * 512, isDirectory = (st.st_mode & S_IFMT) == S_IFDIR
-            let relative = path == profile.path ? "" : String(path.dropFirst(profile.path == "/" ? 1 : profile.path.count + 1))
-            let firstComponent = String(relative.split(separator: "/").first ?? "")
+            let modifiedSeconds = st.st_mtimespec.tv_sec
+            let relative = path == profile.path ? Substring("") : path.dropFirst(rootPrefixLength)
+            let firstComponent = String(relative.prefix { $0 != "/" })
             if retainedNames.contains(firstComponent) {
                 if childMap[firstComponent] == nil { childMap[firstComponent] = ChildSummary(name: firstComponent, directory: isDirectory, identity: "\(st.st_dev):\(st.st_ino)") }
                 childMap[firstComponent]!.bytes += allocated
                 if !isDirectory { childMap[firstComponent]!.files += 1 }
-                let modification = Date(timeIntervalSince1970: Double(st.st_mtimespec.tv_sec))
-                if childMap[firstComponent]!.modifiedAt == nil || modification > childMap[firstComponent]!.modifiedAt! { childMap[firstComponent]!.modifiedAt = modification }
+                if childMap[firstComponent]!.modifiedAt.map({ Double(modifiedSeconds) > $0.timeIntervalSince1970 }) ?? true {
+                    childMap[firstComponent]!.modifiedAt = Date(timeIntervalSince1970: Double(modifiedSeconds))
+                }
             }
             if !isDirectory {
-                let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
-                var type = ext.isEmpty ? "No extension" : "." + String(ext.prefix(32))
+                let name = path.lastIndex(of: "/").map { path[path.index(after: $0)...] } ?? Substring(path)
+                let dot = name.lastIndex(of: ".")
+                let ext = dot.map { name[name.index(after: $0)...] } ?? ""
+                var type = ext.isEmpty || dot == name.startIndex ? "No extension" : "." + String(ext.prefix(32)).lowercased()
                 if typeMap[type] == nil && typeMap.count >= 63 { type = "Other extensions" }
                 var summary = typeMap[type] ?? FileTypeSummary(kind: type)
                 summary.files += 1; summary.bytes += allocated; typeMap[type] = summary
             }
             bytes += allocated; logical += Int64(st.st_size)
-            let modified = Date(timeIntervalSince1970: Double(st.st_mtimespec.tv_sec))
-            if latest == nil || modified > latest! { latest = modified }
+            if modifiedSeconds > latestSeconds { latestSeconds = modifiedSeconds }
             if isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
                 do { stack.append(try DirectoryCursor(path)) }
@@ -221,6 +234,7 @@ struct TreeMeasure {
         }
         if !failures.isEmpty { return result(.inaccessible, diagnostic: "Incomplete measurement; partial sizes withheld. " + failures.joined(separator: "\n")) }
         contents = FolderContents(children: childMap.values.sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }, fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted)
+        let latest = latestSeconds == Int.min ? nil : Date(timeIntervalSince1970: Double(latestSeconds))
         return result(.measured, bytes, logical, files, latest, diagnostic: omitted > 0 ? "\(omitted) excluded paths, symbolic links or other-volume entries were skipped. Size describes only included contents." : nil)
     }
 }

@@ -428,10 +428,14 @@ struct FolderRow: Identifiable {
         if selectedOnly, let selected, preferences.excluded(selected) { error = "This location is excluded. Include it again before scanning."; return }
         cancellation = Cancellation(); let token = cancellation, prefs = preferences, home = home, path = selected
         let known = discovery.profiles, history = records, now = Date()
+        // A full scan also re-measures every saved folder that's still on disk (for example sizes imported from
+        // SpaceCheck), so every row gets a fresh size and a last-changed date, not only newly discovered ones.
+        let saved = latest.map(\.profile).filter { !gone.contains($0.path) && !fileOnly.contains($0.path) && !preferences.excluded($0.path) }
         running = true; partial = []; completed = 0; targetCount = 0
         progress = selectedOnly ? "Checking selected location…" : "Discovering locations; macOS may request access…"
         let scope = selectedOnly ? "Selected folder" : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to \(preferences.effectivePriorityCount))" : "Known and selected locations"
-        DispatchQueue.global(qos: .utility).async {
+        // A scan you start runs at normal priority; background checks stay low so they never slow your Mac.
+        DispatchQueue.global(qos: priorityOnly ? .utility : .userInitiated).async {
             let found: Discovery
             if selectedOnly, let path { found = Discovery(profiles: [Classifier.profile(path: path, home: home, preferences: prefs)], notes: ["Selected folder only; exclusions apply."]) }
             else if watchedOnly {
@@ -442,7 +446,9 @@ struct FolderRow: Identifiable {
             } else { found = Inventory.discover(home: home, preferences: prefs, cancellation: token) { path in
                 DispatchQueue.main.async { if !token.stopped { self.progress = "Discovering: " + path + " · macOS may request access" } }
             } }
-            let profiles = priorityOnly ? ScanPlanner.priority(found.profiles, preferences: prefs, records: history, now: now, limit: prefs.effectivePriorityCount) : found.profiles
+            var candidates = found.profiles
+            if !selectedOnly && !watchedOnly && !priorityOnly { candidates += savedProfilesToRefresh(saved, discovered: found.profiles) }
+            let profiles = priorityOnly ? ScanPlanner.priority(found.profiles, preferences: prefs, records: history, now: now, limit: prefs.effectivePriorityCount) : candidates
             let rediscovered = !selectedOnly && !watchedOnly && (!priorityOnly || ScanPlanner.discoveryDue(prefs, now: now))
             DispatchQueue.main.async {
                 if !selectedOnly && !watchedOnly { self.acceptDiscovery(found) }
@@ -453,7 +459,7 @@ struct FolderRow: Identifiable {
                 DispatchQueue.main.async { self.error = "No included locations match this scan. Add a location or change your filters."; self.running = false }
                 return
             }
-            let record = ScanEngine.scan(profiles: profiles, preferences: prefs, scope: scope, notes: found.notes, cancellation: token, limits: priorityOnly ? .priority : prefs.manualLimits, totalSeconds: priorityOnly ? 90 : 900) { item, index, total in
+            let record = ScanEngine.scan(profiles: profiles, preferences: prefs, scope: scope, notes: found.notes, cancellation: token, limits: priorityOnly ? .priority : prefs.manualLimits, totalSeconds: priorityOnly ? 90 : 1800) { item, index, total in
                 DispatchQueue.main.async { self.partial.append(item); self.completed = index; self.progress = item.profile.name }
             }
             DispatchQueue.main.async {

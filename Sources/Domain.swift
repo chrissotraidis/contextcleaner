@@ -138,7 +138,8 @@ struct Preferences: Codable {
     var perLocationEntries: Int? = nil
     var effectiveSchedule: String { schedule ?? (dailyWhileOpen ? "daily" : "off") }
     var effectivePriorityCount: Int { min(max(priorityCount ?? 12, 4), 48) }
-    var manualLimits: ScanLimits { ScanLimits(seconds: TimeInterval(min(max(perLocationSeconds ?? 120, 30), 900)), entries: min(max(perLocationEntries ?? 1_000_000, 100_000), 10_000_000)) }
+    /// Scans you start: 5 minutes and 5 million files per folder by default, so caches like DerivedData finish.
+    var manualLimits: ScanLimits { ScanLimits(seconds: TimeInterval(min(max(perLocationSeconds ?? 300, 30), 900)), entries: min(max(perLocationEntries ?? 5_000_000, 100_000), 10_000_000)) }
     func policy(_ path: String) -> LocationPolicy { locations[normalized(path)] ?? LocationPolicy() }
     func excluded(_ path: String) -> Bool {
         locations.contains { $0.value.excluded && containsPath($0.key, path) }

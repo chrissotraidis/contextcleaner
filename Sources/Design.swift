@@ -31,7 +31,7 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", safe = "Safe to remove", check = "Check first", keep = "Keep", growing = "Growing", unscanned = "Not scanned", reviewLater = "Review later", excluded = "Turned off"
+    case all = "All", safe = "Safe to remove", check = "Check first", keep = "Keep", inside = "Unused inside busy folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
     var id: String { rawValue }
     var explanation: String {
         switch self {
@@ -42,6 +42,7 @@ enum LocationFilter: String, CaseIterable, Identifiable {
         case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
         case .growing: return "Grew between two scans and not marked as expected."
         case .reviewLater: return "Folders you asked to come back to."
+        case .inside: return "Folders you're still using that hold old items their tool can recreate. Open one to see the items."
         case .excluded: return "Folders you turned off. They aren't scanned."
         }
     }
@@ -151,6 +152,7 @@ struct VerdictCard: View {
     let sizeSource: String?
     var neverUsed = false
     @State private var copied = false
+    @State private var copiedTrash = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(advice.verdict.title, systemImage: advice.verdict.symbol).font(.headline).foregroundStyle(advice.verdict.tint)
@@ -160,6 +162,7 @@ struct VerdictCard: View {
             }
             Text([advice.lastUsed.map { "Last used " + ageText($0) } ?? (neverUsed ? "Never started" : "Last use not recorded yet"), sizeSource].compactMap { $0 }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary)
+            if !advice.staleItems.isEmpty { staleSection }
             Divider()
             Text("How to remove it yourself").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Text(advice.howTo).font(.callout).fixedSize(horizontal: false, vertical: true)
@@ -174,7 +177,31 @@ struct VerdictCard: View {
             }
         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
             .background(advice.verdict.tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
-            .onChange(of: advice) { _, _ in copied = false }
+            .onChange(of: advice) { _, _ in copied = false; copiedTrash = false }
+    }
+    /// The old items inside a busy folder: the part you can remove without disturbing current work.
+    private var staleSection: some View {
+        let items = advice.staleItems
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            Text("Unused inside · \(byteLabel(advice.staleBytes)) in \(items.count) \(items.count == 1 ? "item" : "items")").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(items.prefix(6)) { item in
+                HStack(spacing: 6) {
+                    Text(item.name).font(.callout).lineLimit(1).truncationMode(.middle).help(item.path)
+                    Spacer(minLength: 6)
+                    Text(item.modifiedAt.map { "changed " + ageText($0) } ?? "").font(.caption).foregroundStyle(.secondary)
+                    Text(byteLabel(item.bytes)).font(.callout).monospacedDigit()
+                }
+            }
+            if items.count > 6 { Text("and \(items.count - 6) more").font(.caption).foregroundStyle(.secondary) }
+            HStack(spacing: 8) {
+                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(items.map { URL(fileURLWithPath: $0.path) }) }
+                    .controlSize(.small).help("Selects these items in Finder. Press ⌘⌫ there to move them to the Trash yourself.")
+                Button(copiedTrash ? "Copied" : "Copy Move-to-Trash Command") {
+                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(items.map(\.path)), forType: .string); copiedTrash = true
+                }.controlSize(.small).help("Copies a Terminal command that moves these items to the Trash, where you can still get them back. Context Cleaner never runs it.")
+            }
+        }
     }
 }
 
@@ -231,16 +258,18 @@ struct LocationActions: View {
         let policy = model.preferences.policy(path)
         let busy = model.running || model.inspecting || model.discovering
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
-        Button("Scan This Folder") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
+        Button("Scan Again") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
-        Button(policy.isWatched ? "Remove from Watchlist" : "Add to Watchlist") { model.policy(path) { $0.isWatched.toggle() } }
-        Button(policy.isKept ? "Stop Keeping" : "Keep, Never Suggest") { model.policy(path) { $0.isKept.toggle() } }
+        Button(policy.isKept ? "Stop Keeping" : "Always Keep This Folder") { model.policy(path) { $0.isKept.toggle() } }
             .help(policy.isKept ? "Suggest this folder again when it looks safe to remove" : "Keep this folder out of every suggestion. It moves to Kept.")
-        Button(policy.expected ? "Growth Is Not Expected" : "Growth Is Expected") { model.policy(path) { $0.expected.toggle() } }
-        Button("Review Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
-        Button("Tags and Notes…") { model.editing = path }
+        Button(policy.isWatched ? "Stop Watching" : "Watch for Growth") { model.policy(path) { $0.isWatched.toggle() } }
+            .help("Watched folders are scanned first and listed in Watchlist")
+        Button(policy.expected ? "Warn Me When It Grows" : "Its Growth Is Normal") { model.policy(path) { $0.expected.toggle() } }
+            .help(policy.expected ? "Show it under Growing again" : "Stop listing it under Growing; it's marked Keep")
+        Button("Remind Me Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
+        Button("Tags & Notes…") { model.editing = path }
         Divider()
-        Button(policy.excluded ? "Include in Scans" : "Exclude from Scans") { model.policy(path) { $0.excluded.toggle() } }.disabled(model.running || model.inspecting)
+        Button(policy.excluded ? "Scan This Folder Again" : "Stop Scanning This Folder") { model.policy(path) { $0.excluded.toggle() } }.disabled(model.running || model.inspecting)
     }
 }
 
@@ -252,9 +281,9 @@ struct SelectionActions: View {
         Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
         Button("Watch All") { for path in paths { model.policy(path) { $0.isWatched = true } } }
         Button("Stop Watching All") { for path in paths { model.policy(path) { $0.isWatched = false; $0.autoWatched = nil } } }
-        Button("Keep All, Never Suggest") { for path in paths { model.policy(path) { $0.isKept = true } }; model.selection = [] }
+        Button("Always Keep These Folders") { for path in paths { model.policy(path) { $0.isKept = true } }; model.selection = [] }
         Divider()
-        Button("Exclude All from Scans") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
+        Button("Stop Scanning All") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
         Button("Clear Selection") { model.selection = [] }
     }
 }

@@ -75,7 +75,7 @@ struct MainView: View {
             }
             if #available(macOS 26.0, *) { ToolbarSpacer(.fixed) }
             ToolbarItemGroup {
-                Button { model.exportReport() } label: { Label("Export Report…", systemImage: "square.and.arrow.up") }
+                Button { model.exportReport() } label: { Label("Export Cleanup List…", systemImage: "checklist") }
                     .help("Preview a Markdown report of the folders shown here, then save it (Shift-Command-E)")
             }
         }
@@ -162,7 +162,7 @@ struct MainView: View {
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
             // The answer first: how much is safe, how much needs a look, how much to keep. Each tile is a filter.
-            let others: [LocationFilter] = [.growing, .unscanned, .reviewLater]
+            let others: [LocationFilter] = [.inside, .growing, .unscanned, .reviewLater]
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
@@ -182,7 +182,7 @@ struct MainView: View {
                         ForEach(others) { filter in
                             Button { model.locationFilter = filter } label: { if model.locationFilter == filter { Label(filter.rawValue, systemImage: "checkmark") } else { Text(filter.rawValue) } }
                         }
-                    } label: { Text(others.contains(model.locationFilter) ? "Showing: " + model.locationFilter.rawValue : "Other lists") }
+                    } label: { Text(others.contains(model.locationFilter) ? "Showing: " + model.locationFilter.rawValue : "More lists") }
                         .menuStyle(.borderlessButton).fixedSize().font(.caption)
                         .help("Growing, not scanned yet and review later")
                 }
@@ -206,22 +206,29 @@ struct MainView: View {
     /// How Folders are ordered. The default puts big folders you haven't used lately first.
     private var orderName: String {
         switch sortOrder.first?.keyPath {
-        case \FolderRow.idleScore: return "Big and unused first"
-        case \FolderRow.bytes: return "Largest first"
-        case \FolderRow.unusedKey: return "Longest unused first"
+        case \FolderRow.idleScore: return "Biggest unused first"
+        case \FolderRow.bytes: return "Biggest first"
+        case \FolderRow.unusedKey: return "Unused longest first"
         case \FolderRow.name: return "Name"
         default: return "Custom"
         }
     }
+    private func orderButton(_ title: String, _ order: [KeyPathComparator<FolderRow>]) -> some View {
+        Button { sortOrder = order } label: { if orderName == title { Label(title, systemImage: "checkmark") } else { Text(title) } }
+    }
     var orderMenu: some View {
         Menu {
-            Button("Big and unused first") { sortOrder = [KeyPathComparator(\FolderRow.idleScore, order: .reverse)] }
-            Button("Largest first") { sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)] }
-            Button("Longest unused first") { sortOrder = [KeyPathComparator(\FolderRow.unusedKey)] }
-            Button("Name") { sortOrder = [KeyPathComparator(\FolderRow.name)] }
-        } label: { Label("Order: " + orderName, systemImage: "arrow.up.arrow.down") }
+            Section("Where to start") {
+                orderButton("Biggest unused first", [KeyPathComparator(\FolderRow.idleScore, order: .reverse)])
+            }
+            Section("Other orders") {
+                orderButton("Biggest first", [KeyPathComparator(\FolderRow.bytes, order: .reverse)])
+                orderButton("Unused longest first", [KeyPathComparator(\FolderRow.unusedKey)])
+                orderButton("Name", [KeyPathComparator(\FolderRow.name)])
+            }
+        } label: { Label("Sort: " + orderName, systemImage: "arrow.up.arrow.down") }
             .menuStyle(.borderlessButton).fixedSize().font(.caption)
-            .help("Big and unused first weighs each folder's size by how long it's gone unused")
+            .help("Biggest unused first weighs each folder's size by how long it's gone unused, so big forgotten folders come first")
     }
     /// The Kept view: what you've set aside, and how much of the disk it is.
     var keptBanner: some View {
@@ -235,7 +242,7 @@ struct MainView: View {
                 VerdictTile(title: "Not scanned", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) · last known size", symbol: "eye.slash", tint: .secondary, selected: false) {}
                     .allowsHitTesting(false)
             }
-            Text("Right-click any folder and choose Keep, Never Suggest. Kept folders are still measured so you can see what they hold; they just never show up as something to remove.")
+            Text("Right-click any folder and choose Always Keep This Folder. Kept folders are still measured so you can see what they hold; they just never show up as something to remove.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 16).padding(.bottom, 8)
     }
@@ -269,7 +276,15 @@ struct MainView: View {
                     else if row.policy.excluded { Label("Not scanned", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
                     else if row.policy.isKept { Label("Kept by you", systemImage: "hand.raised.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.purple) }
                     else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
-                    else { VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id)) }
+                    else {
+                        VStack(alignment: .leading, spacing: 2) {
+                            VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id))
+                            if !row.advice.short.isEmpty {
+                                Text(row.advice.short).font(.caption).lineLimit(1)
+                                    .foregroundStyle(selectedRow(row.id) ? Color.white.opacity(0.85) : row.advice.staleItems.isEmpty ? Color.secondary : Verdict.safe.tint)
+                            }
+                        }
+                    }
                 }.help(row.advice.reason)
             }.width(min: 120, ideal: 140)
             TableColumn("Size", value: \.bytes) { row in
@@ -711,7 +726,7 @@ struct PolicyEditor: View {
                 CommandGroup(replacing: .newItem) {}
                 CommandGroup(after: .importExport) {
                     Button("Add Folder to Scan…") { model.addRoot() }.keyboardShortcut("o", modifiers: [.command, .shift])
-                    Button("Export Report…") { model.exportReport() }.keyboardShortcut("e", modifiers: [.command, .shift])
+                    Button("Export Cleanup List…") { model.exportReport() }.keyboardShortcut("e", modifiers: [.command, .shift])
                 }
                 CommandGroup(after: .sidebar) {
                     Picker("Appearance", selection: Binding(get: { model.preferences.appearance ?? "System" }, set: { model.setAppearance($0) })) {
@@ -737,7 +752,7 @@ struct PolicyEditor: View {
                         Text("Select a folder first")
                     }
                     Divider()
-                    Button("Tags and Notes…") { if let path = model.selected { model.editing = path } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(model.selection.count != 1)
+                    Button("Tags & Notes…") { if let path = model.selected { model.editing = path } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(model.selection.count != 1)
                 }
             }
         Settings { SettingsView(model: model) }
@@ -774,9 +789,9 @@ struct ReportPreview: View {
     let text: String
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Export report").font(.title2.weight(.semibold))
-            Text("A Markdown file listing the \(model.rows.count) \(model.rows.count == 1 ? "folder" : "folders") shown in \(model.section == .overview || model.section == .history ? "Folders" : model.section.rawValue): sizes, changes, paths, what each holds and your notes. It stays on your Mac.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file contains every folder." : text
+            Text("Export cleanup list").font(.title2.weight(.semibold))
+            Text("A checklist of what you can remove, biggest first: everything that looks safe, old items inside folders you're still using, and what to check first, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file has the whole list." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 .background(.background.secondary)
             HStack {

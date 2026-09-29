@@ -193,7 +193,13 @@ struct UsageChart: View {
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
                 Spacer()
                 if span != nil { Button("Clear Selection") { span = nil }.controlSize(.small) }
-                else if !perBucket { Text("Drag across the chart to compare two times").font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                else if !perBucket {
+                    HStack(spacing: 10) {
+                        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(Color.accentColor).frame(width: 10, height: 10); Text("Used") }
+                        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(Color.stable.opacity(0.35)).frame(width: 10, height: 10); Text("Free") }
+                        Text("· Point for a reading, drag to compare")
+                    }.font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
             grew(from: active.lowerBound, to: active.upperBound)
         }
@@ -204,8 +210,9 @@ struct UsageChart: View {
         VStack(alignment: .leading, spacing: 2) {
             if let change {
                 let delta = change.delta
-                (Text(delta == 0 ? "No change" : signedBytes(delta)).foregroundColor(delta > 0 ? .growing : delta < 0 ? .stable : .primary)
-                 + Text(delta > 0 ? " more space used" : delta < 0 ? " of space freed" : " in used space").foregroundColor(.primary))
+                // Said in free space, the number people act on: "251 GiB less free space".
+                (Text(delta == 0 ? "No change" : byteLabel(abs(delta))).foregroundColor(delta > 0 ? .growing : delta < 0 ? .stable : .primary)
+                 + Text(delta > 0 ? " less free space" : delta < 0 ? " more free space" : " in free space").foregroundColor(.primary))
                     .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             } else {
                 Text(span == nil ? "Not enough readings yet" : "No readings in this span").font(.title2.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
@@ -231,7 +238,7 @@ struct UsageChart: View {
         let when = span.map { "\($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) – \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" }
             ?? (startsLate ? "Since \(firstReading!.formatted(.dateTime.weekday(.abbreviated).day().hour())), the first reading" : "Last " + range.rawValue)
         guard let change else { return when + (span == nil ? " · Disk space is noted every hour while the app is open" : " · Drag across the blue area instead") }
-        return "\(when) · \(byteLabel(change.from.used)) → \(byteLabel(change.to.used)) used"
+        return "\(when) · free space \(byteLabel(change.from.free)) → \(byteLabel(change.to.free))"
     }
     /// True when readings begin well after the range starts. The chart then starts at the first reading
     /// instead of drawing an empty stretch.
@@ -281,6 +288,9 @@ struct UsageChart: View {
                 let used = Double(point.reading.used) / gibibyte
                 AreaMark(x: .value("Time", point.reading.date), yStart: .value("Floor", axis.lowerBound), yEnd: .value("Used", used), series: .value("Series", "used-\(point.segment)"))
                     .foregroundStyle(fill).interpolationMethod(.monotone)
+                // Free space: the band between used space and the disk's capacity.
+                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Used", used), yEnd: .value("Capacity", capacity), series: .value("Series", "free-\(point.segment)"))
+                    .foregroundStyle(Color.stable.opacity(0.13)).interpolationMethod(.monotone)
                 LineMark(x: .value("Time", point.reading.date), y: .value("Used", used), series: .value("Series", "line-\(point.segment)"))
                     .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
             }
@@ -289,7 +299,7 @@ struct UsageChart: View {
                 PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor.opacity(0.2)).symbolSize(180)
                 PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(45)
                     .annotation(position: .bottom, alignment: .trailing, spacing: 6) {
-                        Text(byteLabel(last.reading.used)).font(.caption.weight(.semibold)).monospacedDigit()
+                        Text("\(byteLabel(last.reading.free)) free now").font(.caption.weight(.semibold)).monospacedDigit()
                             .padding(.horizontal, 6).padding(.vertical, 2).background(.regularMaterial, in: Capsule())
                     }
             }
@@ -297,12 +307,6 @@ struct UsageChart: View {
                 let used = Double(picked.reading.used) / gibibyte
                 RuleMark(x: .value("Reading", picked.reading.date)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 1))
                 PointMark(x: .value("Reading", picked.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(60)
-                    .annotation(position: .top, alignment: .center, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
-                        VStack(spacing: 1) {
-                            Text(byteLabel(picked.reading.used) + " used").font(.caption.weight(.semibold)).monospacedDigit()
-                            Text(picked.reading.date.formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.caption).foregroundStyle(.secondary)
-                        }.padding(.horizontal, 8).padding(.vertical, 4).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
-                    }
             }
         }
         .chartXScale(domain: domain)
@@ -408,9 +412,10 @@ struct Dashboard: View {
             let chartHeight = min(300, max(136, geometry.size.height - 690))
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 14) {
+                    // Freshness and counts first, so you know how current everything below is.
+                    statusLine
                     hero(chartHeight)
                     diskMap
-                    statusLine
                     HStack(alignment: .top, spacing: 16) {
                         idlePanel.frame(maxWidth: .infinity)
                         foldersPanel.frame(maxWidth: .infinity)
@@ -436,7 +441,7 @@ struct Dashboard: View {
                         SectorMark(angle: .value("Free", v.free), innerRadius: .ratio(0.78), angularInset: 1.5).foregroundStyle(Color.secondary.opacity(0.22))
                     }.chartLegend(.hidden)
                     VStack(spacing: 0) {
-                        Text(fraction.formatted(.percent.precision(.fractionLength(0)))).font(.title2.weight(.semibold)).monospacedDigit()
+                        Text(usedPercentText(fraction)).font(.title2.weight(.semibold)).monospacedDigit()
                         Text("used").font(.caption).foregroundStyle(.secondary)
                     }
                 }.frame(width: 104, height: 104).accessibilityElement(children: .ignore).accessibilityLabel("\(byteLabel(v.used)) used of \(byteLabel(v.total))")
@@ -454,20 +459,26 @@ struct Dashboard: View {
             VStack(alignment: .leading, spacing: 8) { Text("Disk space is unavailable.").font(.callout); Button("Try Again") { model.refreshVolume() } }
         }
     }
+    /// How current the numbers are, first thing on the page, with the counts behind them.
     private var statusLine: some View {
-        HStack(spacing: 6) {
-            link("\(measured.count) scanned", tint: .primary) { show(filter: .all) }
+        let full = model.records.last(where: { $0.measurements.count >= 20 })
+        let stale = full.map { Date().timeIntervalSince($0.finishedAt) > 86400 } ?? true
+        return HStack(spacing: 6) {
+            Image(systemName: "clock").foregroundStyle(stale ? Color.growing : .secondary).accessibilityHidden(true)
+            if let full {
+                Text("Sizes from the full scan \(full.finishedAt.formatted(.relative(presentation: .named)))")
+                    .foregroundStyle(stale ? Color.growing : .primary)
+                    .help("Took \(elapsedLabel(full.finishedAt.timeIntervalSince(full.startedAt))) · \(full.measurements.count) folders")
+            } else { Text("No full scan yet").foregroundStyle(Color.growing) }
+            dot
+            link("\(measured.count) scanned", tint: .secondary) { show(filter: .all) }
             if model.overview.pendingCount > 0 { dot; link("\(model.overview.pendingCount) not scanned yet", tint: .secondary) { show(filter: .unscanned) } }
             if model.overview.growthCount > 0 { dot; link("\(model.overview.growthCount) growing", tint: .growing) { show(filter: .growing) } }
-            dot
-            if model.attentionCount > 0 { link("\(model.attentionCount) couldn't be scanned", tint: .attention) { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention } }
-            else { Text("nothing needs attention").foregroundStyle(.secondary) }
+            if model.attentionCount > 0 { dot; link("\(model.attentionCount) couldn't be scanned", tint: .attention) { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention } }
             Spacer()
-            // Most sizes come from the last full scan; say plainly when that's old.
-            if let full = model.records.last(where: { $0.measurements.count >= 20 })?.finishedAt, Date().timeIntervalSince(full) > 86400 {
-                link("Sizes are from \(ageText(full)) · Scan to refresh", tint: .growing) { model.showingScanPlan = true }
-            } else if let scan = model.lastScan { Text("Last scan \(scan.finishedAt.formatted(.relative(presentation: .named)))").foregroundStyle(.secondary) }
-            Button("What gets scanned?") { model.showingScanPlan = true }.buttonStyle(.link)
+            Button(stale ? "Scan Now…" : "Scan Again…") { model.showingScanPlan = true }
+                .controlSize(.small).disabled(model.running || model.discovering)
+                .help("Shows what will be scanned before it starts")
         }.font(.callout).lineLimit(1)
     }
     private var dot: some View { Text("·").foregroundStyle(.tertiary) }
@@ -609,10 +620,10 @@ struct Dashboard: View {
     private var foldersPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label { Text(showLargest ? "Largest folders" : "Safe to remove").foregroundStyle(.primary) }
+                Label { Text(showLargest ? "Biggest folders" : "Start here").foregroundStyle(.primary) }
                     icon: { Image(systemName: showLargest ? "folder" : Verdict.safe.symbol).foregroundStyle(showLargest ? Color.accentColor : Verdict.safe.tint) }.font(.headline)
                 Spacer()
-                Picker("Show", selection: $showLargest) { Text("Safe").tag(false); Text("Largest").tag(true) }
+                Picker("Show", selection: $showLargest) { Text("Safe to remove").tag(false); Text("Biggest").tag(true) }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
             }
             if showLargest { largestRows } else { safeRows }
@@ -643,6 +654,39 @@ struct Dashboard: View {
             Text("Nothing is clearly safe to remove yet. Scan your folders so Context Cleaner can see when each was last used.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         } else {
             Button(safe.count > 6 ? "See all \(safe.count) safe folders" : "See safe folders") { show(filter: .safe) }.buttonStyle(.link).font(.callout)
+        }
+        let inside = model.unusedInside
+        if inside.bytes > 0 {
+            Divider()
+            Button { show(filter: .inside) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "shippingbox").foregroundStyle(Verdict.safe.tint).frame(width: 20).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Also \(byteLabel(inside.bytes)) unused inside busy folders").font(.callout)
+                        Text("Old items in \(inside.folders) \(inside.folders == 1 ? "folder" : "folders") you're still using" + (inside.biggest.map { ", like \($0)" } ?? "")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).help("Lists the folders; open one to see the old items and remove them yourself")
+        }
+        trashRow
+    }
+    /// Moving a folder to the Trash frees nothing until the Trash is emptied; say so, with its size when macOS allows reading it.
+    @ViewBuilder private var trashRow: some View {
+        let bytes = model.trashBytes
+        if bytes == nil || (bytes ?? 0) >= 100 << 20 {
+            Divider()
+            HStack(spacing: 10) {
+                Image(systemName: "trash").foregroundStyle(.secondary).frame(width: 20).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(bytes.map { "Your Trash still holds \(byteLabel($0))" } ?? "Moved things to the Trash?").font(.callout)
+                    Text("They keep using space until you empty the Trash in Finder.").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")) }
+                    .controlSize(.small).help("Opens the Trash in Finder. Context Cleaner never empties it for you.")
+            }
         }
     }
     @ViewBuilder private var largestRows: some View {

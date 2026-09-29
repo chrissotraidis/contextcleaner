@@ -167,3 +167,13 @@ Use the native toolbar material and grouping. Keep content backgrounds quiet; ap
 - **How long it's sat unused.** Labeled rows (this week, this month, 1–3 months, 3+ months, unknown), stacked by answer and sized linearly with the number written beside each row.
 - **Gone means gone.** Missing folders leave every list, total and Couldn't Scan.
 - **Virtual machines** are a type (steel blue, desktop icon). They're never safe; the advice points to the app's own tools.
+
+## 0.11: recently used isn't safe, unused inside, free space first
+
+- **Recent use beats rebuildable.** Package caches, DerivedData and install caches used in the last 7 days are Check first ("still relying on it"). Project folders are held at Check first ("Checking git…") until git activity has been read after launch, so a launch never overstates what's safe.
+- **Point inside busy folders.** For a Check-first folder whose tool rebuilds its contents, top-level items over 50 MiB unchanged for 30+ days are listed when they total at least 1 GiB. The card offers Show in Finder and a copied move-to-Trash command, never run by the app.
+- **A short reason on every row.** Two to four words under the badge match the full reason. Process names are shown as app names (prl_vm_app is Parallels Desktop).
+- **Free space first.** The chart headline and label speak in free space; a green band shows it above used space. Percent used never rounds up to 100% while space is free, and shares under 1% say so.
+- **Say what a scan does before it runs.** The scan sheet lists places biggest first, counting only what's turned on, says when the last full scan ran and how long it took, and offers Start Full Scan or Watchlist Only. Settings › Scanning is three action rows plus the macOS permission.
+- **Export is a cleanup list.** A Markdown checklist in the order you'd act on it: Safe, Unused inside, Check first, Keep.
+- **Speed.** Advice, the folder list and Coverage sizes are cached per change; scan progress doesn't invalidate advice. A scan update stays under 10 ms on 180 folders.

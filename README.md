@@ -8,8 +8,8 @@ Context Cleaner is a native macOS app that shows how full your disk is, how that
 
 ## Start here
 
-1. Choose **Scan Folders…** (⌘R). The sheet lists the apps and paths it will read. Choose **Start Scan**; a bar under the title shows progress, and you can stop at any time.
-2. On **Overview**, read the headline above the chart, for example "+24 GiB more space used". The disk map below it splits your whole disk into Safe to remove, Check first, Keep, Kept by you, Everything else and Free; point at a color for details and click it to list those folders. **How long it's sat unused** shows where idle space is.
+1. Choose **Scan Folders…** (⌘R). The sheet lists the places it will read, biggest first with their last known sizes, says when the last full scan ran and how long it took, and explains what happens. Choose **Start Full Scan**, or **Watchlist Only** for a quick check of the folders you watch. A bar under the title shows progress, and you can stop at any time. The Overview's top line always says how old its sizes are, with **Scan Again…** beside it.
+2. On **Overview**, read the headline above the chart, for example "24 GiB less free space". The disk map below it splits your whole disk into Safe to remove, Check first, Keep, Kept by you, Everything else and Free; point at a color for details and click it to list those folders. **How long it's sat unused** shows where idle space is.
 3. Click any part of the map or any folder to open it in **Folders**, where big folders you haven't used lately come first. The panel on the right says what the folder is, how its size has changed, and offers **Scan Folder** and **Show in Finder**.
 4. Add folders you care about to your **Watchlist**. Optional daily or weekly checks are in **Context Cleaner › Settings…** (⌘,). They run only while the app is open and are off by default.
 
@@ -17,30 +17,34 @@ Context Cleaner is a native macOS app that shows how full your disk is, how that
 
 Every folder gets a plain answer, with the reason and how to do it yourself:
 
-- **Safe to remove** (green): tools recreate it, and it hasn't been used lately. Package caches, Xcode build data, install caches, old build output, and test devices you haven't opened in 30 days.
+- **Safe to remove** (green): tools recreate it, and it hasn't been used lately. Package caches, Xcode build data, install caches, old build output, and test devices you haven't opened in 30 days. A cache or build folder used in the last 7 days is never called safe, even though its tool could rebuild it: you're still relying on it, and removing it only means waiting for it to come back.
 - **Check first** (orange): might be fine; the folder's card says exactly what to look at.
 - **Keep** (gray): app libraries and history. Remove things from inside their own app instead.
 
-The Folders page opens with the answer: **Safe to remove**, **Check first** and **Keep**, each with a total you can click to list those folders. Every row shows its answer next to its name, its size and when it was **last used**. "Not recorded" means the size came from an older scan that didn't note when files last changed; a full scan fills it in, because it re-measures every saved folder. The Overview's **Safe to remove** panel lists the biggest safe folders with a Finder button for each.
+**Old items inside busy folders.** When a cache or build folder is still in use, Context Cleaner looks one level inside it. Items over 50 MiB that haven't changed in 30 days or more are listed on its card when they add up to at least 1 GiB, with **Show in Finder** and **Copy Move-to-Trash Command** (it copies a `mv -n … ~/.Trash/` command for you to run; it never runs it). **More lists › Unused inside busy folders** lists every folder like this, and the Overview totals them under **Start here**.
+
+The Folders page opens with the answer: **Safe to remove**, **Check first** and **Keep**, each with a total you can click to list those folders. Every row shows its answer with a few words of reason under it ("Uncommitted work", "Unused for 3 weeks", "Open in Parallels Desktop", "2.2 GiB unused inside"), its size and when it was **last used**. "Not recorded" means the size came from an older scan that didn't note when files last changed; a full scan fills it in, because it re-measures every saved folder. The Overview's **Safe to remove** panel lists the biggest safe folders with a Finder button for each.
 
 The first full scan may bring up macOS dialogs asking whether Context Cleaner can read data from other apps (for example iPhone install caches) or your Documents folder. The scan waits for your answer and says so in an orange banner. Allow includes those folders; Don't Allow skips them. Either way it only reads sizes.
 
 Test devices get special care. Each one is listed by its real name ("iPhone 17 Pro · iOS 26.5") with its size and last use taken from Xcode right now, so no scan is needed and the numbers are never stale. The whole Simulator folder is never offered for removal; its card says how many devices are idle and how much they use, and you remove single devices in Xcode › Window › Devices and Simulators or with the copied `xcrun simctl delete` command.
 
-**Is it still in use?** For project folders in GitHub repositories and Codex worktrees, the answer also reads git, read-only: the last commit, whether the branch is merged into main, uncommitted changes, and whether the worktree is still registered. For example: "Worktree kartpad-stabilization-20260918: last commit 3 days ago · merged into main · 1 uncommitted change." Recent activity means Check first. A worktree that's merged, clean and quiet for two weeks says it looks finished and offers `git worktree remove`, which git refuses if anything is uncommitted. "Last used" is the newest of the folder's file changes and its last commit.
+**Is it still in use?** For project folders in GitHub repositories and Codex worktrees, the answer also reads git, read-only: the last commit, whether the branch is merged into main, uncommitted changes, and whether the worktree is still registered. For example: "Worktree kartpad-stabilization-20260918: last commit 3 days ago · merged into main · 1 uncommitted change." Recent activity means Check first. Until git has been read after launch, project folders say "Checking git…" instead of Safe. A worktree that's merged, clean and quiet for two weeks says it looks finished and offers `git worktree remove`, which git refuses if anything is uncommitted. "Last used" is the newest of the folder's file changes and its last commit.
 
-**Keep it out of the way.** Right-click any folder, or use the **Keep** button, to choose **Keep, Never Suggest**, for example your OpenEmu or CrossOver libraries. Kept folders leave every suggestion and move to the **Kept** view, which shows their total and share of your disk next to folders you turned off. **Stop Keeping** brings a folder back.
+**Keep it out of the way.** Right-click any folder, or use the **Keep** button, to choose **Always Keep This Folder**, for example your OpenEmu or CrossOver libraries. Kept folders leave every suggestion and move to the **Kept** view, which shows their total and share of your disk next to folders you turned off. **Stop Keeping** brings a folder back.
 
 **Virtual machines** (Parallels, Docker Desktop's disk, UTM) are measured too. They're never called safe, because removing one deletes a whole computer; the card points to the app's own tools, such as `docker system df` to see what Docker can reclaim.
 
 Folders that no longer exist leave every list and total, including Couldn't Scan. The Overview shows how much looks safe to remove, and **Review Safe Folders** lists them. Context Cleaner never deletes anything; it tells you where, why and how.
 
+**Empty the Trash.** Moving a folder to the Trash frees nothing until the Trash is emptied. The Overview reminds you, with the Trash's size when macOS allows reading it (that needs Full Disk Access), and an **Open Trash** button. Context Cleaner never empties it.
+
 ## How to read the chart
 
 ![Space used chart](docs/images/overview-chart.png)
 
-- **The blue area is used space.** It rises when your disk fills up. The dashed line at the top is your disk's capacity; the gap between them is your free space. The dot on the right is today.
-- **The headline is the change** for the range you picked: 24 hours, 7 days or 30 days. If readings began partway through that range, the chart starts at the first reading and says so, instead of drawing empty days.
+- **The blue area is used space; the green band above it is free space.** The dashed line at the top is your disk's capacity. When the blue rises, the green shrinks. The label on the right says how much is free now.
+- **The headline is the change in free space** for the range you picked, for example "145 GiB less free space", with free space at the start and now underneath: 24 hours, 7 days or 30 days. If readings began partway through that range, the chart starts at the first reading and says so, instead of drawing empty days.
 - **Point at the chart** to see the exact reading at that moment. **Drag across it** to see the change between two times, plus the scanned folders that grew most in that span. Click **Clear Selection** to go back.
 - **Change per day** switches to bars: orange means more space used, green means space was freed.
 - **Where readings come from:** Context Cleaner notes your disk space every hour while it's open, and at every scan. Gaps in the line are times when the app wasn't running. Nothing is filled in or guessed.
@@ -56,7 +60,7 @@ Folders that no longer exist leave every list and total, including Couldn't Scan
 | **Couldn't Scan** | Which folders couldn't be read, and what's the fix? Each row gives a plain reason and one button. Folders that simply haven't been scanned yet aren't listed here. |
 | **Scan History** | What did each scan check, and what did it find? Grouped by day. |
 
-**Export Report…** (⇧⌘E) previews a Markdown file of the folders shown, with the week's change at the top, before you save it. It stays on your Mac.
+**Export Cleanup List…** (⇧⌘E) previews a Markdown checklist of what you can remove, biggest first: safe folders, old items inside folders you're still using (with a move-to-Trash command), what to check first and why, and what to keep. Tick items off as you go. It stays on your Mac unless you share it.
 
 **Settings** has three short tabs. General covers appearance and scheduled checks. Scanning explains what a scan does, with limits under Advanced. Coverage lists every place the app looks, grouped as AI tools, developer tools, games and emulators, downloads, and your folders, with a switch for each.
 

@@ -106,15 +106,22 @@ struct FolderRow: Identifiable {
             DispatchQueue.main.async { self.simDevices = devices }
         }
     }
-    /// Checks which known folders are gone. Metadata only.
+    /// When each known folder was created, so new folders count fully in "where the space went". Metadata only.
+    @Published var created: [String: Date] = [:] { didSet { discoveryVersion += 1 } }
+    /// Checks which known folders are gone, and when each was created. Metadata only.
     func refreshGone() {
         let paths = Array(Set(discovery.profiles.map(\.path) + latest.map(\.profile.path)))
         DispatchQueue.global(qos: .utility).async {
             let missing = missingPaths(paths)
             let files = fileOnlyPaths(paths)
+            var born: [String: Date] = [:]
+            for path in paths where !missing.contains(path) {
+                if let date = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.creationDateKey]).creationDate { born[path] = date }
+            }
             DispatchQueue.main.async {
                 if missing != self.gone { self.gone = missing }
                 if files != self.fileOnly { self.fileOnly = files }
+                if born != self.created { self.created = born }
             }
         }
     }
@@ -151,7 +158,11 @@ struct FolderRow: Identifiable {
             var roots: [String: String] = [:]
             for path in paths { if let root = repositoryRoot(for: path, home: home) { roots[path] = root } }
             var activity: [String: ProjectActivity] = [:]
-            for root in Set(roots.values) { activity[root] = readProjectActivity(root) }
+            for root in Set(roots.values) {
+                var project = readProjectActivity(root)
+                project.ignored = ignoredByGit(root, paths: roots.filter { $0.value == root }.map(\.key))
+                activity[root] = project
+            }
             DispatchQueue.main.async { self.projectRoots = roots; self.projectsRead = true; self.projects = activity }
         }
     }
@@ -360,9 +371,15 @@ struct FolderRow: Identifiable {
         return value
     }
     /// Count and size for one answer, nested folders counted once.
+    private var totalsCache: (key: String, value: [Verdict: (count: Int, bytes: Int64)]) = ("", [:])
     func verdictTotal(_ verdict: Verdict) -> (count: Int, bytes: Int64) {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if totalsCache.key != key { totalsCache = (key, [:]) }
+        if let cached = totalsCache.value[verdict] { return cached }
         let items = verdictGroups[verdict] ?? []
-        return (items.count, uniqueAllocatedTotal(items))
+        let value = (items.count, uniqueAllocatedTotal(items))
+        totalsCache.value[verdict] = value
+        return value
     }
     private func include(_ row: FolderRow, _ p: FolderProfile) -> Bool {
         // Folders that are gone leave every list. Kept and turned-off folders live in their own view.
@@ -376,6 +393,7 @@ struct FolderRow: Identifiable {
             switch locationFilter {
             case .excluded, .all: return true
             case .safe: return row.measurement.state == .measured && row.advice.verdict == .safe
+            case .rebuild: return row.measurement.state == .measured && row.advice.verdict == .rebuild
             case .check: return row.measurement.state == .measured && row.advice.verdict == .check
             case .keep: return row.measurement.state == .measured && row.advice.verdict == .keep
             case .unscanned: return row.measurement.state == .pending
@@ -415,6 +433,69 @@ struct FolderRow: Identifiable {
         return value
     }
     /// Scanned size of a Coverage group, counting only places that are turned on (the ones a scan reads).
+    /// What you could get back, by answer. Old items inside folders are counted apart from their folder's answer.
+    struct Reclaim {
+        var safe: (count: Int, bytes: Int64) = (0, 0)
+        var inside: (folders: Int, bytes: Int64) = (0, 0)
+        var rebuild: (count: Int, bytes: Int64) = (0, 0)
+        var check: (count: Int, bytes: Int64) = (0, 0)
+        var keep: (count: Int, bytes: Int64) = (0, 0)
+        /// Safe, old items inside, and rebuildable: everything that costs at most a rebuild.
+        var total: Int64 { safe.bytes + inside.bytes + rebuild.bytes }
+    }
+    private var reclaimCache: (key: String, value: Reclaim) = ("", Reclaim())
+    var reclaim: Reclaim {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if reclaimCache.key == key { return reclaimCache.value }
+        var value = Reclaim()
+        // Count each byte once: only the outermost scanned folder counts, whatever its answer.
+        let all = Verdict.allCases.flatMap { v in (verdictGroups[v] ?? []).map { ($0, v) } }.sorted { $0.0.profile.path.count < $1.0.profile.path.count }
+        var accepted: Set<String> = []
+        for (m, verdict) in all {
+            let path = normalized(m.profile.path)
+            guard !hasAncestor(in: accepted, path) else { continue }
+            accepted.insert(path)
+            let bytes = m.allocatedBytes ?? 0, inside = adviceFor(m).staleBytes
+            switch verdict {
+            case .safe: value.safe.bytes += bytes
+            case .rebuild: value.rebuild.bytes += bytes - inside
+            case .check: value.check.bytes += bytes - inside
+            case .keep: value.keep.bytes += bytes
+            }
+            if inside > 0 { value.inside.folders += 1; value.inside.bytes += inside }
+        }
+        value.safe.count = verdictGroups[.safe]?.count ?? 0
+        value.rebuild.count = verdictGroups[.rebuild]?.count ?? 0
+        value.check.count = verdictGroups[.check]?.count ?? 0
+        value.keep.count = verdictGroups[.keep]?.count ?? 0
+        reclaimCache = (key, value)
+        return value
+    }
+    /// Folders holding old items, biggest amount first.
+    private var insideListCache: (key: String, value: [FolderMeasurement]) = ("", [])
+    var insideFolders: [FolderMeasurement] {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if insideListCache.key == key { return insideListCache.value }
+        let value = ((verdictGroups[.rebuild] ?? []) + (verdictGroups[.check] ?? [])).map { ($0, adviceFor($0).staleBytes) }.filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }.map(\.0)
+        insideListCache = (key, value)
+        return value
+    }
+    /// Where used space went since from, by place; plus the disk's own change over the same span.
+    struct SpaceWent { var from: Date; var diskChange: Int64?; var places: [SpaceChange]; var explained: Int64 { places.reduce(0) { $0 + $1.bytes } } }
+    private var wentCache: (key: String, value: SpaceWent?) = ("", nil)
+    func spaceWent(days: Double = 7) -> SpaceWent? {
+        let key = "\(recordsVersion)|\(discoveryVersion)|\(preferencesVersion)|\(usage.count)|\(days)"
+        if wentCache.key == key { return wentCache.value }
+        refreshDerived()
+        let readings = usage
+        let start = Date().addingTimeInterval(-days * 86400)
+        guard let first = readings.first(where: { $0.date >= start }), let last = readings.last else { wentCache = (key, nil); return nil }
+        let current = derived.saved.values.filter { !preferences.excluded($0.profile.path) && !gone.contains($0.profile.path) }
+        let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, home: home)
+        let value = SpaceWent(from: first.date, diskChange: last.used - first.used, places: places)
+        wentCache = (key, value)
+        return value
+    }
     func groupSize(_ group: CoverageGroup) -> Int64 {
         Coverage.entries.filter { $0.group == group && !preferences.excluded($0.path(home: home)) }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) }
     }
@@ -695,29 +776,34 @@ struct FolderRow: Identifiable {
         func line(_ m: FolderMeasurement, _ a: Advice) -> String {
             "**\(m.profile.displayName.replacingOccurrences(of: "*", with: ""))** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown") · \(a.short)"
         }
-        let safe = verdictGroups[.safe] ?? [], check = verdictGroups[.check] ?? [], keep = verdictGroups[.keep] ?? []
+        let safe = verdictGroups[.safe] ?? [], rebuild = verdictGroups[.rebuild] ?? [], check = verdictGroups[.check] ?? [], keep = verdictGroups[.keep] ?? []
         text += "## 1. Safe to remove · \(byteLabel(uniqueAllocatedTotal(safe))) in \(safe.count) \(safe.count == 1 ? "folder" : "folders")\n\n"
         text += safe.isEmpty ? "Nothing yet. Scan again after a few days of normal work.\n\n" : ""
         for m in safe {
             let a = adviceFor(m)
             text += "- [ ] " + line(m, a) + "\n  `\(m.profile.path)`\n  \(a.howTo)" + (a.command.map { " `\($0)`" } ?? "") + "\n"
         }
-        let inside = check.map { ($0, adviceFor($0)) }.filter { !$0.1.staleItems.isEmpty }
-        text += "\n## 2. Unused inside folders you're still using · \(byteLabel(inside.reduce(0) { $0 + $1.1.staleBytes }))\n\n"
-        text += inside.isEmpty ? "None found.\n\n" : "These folders are in use, but the items listed haven't changed in 30+ days and their tool recreates them if needed.\n\n"
+        let inside = insideFolders.map { ($0, adviceFor($0)) }
+        text += "\n## 2. Old items inside folders · \(byteLabel(inside.reduce(0) { $0 + $1.1.staleBytes }))\n\n"
+        text += inside.isEmpty ? "None found.\n\n" : "Old builds, experiments and downloads that haven't changed in a week (project folders) or a month (caches). The folder itself is still in use.\n\n"
         for (m, a) in inside {
             text += "- [ ] **\(m.profile.displayName)** · \(byteLabel(a.staleBytes)) in \(a.staleItems.count) \(a.staleItems.count == 1 ? "item" : "items")\n"
             for item in a.staleItems.prefix(8) { text += "  - \(item.name) · \(byteLabel(item.bytes))\(item.modifiedAt.map { " · changed " + ageText($0) } ?? "")\n" }
             text += "  Move them to the Trash: `\(trashCommand(a.staleItems.map(\.path)))`\n"
         }
-        text += "\n## 3. Check first · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nLook at each before removing anything. Biggest first.\n\n"
+        text += "\n## 3. Rebuildable · \(byteLabel(uniqueAllocatedTotal(rebuild))) in \(rebuild.count) \(rebuild.count == 1 ? "folder" : "folders")\n\nIn use, but rebuilt or downloaded again if you remove them. Remove between builds.\n\n"
+        for m in rebuild.prefix(40) {
+            let a = adviceFor(m)
+            text += "- [ ] " + line(m, a) + "\n  `\(m.profile.path)`\n"
+        }
+        text += "\n## 4. Your call · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nMay hold the only copy of something. Look at each first. Biggest first.\n\n"
         for m in check.prefix(40) {
             let a = adviceFor(m)
             text += "- " + line(m, a) + "\n  \(a.reason)\n" + a.evidence.map { "  \($0)\n" }.joined() + "  `\(m.profile.path)`\n"
         }
         if check.count > 40 { text += "- and \(check.count - 40) more in the app\n" }
         let kept = keptSummary
-        text += "\n## 4. Keep · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries, chat history and folders you chose to keep. Manage these inside their own apps.\n\n"
+        text += "\n## 5. Keep · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries, chat history and folders you chose to keep. Manage these inside their own apps.\n\n"
         for m in keep + kept.kept { text += "- **\(m.profile.displayName)** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown")\n" }
         return text
     }

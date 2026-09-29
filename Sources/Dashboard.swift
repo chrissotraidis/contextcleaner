@@ -397,9 +397,8 @@ struct UsageChart: View {
 struct Dashboard: View {
     @ObservedObject var model: CleanerModel
     @State private var hoveredSegment: String?
-    @State private var hoveredBucket: String?
     @State private var mapByType = false
-    @State private var showLargest = false
+    @State private var tier = 0
     private var groups: [StorageGroup] { model.overview.groups }
     private var measured: [FolderMeasurement] { model.overview.measuredBySize }
     private func show(_ category: FolderCategory? = nil, filter: LocationFilter = .all) {
@@ -417,8 +416,8 @@ struct Dashboard: View {
                     hero(chartHeight)
                     diskMap
                     HStack(alignment: .top, spacing: 16) {
-                        idlePanel.frame(maxWidth: .infinity)
-                        foldersPanel.frame(maxWidth: .infinity)
+                        wentPanel.frame(maxWidth: .infinity)
+                        startPanel.frame(maxWidth: .infinity)
                     }
                 }.padding(.horizontal, 22).padding(.bottom, 16)
             }.scrollBounceBehavior(.basedOnSize)
@@ -485,7 +484,7 @@ struct Dashboard: View {
     private func link(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) { Text(title).foregroundStyle(tint).underline(false) }.buttonStyle(.plain).onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
     }
-    /// One whole-disk picture: what's safe, what to check, what apps keep, what you keep, everything else and free space.
+    /// One whole-disk picture, ranked by what removing costs: safe, old items inside folders, rebuildable, your call, keep.
     private struct Segment: Identifiable {
         let id: String, title: String, detail: String, bytes: Int64, color: Color
         var outlined = false
@@ -500,11 +499,13 @@ struct Dashboard: View {
                 tracked += group.bytes
             }
         } else {
-            for verdict in Verdict.allCases {
-                let total = model.verdictTotal(verdict)
-                list.append(Segment(id: verdict.title, title: verdict.title, detail: verdict.meaning.prefix(1).uppercased() + verdict.meaning.dropFirst(), bytes: total.bytes, color: verdict.tint, action: { show(filter: verdict.filter) }))
-                tracked += total.bytes
-            }
+            let r = model.reclaim
+            list.append(Segment(id: "safe", title: "Safe to remove", detail: "Nothing is lost", bytes: r.safe.bytes, color: Verdict.safe.tint, action: { show(filter: .safe) }))
+            list.append(Segment(id: "inside", title: "Old items inside", detail: "Builds and downloads untouched for a week or more", bytes: r.inside.bytes, color: .insideTint, action: { show(filter: .inside) }))
+            list.append(Segment(id: "rebuild", title: "Rebuildable", detail: "In use; costs a rebuild", bytes: r.rebuild.bytes, color: Verdict.rebuild.tint, action: { show(filter: .rebuild) }))
+            list.append(Segment(id: "check", title: "Your call", detail: "May be the only copy", bytes: r.check.bytes, color: Verdict.check.tint, action: { show(filter: .check) }))
+            list.append(Segment(id: "keep", title: "Keep", detail: "Manage inside their apps", bytes: r.keep.bytes, color: Color.secondary, action: { show(filter: .keep) }))
+            tracked = r.safe.bytes + r.inside.bytes + r.rebuild.bytes + r.check.bytes + r.keep.bytes
             let kept = model.keptSummary
             // Name it by what's in it: folders you keep, folders you turned off, or both.
             let keptTitle = kept.offBytes == 0 ? "Kept by you" : kept.keptBytes == 0 ? "Turned off by you" : "Kept or turned off"
@@ -516,7 +517,7 @@ struct Dashboard: View {
         return list.filter { $0.bytes > 0 }
     }
     private var diskMap: some View {
-        let safe = model.verdictTotal(.safe)
+        let r = model.reclaim
         let capacity = Double(max(model.volume?.total ?? 1, 1))
         let parts = segments
         func share(_ bytes: Int64) -> String {
@@ -526,16 +527,16 @@ struct Dashboard: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(safe.count == 0 ? "Nothing is clearly safe to remove yet" : "About \(byteLabel(safe.bytes)) looks safe to remove")
+                    Text(r.total > 0 ? "You can get back about \(byteLabel(r.total))" : "Nothing to get back yet")
                         .font(.title2.weight(.semibold)).monospacedDigit()
-                    Text(safe.count == 0 ? "Scan your folders so Context Cleaner can see when each was last used." : "\(safe.count) \(safe.count == 1 ? "folder" : "folders") that tools recreate and you haven't needed lately. You remove them yourself.")
+                    Text(r.total > 0 ? "\(byteLabel(r.safe.bytes)) safe · \(byteLabel(r.inside.bytes)) in old builds · \(byteLabel(r.rebuild.bytes)) rebuildable. You remove it yourself."
+                         : "Scan your folders so Context Cleaner can see when each was last used.")
                         .font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Picker("Map", selection: $mapByType) { Text("By answer").tag(false); Text("By type").tag(true) }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
-                if safe.count == 0 { Button("Scan Folders…") { model.showingScanPlan = true } }
-                else { Button("Review Safe Folders") { show(filter: .safe) }.buttonStyle(.borderedProminent) }
+                if r.total == 0 { Button("Scan Folders…") { model.showingScanPlan = true } }
             }
             GeometryReader { geo in
                 let gaps = CGFloat(max(parts.count - 1, 0)) * 2
@@ -576,106 +577,107 @@ struct Dashboard: View {
             }
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
     }
-    /// How long scanned space has sat unused, colored by answer. Big idle bars are the best places to look.
-    private var idlePanel: some View {
-        let buckets = model.idleBuckets
-        let stale = buckets.filter { $0.id == 2 || $0.id == 3 }.reduce(Int64(0)) { $0 + $1.total }
-        let staleSafe = buckets.filter { $0.id == 2 || $0.id == 3 }.reduce(Int64(0)) { $0 + ($1.bytes[.safe] ?? 0) }
-        return Panel(title: "How long it's sat unused", symbol: "hourglass") {
-            Text(stale > 0 ? "\(byteLabel(stale)) hasn't been touched in a month or more; \(byteLabel(staleSafe)) of it looks safe to remove." : "Most scanned space was used this month.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            let largest = Double(max(buckets.map(\.total).max() ?? 1, 1))
-            VStack(spacing: 7) {
-                ForEach(buckets.filter { $0.total > 0 }) { bucket in
-                    let breakdown = Verdict.allCases.compactMap { v in (bucket.bytes[v] ?? 0) > 0 ? "\(v.title) \(byteLabel(bucket.bytes[v]!))" : nil }.joined(separator: " · ")
-                    Button { show(filter: .all) } label: {
-                        HStack(spacing: 10) {
-                            Text(bucket.title).frame(width: 92, alignment: .leading)
-                            GeometryReader { geo in
-                                HStack(spacing: 1) {
-                                    ForEach(Verdict.allCases) { verdict in
-                                        let bytes = bucket.bytes[verdict] ?? 0
-                                        if bytes > 0 { Rectangle().fill(verdict.tint).frame(width: max(3, geo.size.width * Double(bytes) / largest)) }
-                                    }
-                                    Spacer(minLength: 0)
-                                }.clipShape(RoundedRectangle(cornerRadius: 3))
-                            }.frame(height: 14)
-                            Text(byteLabel(bucket.total)).monospacedDigit().foregroundStyle(.secondary).frame(width: 84, alignment: .trailing)
-                        }.font(.callout).padding(.vertical, 2).contentShape(Rectangle())
-                            .opacity(hoveredBucket == nil || hoveredBucket == bucket.title ? 1 : 0.55)
-                    }.buttonStyle(.plain)
-                        .onHover { inside in hoveredBucket = inside ? bucket.title : (hoveredBucket == bucket.title ? nil : hoveredBucket) }
-                        .help(breakdown)
-                        .accessibilityLabel("\(bucket.title): \(byteLabel(bucket.total)). \(breakdown)")
+    /// Where used space went over the last week: scanned places that grew, new folders, and what's outside scanned folders.
+    private var wentPanel: some View {
+        Panel(title: "Where the space went", symbol: "chart.bar.xaxis", tint: .growing) {
+            if let went = model.spaceWent(), let change = went.diskChange {
+                let grew = went.places.filter { $0.bytes >= 256 << 20 }.prefix(6)
+                let shrank = went.places.filter { $0.bytes < 0 }.reduce(Int64(0)) { $0 + $1.bytes }
+                // What scanned folders don't explain: other files, or folders you removed since.
+                let outside = change - went.places.filter { $0.bytes >= 256 << 20 }.reduce(Int64(0)) { $0 + $1.bytes } - shrank
+                let largest = Double(max(grew.map(\.bytes).max() ?? 1, max(abs(outside), abs(shrank), 1)))
+                Text((change >= 0 ? "\(byteLabel(change)) more used" : "\(byteLabel(-change)) freed") + " since " + went.from.formatted(.dateTime.weekday(.abbreviated).hour()))
+                    .font(.callout).foregroundStyle(.secondary)
+                VStack(spacing: 7) {
+                    ForEach(Array(grew)) { place in
+                        let first = place.examples.first
+                        Button { if let first { model.open(first.path) } } label: {
+                            changeRow(place.title, detail: place.newFolders > 0 ? "\(place.newFolders) new \(place.newFolders == 1 ? "folder" : "folders")" : first.flatMap { repeatsPlace($0.name, place.title) ? nil : $0.name }, bytes: place.bytes, largest: largest, tint: .growing)
+                        }.buttonStyle(.plain).help(place.examples.map { "\($0.name) +\(byteLabel($0.bytes))" }.joined(separator: "\n"))
+                    }
+                    if shrank <= -(1 << 30) { changeRow("Shrank in scanned folders", detail: went.places.last.map { "Most in " + $0.title }, bytes: shrank, largest: largest, tint: .green) }
+                    if outside >= 1 << 30 { changeRow("Outside scanned folders", detail: "macOS, apps, other files", bytes: outside, largest: largest, tint: Color.primary.opacity(0.3)) }
+                    if outside <= -(1 << 30) { changeRow("Removed or freed elsewhere", detail: "Folders you removed, other files", bytes: outside, largest: largest, tint: .green) }
                 }
+                Text("Scanned folders that grew, grouped by place. New folders count in full. Click one to open the biggest.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Needs disk readings from at least two times. Context Cleaner notes disk space every hour while it's open.").font(.callout).foregroundStyle(.secondary)
             }
-            HStack(spacing: 12) {
-                ForEach(Verdict.allCases) { verdict in
-                    HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(verdict.tint).frame(width: 9, height: 9); Text(verdict.title) }
-                }
-                Spacer()
-            }.font(.caption).foregroundStyle(.secondary)
-            Text(hoveredBucket.flatMap { title in buckets.first { $0.title == title } }.map { bucket in
-                "\(bucket.title): " + Verdict.allCases.compactMap { v in (bucket.bytes[v] ?? 0) > 0 ? "\(v.title) \(byteLabel(bucket.bytes[v]!))" : nil }.joined(separator: " · ")
-            } ?? "Last used means the newest file change or git commit. Click a row to see those folders.")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
     }
-    /// What you can remove, biggest first, with the largest folders one click away.
-    private var foldersPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+    /// True when a folder's name adds nothing to its place's name ("Downloads" in "Downloads").
+    private func repeatsPlace(_ name: String, _ place: String) -> Bool {
+        func words(_ text: String) -> Set<String> { Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)) }
+        return words(name).isSubset(of: words(place))
+    }
+    private func changeRow(_ title: String, detail: String?, bytes: Int64, largest: Double, tint: Color) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.callout).lineLimit(1)
+                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+            }.frame(width: 190, alignment: .leading)
+            GeometryReader { geo in
+                RoundedRectangle(cornerRadius: 3).fill(tint).frame(width: max(3, geo.size.width * Double(abs(bytes)) / largest))
+            }.frame(height: 12)
+            Text((bytes >= 0 ? "+" : "−") + byteLabel(abs(bytes))).font(.callout).monospacedDigit().foregroundStyle(bytes >= 0 ? Color.growing : .green).frame(width: 96, alignment: .trailing)
+        }.contentShape(Rectangle())
+    }
+    /// The biggest things to remove, one answer at a time.
+    private var startPanel: some View {
+        let r = model.reclaim
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label { Text(showLargest ? "Biggest folders" : "Start here").foregroundStyle(.primary) }
-                    icon: { Image(systemName: showLargest ? "folder" : Verdict.safe.symbol).foregroundStyle(showLargest ? Color.accentColor : Verdict.safe.tint) }.font(.headline)
+                Label { Text("Start here").foregroundStyle(.primary) } icon: { Image(systemName: "checklist").foregroundStyle(Color.accentColor) }.font(.headline)
                 Spacer()
-                Picker("Show", selection: $showLargest) { Text("Safe to remove").tag(false); Text("Biggest").tag(true) }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+                Picker("Show", selection: $tier) {
+                    Text("Safe").tag(0); Text("Old items").tag(1); Text("Rebuildable").tag(2); Text("Your call").tag(3)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
             }
-            if showLargest { largestRows } else { safeRows }
+            switch tier {
+            case 1:
+                Text("\(byteLabel(r.inside.bytes)) in builds and downloads untouched for a week or more, inside \(r.inside.folders) \(r.inside.folders == 1 ? "folder" : "folders"). Open one to see them with dates.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(model.insideFolders.prefix(6)) { item in
+                    let a = model.adviceFor(item)
+                    tierRow(item, detail: "\(a.staleItems.count) old \(a.staleItems.count == 1 ? "item" : "items") · \(a.staleDays)+ days untouched", bytes: a.staleBytes, tint: .insideTint, symbol: "shippingbox.fill")
+                }
+                seeAll(r.inside.folders, filter: .inside)
+            case 2:
+                Text("In use, but rebuilt or downloaded again if you remove them. Remove between builds.").font(.caption).foregroundStyle(.secondary)
+                ForEach((model.verdictGroups[.rebuild] ?? []).prefix(6)) { item in tierRow(item, detail: model.adviceFor(item).short, bytes: item.allocatedBytes ?? 0, tint: Verdict.rebuild.tint, symbol: Verdict.rebuild.symbol) }
+                seeAll(r.rebuild.count, filter: .rebuild)
+            case 3:
+                Text("May hold the only copy. Each card says what to look at.").font(.caption).foregroundStyle(.secondary)
+                ForEach((model.verdictGroups[.check] ?? []).prefix(6)) { item in tierRow(item, detail: model.adviceFor(item).short, bytes: item.allocatedBytes ?? 0, tint: Verdict.check.tint, symbol: Verdict.check.symbol) }
+                seeAll(r.check.count, filter: .check)
+            default:
+                Text("Nothing is lost; tools recreate these if they're needed.").font(.caption).foregroundStyle(.secondary)
+                ForEach(model.overview.safe.prefix(6)) { item in tierRow(item, detail: model.adviceFor(item).short, bytes: item.allocatedBytes ?? 0, tint: Verdict.safe.tint, symbol: Verdict.safe.symbol) }
+                seeAll(r.safe.count, filter: .safe)
+            }
+            trashRow
         }.padding(16).frame(maxWidth: .infinity, alignment: .topLeading).background(.background.secondary)
     }
-    @ViewBuilder private var safeRows: some View {
-        let safe = model.overview.safe
-        ForEach(safe.prefix(6)) { item in
-            let advice = model.adviceFor(item)
-            HStack(spacing: 10) {
-                Image(systemName: Verdict.safe.symbol).foregroundStyle(Verdict.safe.tint).frame(width: 20).accessibilityHidden(true)
-                Button { model.open(item.profile.path) } label: {
-                    HStack(spacing: 10) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(item.profile.displayName).font(.callout).lineLimit(1)
-                            Text([locationHint(item.profile.path) ?? item.profile.category.displayName, advice.lastUsed.map { "used " + ageText($0) }].compactMap { $0 }.joined(separator: " · "))
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit()
-                    }.contentShape(Rectangle())
-                }.buttonStyle(.plain).help(advice.reason)
-                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) } label: { Image(systemName: "folder") }
-                    .buttonStyle(.borderless).help("Show in Finder. You remove it yourself.").accessibilityLabel("Show \(item.profile.displayName) in Finder")
-            }.padding(.vertical, 2).contextMenu { LocationActions(model: model, path: item.profile.path) }
-        }
-        if safe.isEmpty {
-            Text("Nothing is clearly safe to remove yet. Scan your folders so Context Cleaner can see when each was last used.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        } else {
-            Button(safe.count > 6 ? "See all \(safe.count) safe folders" : "See safe folders") { show(filter: .safe) }.buttonStyle(.link).font(.callout)
-        }
-        let inside = model.unusedInside
-        if inside.bytes > 0 {
-            Divider()
-            Button { show(filter: .inside) } label: {
+    private func tierRow(_ item: FolderMeasurement, detail: String, bytes: Int64, tint: Color, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(tint).frame(width: 20).accessibilityHidden(true)
+            Button { model.open(item.profile.path) } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "shippingbox").foregroundStyle(Verdict.safe.tint).frame(width: 20).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text("Also \(byteLabel(inside.bytes)) unused inside busy folders").font(.callout)
-                        Text("Old items in \(inside.folders) \(inside.folders == 1 ? "folder" : "folders") you're still using" + (inside.biggest.map { ", like \($0)" } ?? "")).font(.caption).foregroundStyle(.secondary)
+                        Text(item.profile.displayName).font(.callout).lineLimit(1)
+                        Text([locationHint(item.profile.path), detail].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+                    Spacer(minLength: 8)
+                    Text(byteLabel(bytes)).font(.callout).monospacedDigit()
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).help("Lists the folders; open one to see the old items and remove them yourself")
-        }
-        trashRow
+            }.buttonStyle(.plain).help(model.adviceFor(item).reason)
+            Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) } label: { Image(systemName: "folder") }
+                .buttonStyle(.borderless).help("Show in Finder. You remove it yourself.").accessibilityLabel("Show \(item.profile.displayName) in Finder")
+        }.padding(.vertical, 2).contextMenu { LocationActions(model: model, path: item.profile.path) }
+    }
+    @ViewBuilder private func seeAll(_ count: Int, filter: LocationFilter) -> some View {
+        if count == 0 { Text("Nothing here yet.").font(.callout).foregroundStyle(.secondary) }
+        else { Button(count > 6 ? "See all \(count)" : "See them in Folders") { show(filter: filter) }.buttonStyle(.link).font(.callout) }
     }
     /// Moving a folder to the Trash frees nothing until the Trash is emptied; say so, with its size when macOS allows reading it.
     @ViewBuilder private var trashRow: some View {
@@ -692,30 +694,6 @@ struct Dashboard: View {
                 Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")) }
                     .controlSize(.small).help("Opens the Trash in Finder. Context Cleaner never empties it for you.")
             }
-        }
-    }
-    @ViewBuilder private var largestRows: some View {
-        Group {
-            ForEach(measured.prefix(6)) { item in
-                let values = model.sparkline(item.profile.path)
-                Button { model.open(item.profile.path) } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: item.profile.category.symbol).foregroundStyle(item.profile.category.tint).frame(width: 20).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(item.profile.displayName).font(.callout).lineLimit(1)
-                            Text(locationHint(item.profile.path).map { $0 + " · " + item.profile.category.displayName } ?? item.profile.category.displayName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer(minLength: 8)
-                        Sparkline(values: values, tint: values.trendTint)
-                        Image(systemName: model.adviceFor(item).verdict.symbol).foregroundStyle(model.adviceFor(item).verdict.tint)
-                            .help(model.adviceFor(item).verdict.title + ": " + model.adviceFor(item).reason).accessibilityLabel(model.adviceFor(item).verdict.title)
-                        Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit().frame(minWidth: 78, alignment: .trailing)
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
-                    }.padding(.vertical, 2).contentShape(Rectangle())
-                }.buttonStyle(.plain).contextMenu { LocationActions(model: model, path: item.profile.path) }
-            }
-            if measured.isEmpty { Text("Scan folders to see the largest ones here.").font(.callout).foregroundStyle(.secondary) }
-            Button("See all folders") { show() }.buttonStyle(.link).font(.callout)
         }
     }
 }

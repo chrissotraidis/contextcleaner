@@ -31,18 +31,19 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", safe = "Safe to remove", check = "Check first", keep = "Keep", inside = "Unused inside busy folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
+    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Your call", keep = "Keep", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Big folders you haven't used lately come first. Each row says whether it's safe to remove."
-        case .safe: return "Tools recreate these. Remove them yourself in Finder or Xcode."
-        case .check: return "Might be fine to remove, but look first. Each one says what to check."
+        case .all: return "Biggest first. Each row says what removing it costs."
+        case .safe: return "Nothing is lost. Tools recreate these if they're needed."
+        case .rebuild: return "Still in use, but rebuilt or re-downloaded if you remove them. You'll wait for the next build."
+        case .check: return "May hold the only copy of something. Each card says what to look at."
         case .keep: return "App libraries and history. Manage these inside their own apps."
         case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
         case .growing: return "Grew between two scans and not marked as expected."
         case .reviewLater: return "Folders you asked to come back to."
-        case .inside: return "Folders you're still using that hold old items their tool can recreate. Open one to see the items."
+        case .inside: return "Folders holding old builds or downloads that haven't changed in a week or more. Open one to see them."
         case .excluded: return "Folders you turned off. They aren't scanned."
         }
     }
@@ -74,11 +75,16 @@ extension FolderMeasurement {
     var problem: String { permissionDenied ? "No permission to read it" : state.problem }
 }
 
+extension Color {
+    /// Old items inside folders: a softer green than Safe, since they cost at most a rebuild.
+    static let insideTint = Color.green.opacity(0.55)
+}
 extension Verdict {
-    /// Green: safe. Orange: look first. Gray: leave it to its app.
+    /// Green: nothing lost. Teal: costs a rebuild. Orange: your call. Gray: leave it to its app.
     var tint: Color {
         switch self {
         case .safe: return .green
+        case .rebuild: return .cyan
         case .check: return .orange
         case .keep: return .secondary
         }
@@ -86,7 +92,8 @@ extension Verdict {
     var symbol: String {
         switch self {
         case .safe: return "checkmark.circle.fill"
-        case .check: return "exclamationmark.circle.fill"
+        case .rebuild: return "arrow.triangle.2.circlepath.circle.fill"
+        case .check: return "questionmark.circle.fill"
         case .keep: return "hand.raised.fill"
         }
     }
@@ -94,15 +101,19 @@ extension Verdict {
     var filter: LocationFilter {
         switch self {
         case .safe: return .safe
+        case .rebuild: return .rebuild
         case .check: return .check
         case .keep: return .keep
         }
     }
     /// What the answer means, in a few words.
+    /// The answer in one or two words, for tight spaces.
+    var shortTitle: String { self == .safe ? "Safe" : title }
     var meaning: String {
         switch self {
-        case .safe: return "tools recreate these"
-        case .check: return "look inside first"
+        case .safe: return "nothing is lost"
+        case .rebuild: return "costs a rebuild"
+        case .check: return "may be the only copy"
         case .keep: return "manage in their apps"
         }
     }
@@ -184,16 +195,16 @@ struct VerdictCard: View {
         let items = advice.staleItems
         return VStack(alignment: .leading, spacing: 6) {
             Divider()
-            Text("Unused inside · \(byteLabel(advice.staleBytes)) in \(items.count) \(items.count == 1 ? "item" : "items")").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(items.prefix(6)) { item in
+            Text("Old items inside · \(byteLabel(advice.staleBytes)) in \(items.count) \(items.count == 1 ? "item" : "items"), untouched \(advice.staleDays)+ days").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(items.prefix(10)) { item in
                 HStack(spacing: 6) {
-                    Text(item.name).font(.callout).lineLimit(1).truncationMode(.middle).help(item.path)
+                    Text(item.name).font(.callout).lineLimit(1).truncationMode(.tail).layoutPriority(1).help(item.path)
                     Spacer(minLength: 6)
-                    Text(item.modifiedAt.map { "changed " + ageText($0) } ?? "").font(.caption).foregroundStyle(.secondary)
+                    Text(item.modifiedAt.map { ageText($0) } ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
                     Text(byteLabel(item.bytes)).font(.callout).monospacedDigit()
                 }
             }
-            if items.count > 6 { Text("and \(items.count - 6) more").font(.caption).foregroundStyle(.secondary) }
+            if items.count > 10 { Text("and \(items.count - 10) more").font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 8) {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(items.map { URL(fileURLWithPath: $0.path) }) }
                     .controlSize(.small).help("Selects these items in Finder. Press ⌘⌫ there to move them to the Trash yourself.")

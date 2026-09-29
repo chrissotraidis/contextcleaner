@@ -166,10 +166,10 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
-                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "except what you keep", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
+                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "not counting kept", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
                     ForEach(Verdict.allCases) { verdict in
                         let total = model.verdictTotal(verdict)
-                        VerdictTile(title: verdict.title, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders")", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
+                        VerdictTile(title: verdict.shortTitle, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders")", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
                             .help(verdict.title + ": " + verdict.meaning)
                     }
                 }
@@ -281,7 +281,7 @@ struct MainView: View {
                             VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id))
                             if !row.advice.short.isEmpty {
                                 Text(row.advice.short).font(.caption).lineLimit(1)
-                                    .foregroundStyle(selectedRow(row.id) ? Color.white.opacity(0.85) : row.advice.staleItems.isEmpty ? Color.secondary : Verdict.safe.tint)
+                                    .foregroundStyle(selectedRow(row.id) ? Color.white.opacity(0.85) : row.advice.staleItems.isEmpty ? Color.secondary : Color.insideTint)
                             }
                         }
                     }
@@ -790,7 +790,7 @@ struct ReportPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Export cleanup list").font(.title2.weight(.semibold))
-            Text("A checklist of what you can remove, biggest first: everything that looks safe, old items inside folders you're still using, and what to check first, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("A checklist of what you can remove, biggest first: safe folders, old items inside folders, rebuildable folders, and your calls, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file has the whole list." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 .background(.background.secondary)

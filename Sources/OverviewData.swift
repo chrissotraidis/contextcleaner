@@ -247,13 +247,15 @@ extension ScanRecord {
 
 /// A plain answer for every folder. The app never acts on it; it tells you what you can do yourself.
 enum Verdict: Int, Comparable, CaseIterable, Identifiable {
-    case safe = 0, check = 1, keep = 2
+    /// Ranked by what removing costs: nothing, a rebuild, possibly your only copy, or the app itself.
+    case safe = 0, rebuild = 1, check = 2, keep = 3
     var id: Int { rawValue }
     static func < (a: Verdict, b: Verdict) -> Bool { a.rawValue < b.rawValue }
     var title: String {
         switch self {
         case .safe: return "Safe to remove"
-        case .check: return "Check first"
+        case .rebuild: return "Rebuildable"
+        case .check: return "Your call"
         case .keep: return "Keep"
         }
     }
@@ -316,6 +318,8 @@ struct Advice: Equatable {
     /// Items inside a folder you're still using that haven't changed in 30+ days. You may remove these yourself.
     var staleItems: [StaleItem] = []
     var staleBytes: Int64 { staleItems.reduce(0) { $0 + $1.bytes } }
+    /// How long the stale items have gone unchanged: 7 days for project output, 30 for caches.
+    var staleDays = 30
 }
 struct StaleItem: Equatable, Identifiable {
     var id: String { path }
@@ -408,13 +412,16 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
         default: return false
         }
     }()
-    if result.verdict == .check, rebuildable, m.state == .measured {
-        let stale = staleChildren(m, now: now)
+    // Project build and scratch folders hold one subfolder per build or experiment; a week untouched means it's done.
+    let projectOutput = isProjectOutput(m.profile.path) || (m.profile.category == .buildOutput && !m.profile.path.contains("/DerivedData"))
+    if [.rebuild, .check].contains(result.verdict), rebuildable || projectOutput, m.state == .measured {
+        let days: Double = projectOutput ? 7 : 30
+        let stale = staleChildren(m, now: now, days: days)
         let total = stale.reduce(Int64(0)) { $0 + $1.bytes }
         if total >= 1 << 30 {
-            let names = stale.prefix(2).map(\.name).joined(separator: ", ")
-            result.reason += " Inside it, \(byteLabel(total)) hasn't changed in 30+ days: \(stale.count) \(stale.count == 1 ? "item" : "items"), like \(names)." + (m.profile.category == .model ? " Removing a model means downloading it again if you need it." : " Its tool recreates them if they're needed again.")
+            result.reason += " \(byteLabel(total)) inside hasn't changed in \(Int(days))+ days (\(stale.count) \(stale.count == 1 ? "item" : "items"))."
             result.staleItems = stale
+            result.staleDays = Int(days)
         }
     }
     result.short = shortReason(result, m: m, project: project, now: now)
@@ -422,15 +429,17 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
 }
 /// A few words for the Folders list, matching the reason.
 private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActivity?, now: Date) -> String {
-    if !a.staleItems.isEmpty { return "\(byteLabel(a.staleBytes)) unused inside" }
+    if !a.staleItems.isEmpty { return "\(byteLabel(a.staleBytes)) old inside" }
     if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return "Open in \(app)" }
-    if let project, [.workspace, .buildOutput].contains(m.profile.category) {
-        if let u = project.uncommitted, u > 0 { return "Uncommitted work" }
-        if project.active(now: now) { return "Active project" }
-        if project.finished(now: now) { return "Project finished" }
-    }
     let idle = a.lastUsed.map { now.timeIntervalSince($0) / 86400 }
+    if a.verdict == .rebuild { return a.lastUsed.map { "Used " + ageText($0, now: now) } ?? "Rebuilt when needed" }
+    if let project, [.workspace, .buildOutput].contains(m.profile.category) {
+        if let u = project.uncommitted, u > 0, a.verdict == .check { return "Uncommitted work" }
+        if project.finished(now: now) { return "Project finished" }
+        if project.active(now: now), a.verdict == .check { return "Active project" }
+    }
     switch a.verdict {
+    case .rebuild: return "Rebuilt when needed"
     case .safe:
         guard let idle, idle >= 2 else { return "Its tool recreates it" }
         return "Unused for " + ageText(a.lastUsed, now: now).replacingOccurrences(of: " ago", with: "")
@@ -444,12 +453,12 @@ private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActi
         if let idle, idle < 7 { return "Used " + ageText(a.lastUsed, now: now) }
         switch m.profile.category {
         case .backup: return "May be the only copy"
-        case .workspace: return m.profile.path.hasSuffix("/work") ? "Mixed work files" : "Project files"
+        case .workspace: return m.profile.path.hasSuffix("/work") ? "Scratch, not in git" : "Project files"
         case .model: return "Re-download to restore"
         case .download: return "Your downloads"
         case .virtualMachine: return "Whole computer"
-        case .simulator: return "Has apps and saves"
-        default: return m.state == .pending ? "Not scanned yet" : "Look inside first"
+        case .simulator: return "Apps and saves"
+        default: return m.state == .pending ? "Not scanned yet" : "Look inside"
         }
     }
 }
@@ -459,13 +468,20 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
     guard let project, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData"), m.state == .measured else { return result }
     let lastActivity = [m.latestModifiedAt, project.lastCommit].compactMap { $0 }.max()
     let label = project.isWorktree ? "Worktree \(project.name)" : "Project \(project.name)"
-    let evidence = label + ": " + project.summary(now: now) + "."
-    if project.active(now: now) {
-        let reason = "\(label) has recent activity, so you're probably still using it."
-        // The rule's own advice may already say to wait; say it once, naming the project.
-        var rest = result.howTo
-        if rest.hasPrefix("Wait until you're done"), let end = rest.range(of: ". ") { rest = String(rest[end.upperBound...]) }
-        result = Advice(verdict: .check, reason: reason, howTo: "Wait until you're done with \(project.name). " + rest, command: result.command, lastUsed: lastActivity)
+    var evidence = [label + ": " + project.summary(now: now) + "."]
+    let ignored = project.ignored[m.profile.path]
+    if ignored == true { evidence.append("Git ignores this folder, so the repository doesn't need it.") }
+    if ignored == false && isProjectBuildOutput(m.profile.path) {
+        // A folder named build that git tracks may be source; don't treat it as output.
+        result = Advice(verdict: .check, reason: "Git tracks files in this folder, so it may hold source, not just build output.", howTo: "Look inside first.", command: nil, lastUsed: lastActivity)
+        evidence.append("Git tracks this folder.")
+    } else if project.active(now: now) {
+        if [.safe, .rebuild].contains(result.verdict) {
+            // Uncommitted changes live in tracked files, not in ignored build output.
+            result = Advice(verdict: .rebuild, reason: "Build output for \(project.name), which you're still working on. The next build recreates it.", howTo: "Move it to the Trash between builds. The next build of \(project.name) takes longer.", command: nil, lastUsed: lastActivity)
+        } else {
+            result = Advice(verdict: .check, reason: result.reason + " \(label) is still active.", howTo: result.howTo, command: result.command, lastUsed: lastActivity)
+        }
     } else if project.finished(now: now) {
         let whole = project.removeWorktreeCommand
         let reason = result.reason + " \(label) looks finished."
@@ -474,9 +490,13 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
     } else {
         result = Advice(verdict: result.verdict, reason: result.reason, howTo: result.howTo, command: result.command, lastUsed: lastActivity)
     }
-    result.evidence = [evidence]
+    result.evidence = evidence
     return result
 }
+/// Build output inside a project: recreated by building again.
+func isProjectBuildOutput(_ path: String) -> Bool { ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) } }
+/// Build output or a scratch work folder: each holds one subfolder per build or experiment.
+func isProjectOutput(_ path: String) -> Bool { isProjectBuildOutput(path) || path.hasSuffix("/work") }
 /// The folder rules. Evidence first (open files, your own marks, last use), then what the folder is.
 private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], now: Date) -> Advice {
     let path = m.profile.path
@@ -531,14 +551,14 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     let project = m.profile.project ?? "its project"
     /// Project build output: recreated by building again, but only call it safe once it's clearly idle.
     func projectBuild() -> Advice {
-        guard let idle else { return Advice(verdict: .check, reason: "Build output for \(project), which a build recreates. When it was last used isn't known yet; scan it to find out.", howTo: trash, command: nil, lastUsed: nil) }
-        if idle < 7 { return Advice(verdict: .check, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). You're probably still building it.", howTo: "Wait until you're done with \(project). " + trash, command: nil, lastUsed: m.latestModifiedAt) }
+        guard let idle else { return Advice(verdict: .rebuild, reason: "Build output for \(project). The next build recreates it.", howTo: trash, command: nil, lastUsed: nil) }
+        if idle < 7 { return Advice(verdict: .rebuild, reason: "Build output for \(project), changed \(ageText(m.latestModifiedAt, now: now)). The next build recreates it.", howTo: "Move it to the Trash between builds. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .safe, reason: "Build output for \(project). Building again recreates it.\(lastSeen)", howTo: "Move it to the Trash in Finder. The next build of \(project) takes longer.", command: nil, lastUsed: m.latestModifiedAt)
     }
     /// Caches a tool used this week: removing them now just means downloading or rebuilding what you're using.
     func recentlyUsed(_ what: String) -> Advice? {
         guard let idle, idle < 7 else { return nil }
-        return Advice(verdict: .check, reason: "\(what) was used \(ageText(m.latestModifiedAt, now: now)), so a tool is still relying on it. Removing it now only means waiting while it's rebuilt or downloaded again.", howTo: "Wait until you're done with that work. " + trash, command: nil, lastUsed: m.latestModifiedAt)
+        return Advice(verdict: .rebuild, reason: "\(what), used \(ageText(m.latestModifiedAt, now: now)). If you remove it, the tool downloads or rebuilds what it needs, so the next run is slower.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
     }
     switch m.profile.category {
     case .packageCache:
@@ -553,12 +573,12 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         if let recent = recentlyUsed("This install cache") { return recent }
         return Advice(verdict: .safe, reason: "Saved pieces from installing \(name.replacingOccurrences(of: " install cache", with: "")) on an iPhone or iPad. It's recreated on the next install.\(lastSeen)", howTo: trash, command: nil, lastUsed: m.latestModifiedAt)
     case .debugSymbols:
-        if let idle, idle < 30 { return Advice(verdict: .check, reason: "Debug files for a device you connected \(ageText(m.latestModifiedAt, now: now)). Xcode copies them again if you remove them.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
+        if let idle, idle < 30 { return Advice(verdict: .rebuild, reason: "Debug files for a device you connected \(ageText(m.latestModifiedAt, now: now)). Xcode copies them again the next time you connect it.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .safe, reason: "Debug files for one iPhone or iPad and iOS version. Xcode copies them again the next time you connect it.\(lastSeen)", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .workspace:
         let rebuildable = ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) }
         if rebuildable { return projectBuild() }
-        if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "A work folder for \(project). These can mix build files with inputs you made by hand.\(lastSeen)", howTo: "Look inside first. Remove what you know you can rebuild.", command: nil, lastUsed: m.latestModifiedAt) }
+        if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch output for \(project): logs, test installs and experiments. It can also hold inputs you made by hand.\(lastSeen)", howTo: "Remove old experiment folders you're done with; keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Project files for \(project). Some may be the only copy of your work.\(lastSeen)", howTo: "Look inside first.", command: nil, lastUsed: m.latestModifiedAt)
     case .backup:
         return Advice(verdict: .check, reason: "A recovery copy made before a risky change. It may hold the only copy of unfinished work.\(lastSeen)", howTo: "Compare it with the project. If the project has everything, move this to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
@@ -629,6 +649,8 @@ struct ProjectActivity: Equatable {
     let merged: Bool?
     /// Changed tracked files (capped at 999).
     let uncommitted: Int?
+    /// For scanned folders inside this project: whether git ignores them. Missing means not checked.
+    var ignored: [String: Bool] = [:]
     var name: String { URL(fileURLWithPath: root).lastPathComponent }
     /// Committed to or edited in the last 7 days, or holding uncommitted changes.
     func active(now: Date = Date()) -> Bool {
@@ -668,7 +690,7 @@ func repositoryRoot(for path: String, home: String) -> String? {
     return nil
 }
 /// Runs git read-only with a time limit. Returns trimmed output, or nil on failure.
-func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10) -> String? {
+func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10, okStatuses: Set<Int32> = [0]) -> String? {
     let process = Process(), pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
     process.arguments = ["-C", root, "--no-optional-locks"] + arguments
@@ -680,8 +702,19 @@ func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10
     DispatchQueue.global().asyncAfter(deadline: deadline) { if process.isRunning { process.terminate() } }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
-    guard process.terminationStatus == 0 else { return nil }
+    guard okStatuses.contains(process.terminationStatus) else { return nil }
     return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+/// Which of these folders git ignores, read-only. Paths outside the project, or a git failure, give no answer.
+func ignoredByGit(_ root: String, paths: [String]) -> [String: Bool] {
+    let relative = paths.filter { $0.hasPrefix(root + "/") }.map { String($0.dropFirst(root.count + 1)) }
+    guard !relative.isEmpty, let output = gitOutput(root, ["check-ignore", "-v", "-n", "--"] + relative, okStatuses: [0, 1]) else { return [:] }
+    var result: [String: Bool] = [:]
+    for line in output.split(separator: "\n") {
+        guard let tab = line.firstIndex(of: "\t") else { continue }
+        result[root + "/" + line[line.index(after: tab)...]] = !line.hasPrefix("::")
+    }
+    return result
 }
 /// Reads a project's git activity. Read-only.
 func readProjectActivity(_ root: String) -> ProjectActivity {
@@ -713,4 +746,56 @@ func usedPercentText(_ fraction: Double) -> String {
     let scale = digits == 1 ? 1000.0 : 100.0
     let value = (clamped * scale).rounded(.down) / scale
     return value.formatted(.percent.precision(.fractionLength(digits)))
+}
+
+
+// MARK: - Where the space went
+
+/// One place's share of a change in used space: a Coverage place such as "Codex · Worktrees", or an app.
+struct SpaceChange: Identifiable, Equatable {
+    var id: String { title }
+    let title: String
+    var bytes: Int64 = 0
+    /// Folders in this place that were created inside the span; their whole size counts as growth.
+    var newFolders = 0
+    /// Biggest contributors, largest first: display name and change.
+    var examples: [(name: String, path: String, bytes: Int64)] = []
+    static func == (a: SpaceChange, b: SpaceChange) -> Bool { a.title == b.title && a.bytes == b.bytes && a.newFolders == b.newFolders }
+}
+/// Splits growth since from across places. A folder counts if it was scanned before from (the change since),
+/// or was created after from (its whole size). Folders first scanned later but older than from are unknown and skipped.
+/// Nested folders count once, through their outermost scanned folder.
+func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement], created: [String: Date], from: Date, home: String) -> [SpaceChange] {
+    let measured = latest.filter { $0.state == .measured && $0.allocatedBytes != nil }.sorted { $0.profile.path.count < $1.profile.path.count }
+    var accepted: Set<String> = []
+    var groups: [String: SpaceChange] = [:]
+    for item in measured {
+        let path = normalized(item.profile.path)
+        guard !hasAncestor(in: accepted, path) else { continue }
+        accepted.insert(path)
+        let now = item.allocatedBytes ?? 0
+        var delta: Int64, isNew = false
+        if let before = history[item.profile.path]?.last(where: { $0.date <= from && $0.bytes != nil })?.bytes { delta = now - before }
+        else if let born = created[item.profile.path], born >= from { delta = now; isNew = true }
+        else { continue }
+        guard delta != 0 else { continue }
+        let title = changePlace(item, home: home)
+        var group = groups[title] ?? SpaceChange(title: title)
+        group.bytes += delta
+        if isNew { group.newFolders += 1 }
+        group.examples.append((item.profile.displayName, item.profile.path, delta))
+        groups[title] = group
+    }
+    return groups.values.map { g in var g = g; g.examples = g.examples.sorted { $0.bytes > $1.bytes }.prefix(3).map { $0 }; return g }
+        .sorted { $0.bytes > $1.bytes }
+}
+/// The place a folder belongs to, for grouping changes: its Coverage place, or its app.
+func changePlace(_ m: FolderMeasurement, home: String) -> String {
+    let match = Coverage.entries.filter { containsPath($0.path(home: home), m.profile.path) }.max { $0.path(home: home).count < $1.path(home: home).count }
+    guard let match else { return m.profile.associatedApp }
+    switch match.writer {
+    case "You": return "Downloads"
+    case "Your projects": return "GitHub projects"
+    default: return match.writer + " · " + match.name
+    }
 }

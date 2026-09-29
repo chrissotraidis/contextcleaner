@@ -101,11 +101,25 @@ import Foundation
         // Git evidence: an active project is never called safe; a finished worktree offers git's own removal.
         let activeProject = ProjectActivity(root: "/fixture/kartpad", isWorktree: false, mainRepository: nil, registered: nil, branch: "codex/x", defaultBranch: "main", lastCommit: now.addingTimeInterval(-86400), merged: false, uncommitted: 3)
         let activeAdvice = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
-        check(activeAdvice.verdict == .check && activeAdvice.reason.contains("probably still using it") && activeAdvice.evidence.first?.contains("3 uncommitted changes") == true && activeAdvice.lastUsed == activeProject.lastCommit,
-              "build output of a project with fresh commits or uncommitted changes is check first, with the evidence")
+        check(activeAdvice.verdict == .rebuild && activeAdvice.reason.contains("still working on") && activeAdvice.evidence.first?.contains("3 uncommitted changes") == true && activeAdvice.lastUsed == activeProject.lastCommit,
+              "build output of an active project is rebuildable, with the git evidence; uncommitted work lives in tracked files")
         let busyBuild = advice(for: folder("/fixture/kartpad/app/build", .buildOutput, lastChanged: 1, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
-        check(busyBuild.howTo.components(separatedBy: "Wait until").count == 2 && busyBuild.howTo.hasPrefix("Wait until you're done with kartpad. "),
-              "the removal advice says to wait once, naming the project")
+        check(busyBuild.verdict == .rebuild && busyBuild.howTo.contains("between builds") && busyBuild.short == "Used yesterday",
+              "busy build output says to remove it between builds, with a short reason")
+        var trackedProject = activeProject; trackedProject.ignored = ["/fixture/kartpad/build": false]
+        let tracked = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: trackedProject, now: now)
+        check(tracked.verdict == .check && tracked.evidence.contains("Git tracks this folder."), "a build folder git tracks may be source, so it's your call")
+        var ignoredProject = activeProject; ignoredProject.ignored = ["/fixture/kartpad/build": true]
+        let ignoredBuild = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 1, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: ignoredProject, now: now)
+        check(ignoredBuild.verdict == .rebuild && ignoredBuild.evidence.contains { $0.contains("Git ignores this folder") }, "git-ignored build output says so as evidence")
+        var experiments = folder("/fixture/wt/kartpad-x/build", .workspace, lastChanged: 0.5, project: "kartpad")
+        experiments.contents = FolderContents(children: [
+            ChildSummary(name: "evening-20260921", directory: true, identity: "1", bytes: 30 * gib, files: 10, modifiedAt: now.addingTimeInterval(-8 * 86400)),
+            ChildSummary(name: "ios89", directory: true, identity: "2", bytes: 6 * gib, files: 10, modifiedAt: now.addingTimeInterval(-86400))],
+            fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        let experimentAdvice = advice(for: experiments, policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
+        check(experimentAdvice.verdict == .rebuild && experimentAdvice.staleItems.map(\.name) == ["evening-20260921"] && experimentAdvice.staleDays == 7 && experimentAdvice.short == "30 GiB old inside",
+              "a project build folder lists experiment builds untouched for a week, and leaves this week's alone")
         let finishedWorktree = ProjectActivity(root: "/fixture/wt/kartpad-diag", isWorktree: true, mainRepository: "/fixture/kartpad", registered: true, branch: "codex/diag", defaultBranch: "main", lastCommit: now.addingTimeInterval(-20 * 86400), merged: true, uncommitted: 0)
         let finishedAdvice = advice(for: folder("/fixture/wt/kartpad-diag/work", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: finishedWorktree, now: now)
         check(finishedAdvice.reason.contains("looks finished") && finishedAdvice.command == #"git -C "/fixture/kartpad" worktree remove "/fixture/wt/kartpad-diag""# && finishedAdvice.evidence.first?.contains("merged into main") == true,
@@ -120,13 +134,13 @@ import Foundation
         check(dockerAdvice.verdict == .check && dockerAdvice.command == "docker system df", "a virtual machine is never called safe, and Docker's advice starts with seeing what's reclaimable")
         check(advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50), policy: keepPolicy, devices: [:], now: now).verdict == .keep, "your Keep wins over every rule")
         check(staleBuild.verdict == .safe && staleBuild.reason.contains("kartpad") && staleBuild.reason.contains("2 weeks ago"), "build output idle for weeks is safe and says which project and when")
-        check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 0.2, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "build output changed today is check first")
-        check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "unknown last use is never called safe")
+        check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 0.2, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .rebuild, "build output changed today is rebuildable")
+        check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .rebuild, "unknown last use is never called safe")
         check(advice(for: folder("/fixture/kartpad/work", .workspace, lastChanged: 90), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "work folders may hold hand-made inputs")
         let npm = advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 10), policy: LocationPolicy(), devices: [:], now: now)
         check(npm.verdict == .safe && npm.command == "npm cache clean --force" && npm.short == "Unused for 10 days", "an idle package cache is safe and offers the tool's own clean command")
         let freshCache = advice(for: folder("/fixture/.gradle/caches", .packageCache, lastChanged: 0.2), policy: LocationPolicy(), devices: [:], now: now)
-        check(freshCache.verdict == .check && freshCache.short == "Used today" && freshCache.reason.contains("still relying on it"), "a cache a tool used today is never called safe")
+        check(freshCache.verdict == .rebuild && freshCache.short == "Used today" && freshCache.reason.contains("next run is slower"), "a cache a tool used today is rebuildable, never safe")
         var derived = folder("/fixture/Library/Developer/Xcode/DerivedData", .buildOutput, lastChanged: 0.1)
         derived.contents = FolderContents(children: [
             ChildSummary(name: "OldGame-abc", directory: true, identity: "1", bytes: 3 * gib, files: 10, modifiedAt: now.addingTimeInterval(-60 * 86400)),
@@ -134,7 +148,7 @@ import Foundation
             ChildSummary(name: "Tiny-ghi", directory: true, identity: "3", bytes: 1_000, files: 1, modifiedAt: now.addingTimeInterval(-90 * 86400))],
             fileTypes: [], listedChildren: 3, retainedLimit: 512, omittedEntries: 0)
         let derivedAdvice = advice(for: derived, policy: LocationPolicy(), devices: [:], now: now)
-        check(derivedAdvice.verdict == .check && derivedAdvice.staleItems.map(\.name) == ["OldGame-abc"] && derivedAdvice.staleBytes == 3 * gib && derivedAdvice.short == "3 GiB unused inside",
+        check(derivedAdvice.verdict == .rebuild && derivedAdvice.staleItems.map(\.name) == ["OldGame-abc"] && derivedAdvice.staleBytes == 3 * gib && derivedAdvice.staleDays == 30 && derivedAdvice.short == "3 GiB old inside",
               "a busy cache points at the old items inside it, ignoring tiny ones")
         check(trashCommand(["/a/it's here", "/b"]) == #"mv -n '/a/it'\''s here' '/b' ~/.Trash/"#, "the Trash command quotes every path and never overwrites")
         check(usedPercentText(0.995) == "99.5%" && usedPercentText(0.5) == "50%" && usedPercentText(0.9999) == "99.9%" && usedPercentText(1) == "100%", "a nearly full disk never reads as 100% used")
@@ -184,9 +198,19 @@ import Foundation
         let discoveredBuild = FolderProfile(path: "/fixture/kartpad/build/intermediates", name: "intermediates", category: .buildOutput, project: "kartpad", associatedApp: "Gradle", explanation: "", consequence: "", evidence: [])
         let refreshed = savedProfilesToRefresh([legacyBuild, discoveredBuild, legacyBuild], discovered: [discoveredBuild])
         check(refreshed.map(\.path) == ["/fixture/kartpad/build"], "a full scan re-measures saved folders discovery didn't find, each once")
-        check(advice(for: folder("/fixture/kartpad/android/app/build/intermediates", .buildOutput, lastChanged: 0.5, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "project build output used today is check first, even when classed as build files")
-        check(advice(for: folder("/fixture/kartpad/android/app/build/intermediates", .buildOutput, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "project build output with unknown last use is check first")
+        check(advice(for: folder("/fixture/kartpad/android/app/build/intermediates", .buildOutput, lastChanged: 0.5, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .rebuild, "project build output used today is rebuildable, even when classed as build files")
+        check(advice(for: folder("/fixture/kartpad/android/app/build/intermediates", .buildOutput, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .rebuild, "project build output with unknown last use is rebuildable")
         check(advice(for: folder("/fixture/Library/Developer/Xcode/DerivedData", .buildOutput, lastChanged: nil), policy: LocationPolicy(), devices: [:], now: now).verdict == .safe, "Xcode's DerivedData is safe; Xcode manages it")
+        // Where the space went: growth since a date, new folders in full, older folders first scanned later skipped.
+        let from = now.addingTimeInterval(-3 * 86400)
+        func point(_ path: String, _ daysAgo: Double, _ bytes: Int64) -> HistoryPoint { HistoryPoint(recordID: "r\(daysAgo)", path: path, date: now.addingTimeInterval(-daysAgo * 86400), bytes: bytes, state: .measured, scopeID: "") }
+        let grown = item("/Users/x/.codex/worktrees/a/build", .workspace, 50 * gib), fresh = item("/Users/x/.codex/worktrees/b/build", .workspace, 20 * gib)
+        let unknown = item("/Users/x/Parallels/Win.pvm", .virtualMachine, 150 * gib), inner = item("/Users/x/.codex/worktrees/a/build/x", .workspace, 10 * gib)
+        let history = [grown.profile.path: [point(grown.profile.path, 5, 30 * gib), point(grown.profile.path, 0, 50 * gib)], fresh.profile.path: [point(fresh.profile.path, 1, 20 * gib)],
+                       unknown.profile.path: [point(unknown.profile.path, 0, 150 * gib)], inner.profile.path: [point(inner.profile.path, 5, 0), point(inner.profile.path, 0, 10 * gib)]]
+        let went = spaceChanges(history: history, latest: [grown, fresh, unknown, inner], created: [fresh.profile.path: now.addingTimeInterval(-86400), unknown.profile.path: now.addingTimeInterval(-300 * 86400)], from: from, home: "/Users/x")
+        check(went.count == 1 && went.first?.title == "Codex · Worktrees" && went.first?.bytes == 40 * gib && went.first?.newFolders == 1,
+              "growth since a date groups by place, counts new folders in full, counts nested folders once, and skips folders first scanned later")
         check(locationHint("/Users/x/.codex/worktrees/kartpad-stab/android/app/build") == "Codex worktree kartpad-stab" && locationHint("/Users/x/GitHub/kartpad/build") == "GitHub/kartpad" && locationHint("/tmp/x") == nil, "same-named projects are told apart by where they live")
         let single = record("single", [cache])
         check(single.folderSummary == cache.profile.displayName, "single-folder scan history identifies the folder")

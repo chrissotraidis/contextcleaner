@@ -14,7 +14,7 @@
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-0A84FF?logo=apple">
   <img alt="Built with SwiftUI" src="https://img.shields.io/badge/SwiftUI-native-FF9F0A?logo=swift&amp;logoColor=white">
   <img alt="Never deletes files" src="https://img.shields.io/badge/deletes%20files-never-30D158">
-  <img alt="Version 0.11.1" src="https://img.shields.io/badge/version-0.11.1-5E5CE6">
+  <img alt="Version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-5E5CE6">
   <img alt="Preview, not notarized" src="https://img.shields.io/badge/status-preview%2C%20not%20notarized-FFD60A">
 </p>
 
@@ -27,7 +27,7 @@
   <a href="#build-from-source">Build it</a>
 </p>
 
-![Context Cleaner's Overview: 74.6 GiB free of 3.63 TiB, a chart showing 177 GiB less free space over 7 days, a whole-disk map by answer, and a Start here list of folders that are safe to remove](docs/images/overview-dark.png)
+![Context Cleaner's Overview: a free-space chart, You can get back about 614 GiB split into safe, old builds and rebuildable, where the week's space went, and a Start here list](docs/images/overview-dark.png)
 
 > [!IMPORTANT]
 > **Context Cleaner never deletes, moves or empties anything.** It measures folders, explains them and tells you how to remove them yourself, in Finder or with a command you copy and run. There's no clean button, on purpose.
@@ -48,33 +48,35 @@ Context Cleaner answers those questions for the places where this kind of data p
 
 | | What to expect |
 |---|---|
-| **Answers** | Every folder gets **Safe to remove**, **Check first** or **Keep**, with a reason in plain words and how to remove it yourself |
+| **Answers** | Every folder gets **Safe to remove**, **Rebuildable**, **Your call** or **Keep**, ranked by what removing it costs, with a short reason |
 | **Evidence** | Last use from file dates, read-only git status for project folders, open files, and Xcode's own data for simulators |
 | **History** | Disk space every hour while the app is open, folder sizes at every scan, and what grew in between |
 | **Coverage** | About 30 known places across AI tools, developer tools, virtual machines, games and Downloads, plus folders you add |
 | **Deletes** | Nothing, ever. You remove things in Finder, and space comes back when you empty the Trash |
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
-## What's new in 0.11
+## What's new in 0.12
 
-- **Recently used isn't "safe".** A cache or build folder used in the last 7 days is Check first, even if its tool could rebuild it. Project folders wait for git before getting an answer, so the app never briefly overstates what's safe.
-- **Old items inside busy folders.** In a folder you're still using, it lists the items that haven't changed in 30+ days, with **Show in Finder** and a copyable move-to-Trash command.
-- **A short reason on every row**: "Uncommitted work", "Unused for 3 weeks", "Open in Parallels Desktop", "2.2 GiB unused inside".
-- **A clearer chart and scan sheet.** The chart headline is the change in free space. The scan sheet lists what it will read, biggest first, and when the last full scan ran.
-- **Export Cleanup List** saves a Markdown checklist you can work through.
-- **A Trash reminder.** Anything you move to the Trash still uses space until you empty it.
+- **"You can get back about 614 GiB"**, where 0.11 said 11 GiB. The Overview now counts everything that costs you at most a rebuild: safe folders, old items inside folders, and rebuildable build output.
+- **Old experiments inside build folders.** Codex worktrees and project `build`, `generated` and `work` folders keep one subfolder per build or experiment. Each subfolder untouched for 7+ days is listed with its date and size, such as `evening-20260921` at 33 GiB.
+- **Four answers ranked by cost**: Safe to remove, Rebuildable, Your call, Keep. Build output in a project you're still working on is Rebuildable. Uncommitted work lives in tracked files, so it doesn't hold build output back.
+- **Git evidence for build folders**: "Git ignores this folder". A build folder git tracks is treated as possible source.
+- **Where the space went**: the week's change, split by place (Codex worktrees, task outputs, simulators and more), with new folders counted in full.
 
-See the [0.11 validation record](docs/validation/Final%20validation%200.11.0.md) for details and limits.
+See the [0.12 validation record](docs/validation/Final%20validation%200.12.0.md) for details and limits.
 
 ## Can I remove it?
 
-Every scanned folder gets one of three answers:
+Every scanned folder gets one of four answers, ranked by what removing it costs:
 
-| Answer | What it means | Examples |
+| Answer | What removing it costs | Examples |
 |---|---|---|
-| 🟢 **Safe to remove** | A tool recreates it, and you haven't used it lately | Package caches, Xcode DerivedData, iPhone install caches and old build output, when idle for a week or more |
-| 🟠 **Check first** | Might be fine; the card says exactly what to look at | Projects with uncommitted work, recovery copies that may be the only copy, caches you used this week |
-| ⚪ **Keep** | Manage it from inside its own app | Chat history, app libraries, virtual machines |
+| 🟢 **Safe to remove** | Nothing | Idle package caches, Xcode DerivedData, iPhone install caches, build output from finished projects |
+| 🔵 **Rebuildable** | Waiting for the next build or download | Build output and caches you used this week |
+| 🟠 **Your call** | Maybe the only copy of something | Recovery copies, scratch `work` folders, virtual machines, folders git tracks |
+| ⚪ **Keep** | Breaks the app | Chat history, app libraries |
+
+**Old items inside** folders are counted separately. When a build, cache or scratch folder is still in use, the subfolders inside it that haven't changed in 7 days (project output) or 30 days (caches) are listed with dates, **Show in Finder**, and a copyable move-to-Trash command.
 
 The answers come from evidence, not just folder names:
 
@@ -82,7 +84,7 @@ The answers come from evidence, not just folder names:
 - **Is something using it right now?** Folders with open files are flagged, with the app's name ("Open in Parallels Desktop").
 - **Simulators** are listed by device name, such as "iPhone 17 Pro · iOS 26.5", with size and last use taken from Xcode. You remove single devices in Xcode or with a copied `xcrun simctl delete`.
 - **Finished worktrees.** A worktree that's merged, clean and quiet for two weeks says it looks finished and offers `git worktree remove`, which git refuses if anything is uncommitted.
-- **Unused inside.** When a cache or build folder is still in use, items one level inside it that haven't changed in 30+ days are listed if they add up to at least 1 GiB.
+- **Git ignores it?** Build folders are checked with `git check-ignore`, read-only. Ignored output is rebuildable; a tracked folder named build may be source, so it's your call.
 
 Right-click any folder to **Always Keep This Folder**, **Watch for Growth**, say **Its Growth Is Normal**, or **Stop Scanning This Folder**. Kept and turned-off folders move to the **Kept** view, with their own total.
 
@@ -90,8 +92,8 @@ Right-click any folder to **Always Keep This Folder**, **Watch for Growth**, say
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/folders-git.png" alt="Folders view with a Codex worktree build folder selected; the card reads Check first, with git evidence: last commit 4 days ago, merged into main, 1 uncommitted change"><br><sub><b>Folders.</b> Big folders you haven't used lately come first. Each has an answer, a reason and git evidence.</sub></td>
-    <td width="50%"><img src="docs/images/folders-unused-inside.png" alt="The npx cache card lists five installs, 2.2 GiB in total, that haven't changed in 3 to 10 months, with Show in Finder and Copy Move-to-Trash Command buttons"><br><sub><b>Unused inside.</b> In a folder you still use, it points at the items that have sat untouched for months.</sub></td>
+    <td width="50%"><img src="docs/images/folders-git.png" alt="Folders view with a Codex worktree build folder selected; the card reads Rebuildable, with git evidence, and lists 19 old experiment folders such as evening-20260921 at 33 GiB"><br><sub><b>Folders.</b> Each folder has an answer, a reason, git evidence, and the old experiments inside it.</sub></td>
+    <td width="50%"><img src="docs/images/folders-unused-inside.png" alt="The Overview's Start here panel on Old items: build folders with 75 GiB, 53 GiB and 41 GiB of subfolders untouched for a week or more"><br><sub><b>Old items.</b> The folders holding the most old builds, biggest first.</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/images/scan-sheet.png" alt="Scan your folders sheet listing AI tools, developer tools, virtual machines, games and Downloads with sizes, a What happens section, and Watchlist Only and Start Full Scan buttons"><br><sub><b>Scan sheet.</b> What it will read, biggest first, and what happens before you start.</sub></td>
@@ -146,9 +148,9 @@ The build is signed but not notarized, so the first launch needs one extra step.
 
 No. It has no delete, clean, Trash, uninstall or reset button. It shows you where a folder is and how to remove it, and you decide. Commands it offers, such as a move-to-Trash command or `git worktree remove`, are copied for you to run yourself.
 
-### Why is "safe to remove" so much smaller than my used space?
+### Why is "safe to remove" so much smaller than what I can get back?
 
-Because most big folders on a working Mac are in use. Context Cleaner only calls something safe when a tool can recreate it and you haven't touched it lately. The larger wins are usually under **Check first**: finished worktrees, old recovery copies and idle virtual machines. Each card says what to check.
+Because most big folders on a working Mac are in use. "Safe" means nothing is lost at all. The big wins are usually **old items inside** your build folders and **rebuildable** output from projects you're working on, which only cost a rebuild. The Overview adds all three together.
 
 ### Why does removing a folder free less than its size?
 

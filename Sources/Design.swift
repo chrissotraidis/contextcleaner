@@ -198,10 +198,10 @@ struct VerdictCard: View {
             Text("Old items inside · \(byteLabel(advice.staleBytes)) in \(items.count) \(items.count == 1 ? "item" : "items"), untouched \(advice.staleDays)+ days").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(items.prefix(10)) { item in
                 HStack(spacing: 6) {
-                    Text(item.name).font(.callout).lineLimit(1).truncationMode(.tail).layoutPriority(1).help(item.path)
+                    Text(item.name).font(.callout).lineLimit(1).truncationMode(.middle).help(item.path)
                     Spacer(minLength: 6)
                     Text(item.modifiedAt.map { ageText($0) } ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-                    Text(byteLabel(item.bytes)).font(.callout).monospacedDigit()
+                    Text(byteLabel(item.bytes)).font(.callout).monospacedDigit().lineLimit(1).fixedSize()
                 }
             }
             if items.count > 10 { Text("and \(items.count - 10) more").font(.caption).foregroundStyle(.secondary) }

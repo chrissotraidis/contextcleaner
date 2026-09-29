@@ -1,4 +1,16 @@
 import Foundation
+
+/// Allocated size of the Trash, or nil when macOS won't let it be read. Reads metadata only.
+func trashSize(_ url: URL) -> Int64? {
+    guard (try? FileManager.default.contentsOfDirectory(atPath: url.path)) != nil else { return nil }
+    let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+    guard let items = FileManager.default.enumerator(at: url, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) else { return nil }
+    var total: Int64 = 0
+    for case let item as URL in items {
+        if let values = try? item.resourceValues(forKeys: Set(keys)), values.isRegularFile == true { total += Int64(values.totalFileAllocatedSize ?? 0) }
+    }
+    return total
+}
 import Darwin
 
 struct Discovery: Codable {

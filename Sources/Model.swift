@@ -118,7 +118,18 @@ struct FolderRow: Identifiable {
             }
         }
     }
-    func adviceFor(_ m: FolderMeasurement) -> Advice { advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices, project: project(for: m.profile.path)) }
+    /// Advice is read by rows, tiles and the Overview many times per update. It depends only on the folder's own
+    /// measurement, its settings and discovery facts, so it survives scan progress and is keyed per measurement.
+    private var adviceCache: (key: String, value: [String: Advice]) = ("", [:])
+    func adviceFor(_ m: FolderMeasurement) -> Advice {
+        let key = "\(preferencesVersion)|\(discoveryVersion)"
+        if adviceCache.key != key { adviceCache = (key, [:]) }
+        let itemKey = m.profile.path + "|\(m.state.rawValue)|\(m.observedAt.timeIntervalSinceReferenceDate)|\(m.allocatedBytes ?? -1)"
+        if let cached = adviceCache.value[itemKey] { return cached }
+        let value = advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices, project: project(for: m.profile.path))
+        adviceCache.value[itemKey] = value
+        return value
+    }
     /// Git activity for the projects that scanned folders belong to, keyed by project root. Read-only.
     @Published var projects: [String: ProjectActivity] = [:] { didSet { discoveryVersion += 1 } }
     private var projectRoots: [String: String] = [:]
@@ -139,7 +150,17 @@ struct FolderRow: Identifiable {
         let profile = FolderProfile(path: home + "/Library/Developer/CoreSimulator/Devices/" + device.udid, name: device.name, category: .simulator, project: nil, associatedApp: "Apple CoreSimulator", explanation: "", consequence: "", evidence: [])
         return advice(for: FolderMeasurement(profile: profile, observedAt: Date(), state: .measured, fileCount: 0, processes: [], activityCheckAvailable: false, elapsedSeconds: 0), policy: LocationPolicy(), devices: simDevices)
     }
-    func refreshVolume() { volume = VolumeSnapshot.read(); recordCapacityIfDue() }
+    func refreshVolume() { volume = VolumeSnapshot.read(); recordCapacityIfDue(); refreshTrash() }
+    /// Space the Trash still holds. Nil until read, or when macOS doesn't allow reading it (Full Disk Access is off).
+    @Published var trashBytes: Int64?
+    /// Reads the Trash's size in the background. Metadata only; the Trash is never emptied or changed.
+    func refreshTrash() {
+        let url = URL(fileURLWithPath: home + "/.Trash")
+        DispatchQueue.global(qos: .utility).async {
+            let bytes = trashSize(url)
+            DispatchQueue.main.async { if bytes != self.trashBytes { self.trashBytes = bytes } }
+        }
+    }
     /// Minimum spacing between stored capacity readings.
     static let capacityInterval: TimeInterval = 55 * 60
     /// Appends the current capacity reading when the previous one is at least 55 minutes older.
@@ -296,16 +317,24 @@ struct FolderRow: Identifiable {
     }
     /// Every known folder: saved sizes, discovered folders not yet scanned, and turned-off folders,
     /// with Xcode's live facts for simulators.
+    private var baseCache: (key: String, value: [FolderMeasurement]) = ("", [])
     private func baseMeasures() -> [FolderMeasurement] {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if baseCache.key == key { return baseCache.value }
         var measures = latest
-        for profile in discovery.profiles where !fileOnly.contains(profile.path) && !measures.contains(where: { $0.profile.path == profile.path }) {
+        var known = Set(measures.map { $0.profile.path })
+        for profile in discovery.profiles where !fileOnly.contains(profile.path) && !known.contains(profile.path) {
             measures.append(FolderMeasurement(profile: profile, observedAt: Date(), state: .pending, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Discovered; not yet measured.", elapsedSeconds: 0))
+            known.insert(profile.path)
         }
         // Excluded locations remain manageable even if they have never been measured.
-        for (path, policy) in preferences.locations where policy.excluded && !measures.contains(where: { $0.profile.path == path }) {
+        for (path, policy) in preferences.locations where policy.excluded && !known.contains(path) {
             measures.append(FolderMeasurement(profile: Classifier.profile(path: path, home: home, readMetadata: false), observedAt: Date(), state: .excluded, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Excluded by you.", elapsedSeconds: 0))
+            known.insert(path)
         }
-        return measures.map { withSimulatorFacts($0, devices: simDevices) }
+        let value = measures.map { withSimulatorFacts($0, devices: simDevices) }
+        baseCache = (key, value)
+        return value
     }
     /// Scanned, included folders still on disk, grouped by answer and sorted largest first.
     /// The Folders tiles, the Overview and the Safe to remove list all read this.
@@ -343,12 +372,40 @@ struct FolderRow: Identifiable {
             case .unscanned: return row.measurement.state == .pending
             case .growing: return (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
             case .reviewLater: return (row.policy.reviewAfter ?? .distantPast) > Date()
+            case .inside: return !row.advice.staleItems.isEmpty
             }
         case .watching: return !off && row.policy.isWatched
         case .needsAttention: return !off && [.inaccessible, .limited, .failed].contains(row.measurement.state)
         default: return !off
         }
     }
+    /// Scanned size under each Coverage place, from saved scans. Used to list places biggest first.
+    /// Scan progress doesn't change it; the sizes refresh when the scan is saved.
+    private var coverageCache: (key: Int, value: [String: Int64]) = (-1, [:])
+    var coverageSizes: [String: Int64] {
+        refreshDerived()
+        let key = recordsVersion &* 1_000_003 &+ discoveryVersion
+        if coverageCache.key == key { return coverageCache.value }
+        let measured = derived.saved.values.filter { $0.state == .measured && !gone.contains($0.profile.path) }
+        var value: [String: Int64] = [:]
+        for entry in Coverage.entries {
+            let root = entry.path(home: home)
+            value[entry.id] = uniqueAllocatedTotal(measured.filter { containsPath(root, $0.profile.path) })
+        }
+        coverageCache = (key, value)
+        return value
+    }
+    /// Old items inside folders you're still using: how many folders hold them and how much space they take.
+    private var insideCache: (key: String, value: (folders: Int, bytes: Int64, biggest: String?)) = ("", (0, 0, nil))
+    var unusedInside: (folders: Int, bytes: Int64, biggest: String?) {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if insideCache.key == key { return insideCache.value }
+        let found = (verdictGroups[.check] ?? []).map { ($0, adviceFor($0)) }.filter { !$0.1.staleItems.isEmpty }.sorted { $0.1.staleBytes > $1.1.staleBytes }
+        let value = (found.count, found.reduce(Int64(0)) { $0 + $1.1.staleBytes }, found.first?.0.profile.displayName)
+        insideCache = (key, value)
+        return value
+    }
+    func groupSize(_ group: CoverageGroup) -> Int64 { Coverage.entries.filter { $0.group == group }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) } }
     /// A span of time since last use, with the scanned space in it by answer.
     struct IdleBucket: Identifiable { let id: Int; let title: String; var bytes: [Verdict: Int64] = [:]; var total: Int64 { bytes.values.reduce(0, +) } }
     private var idleCache: (key: String, value: [IdleBucket]) = ("", [])
@@ -612,41 +669,52 @@ struct FolderRow: Identifiable {
     }
     @Published var showingScanPlan = false
     @Published var reportPreview: String?
-    /// Builds the Markdown report for the current view: every visible location, largest first.
+    /// Builds the cleanup checklist: safe items, unused items inside busy folders, check first, keep. Biggest first.
     func buildReport() -> String {
         let stamp = Date().formatted(date: .long, time: .shortened)
-        var text = "# Context Cleaner report\n\n\(stamp) · \(section == .overview || section == .history ? "All included folders" : section.rawValue)\(section == .locations ? " · \(locationFilter.rawValue)" : "")\(search.isEmpty ? "" : " · matching “\(search)”")\n\n"
-        if let v = volume { text += "Disk: \(byteLabel(v.free)) free of \(byteLabel(v.total)), checked \(v.date.formatted(date: .omitted, time: .shortened)).\n\n" }
+        var text = "# Context Cleaner cleanup list\n\n\(stamp)"
+        if let v = volume { text += " · \(byteLabel(v.free)) free of \(byteLabel(v.total)) (\(usedPercentText(Double(v.used) / Double(max(v.total, 1)))) used)" }
+        text += "\n\n"
         let week = UsageRange.week.window(endingAt: usage.last?.date ?? Date())
         if let change = usageChange(usage, from: week.lowerBound, to: week.upperBound) {
-            text += "Space used in the last 7 days: \(signedBytes(change.delta)) (\(byteLabel(change.from.used)) on \(change.from.date.formatted(date: .abbreviated, time: .shortened)) → \(byteLabel(change.to.used)) on \(change.to.date.formatted(date: .abbreviated, time: .shortened))).\n\n"
+            text += "Free space in the last 7 days: \(byteLabel(change.from.free)) → \(byteLabel(change.to.free)).\n\n"
         }
-        text += "Context Cleaner never deletes files. Sizes are estimates from the latest scan of each folder. A folder inside another may appear in both rows, and APFS shares storage between files, so removing a folder can free less than its size.\n\n"
-        // Same order as Folders: big folders you haven't used lately first.
-        let listed = rows.sorted(by: { $0.idleScore == $1.idleScore ? $0.bytes > $1.bytes : $0.idleScore > $1.idleScore })
-        text += "| Folder | Can I remove it? | Size | Last used | App or project |\n|---|---|---:|---|---|\n"
-        for row in listed {
-            let answer = row.policy.excluded ? "Not scanned" : row.policy.isKept ? "Kept by you" : row.measurement.state == .pending ? "Scan first" : row.advice.verdict.title
-            text += "| \(row.name.replacingOccurrences(of: "|", with: "/")) | \(answer) | \(row.bytes >= 0 ? byteLabel(row.bytes) : "not measured") | \(row.advice.lastUsed.map { ageText($0) } ?? "not recorded") | \(row.app) |\n"
+        text += "Context Cleaner never deletes anything. Tick items off as you remove them yourself, in Finder or with the command shown. Space comes back when you empty the Trash. Sizes are from each folder's latest scan; folders inside others are counted once in totals.\n\n"
+        func line(_ m: FolderMeasurement, _ a: Advice) -> String {
+            "**\(m.profile.displayName.replacingOccurrences(of: "*", with: ""))** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown") · \(a.short)"
         }
-        text += "\n"
-        for row in listed {
-            let p = row.measurement.profile
-            text += "## \(p.name)\n\n`\(p.path)`\n\n\(row.bytes >= 0 ? byteLabel(row.bytes) : "Not measured") · \(row.category) · \(row.status.isEmpty ? "Scanned" : row.status)\n\n**\(row.advice.verdict.title).** \(row.advice.reason)\n\n" + row.advice.evidence.map { "- \($0)\n" }.joined() + "\nHow to remove it yourself: \(row.advice.howTo)\(row.advice.command.map { " `\($0)`" } ?? "")\n\n\(p.explanation) Before any manual change: \(p.consequence)\n\n"
-            for e in p.evidence { text += "- \(e.level.rawValue): \(e.label) — \(e.value)\n" }
-            let policy = preferences.policy(p.path)
-            if !policy.tags.isEmpty { text += "\nTags: \(policy.tags.joined(separator: ", "))\n" }
-            if !policy.note.isEmpty { text += "\nNote: \(policy.note)\n" }
-            text += "\n"
+        let safe = verdictGroups[.safe] ?? [], check = verdictGroups[.check] ?? [], keep = verdictGroups[.keep] ?? []
+        text += "## 1. Safe to remove · \(byteLabel(uniqueAllocatedTotal(safe))) in \(safe.count) \(safe.count == 1 ? "folder" : "folders")\n\n"
+        text += safe.isEmpty ? "Nothing yet. Scan again after a few days of normal work.\n\n" : ""
+        for m in safe {
+            let a = adviceFor(m)
+            text += "- [ ] " + line(m, a) + "\n  `\(m.profile.path)`\n  \(a.howTo)" + (a.command.map { " `\($0)`" } ?? "") + "\n"
         }
+        let inside = check.map { ($0, adviceFor($0)) }.filter { !$0.1.staleItems.isEmpty }
+        text += "\n## 2. Unused inside folders you're still using · \(byteLabel(inside.reduce(0) { $0 + $1.1.staleBytes }))\n\n"
+        text += inside.isEmpty ? "None found.\n\n" : "These folders are in use, but the items listed haven't changed in 30+ days and their tool recreates them if needed.\n\n"
+        for (m, a) in inside {
+            text += "- [ ] **\(m.profile.displayName)** · \(byteLabel(a.staleBytes)) in \(a.staleItems.count) \(a.staleItems.count == 1 ? "item" : "items")\n"
+            for item in a.staleItems.prefix(8) { text += "  - \(item.name) · \(byteLabel(item.bytes))\(item.modifiedAt.map { " · changed " + ageText($0) } ?? "")\n" }
+            text += "  Move them to the Trash: `\(trashCommand(a.staleItems.map(\.path)))`\n"
+        }
+        text += "\n## 3. Check first · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nLook at each before removing anything. Biggest first.\n\n"
+        for m in check.prefix(40) {
+            let a = adviceFor(m)
+            text += "- " + line(m, a) + "\n  \(a.reason)\n" + a.evidence.map { "  \($0)\n" }.joined() + "  `\(m.profile.path)`\n"
+        }
+        if check.count > 40 { text += "- and \(check.count - 40) more in the app\n" }
+        let kept = keptSummary
+        text += "\n## 4. Keep · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries, chat history and folders you chose to keep. Manage these inside their own apps.\n\n"
+        for m in keep + kept.kept { text += "- **\(m.profile.displayName)** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown")\n" }
         return text
     }
     func exportReport() { reportPreview = buildReport() }
     func saveReport(_ text: String) {
-        let panel = NSSavePanel(); panel.nameFieldStringValue = "Context Cleaner report \(Date().formatted(.iso8601.year().month().day())).md"
-        panel.message = "Saves a Markdown report. An existing file with the same name is never replaced."
+        let panel = NSSavePanel(); panel.nameFieldStringValue = "Cleanup list \(Date().formatted(.iso8601.year().month().day())).md"
+        panel.message = "Saves your cleanup list as a Markdown checklist. An existing file with the same name is never replaced."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try writeNew(Data(text.utf8), to: url); reportPreview = nil }
-        catch { self.error = "The report was not saved because a file already exists there. Choose a new name. \(error.localizedDescription)" }
+        catch { self.error = "The cleanup list was not saved because a file already exists there. Choose a new name. \(error.localizedDescription)" }
     }
 }

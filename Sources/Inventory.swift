@@ -31,7 +31,11 @@ struct Inventory {
             let listing = DirectoryListing.read(parent, preferences: preferences, cancellation: cancellation)
             if !listing.complete { complete = false }
             if let note = listing.note { notes.append(parent + ": " + note) }
-            return listing.names.filter { !$0.hasPrefix(".") }.map { parent + "/" + $0 }
+            // Folders only: a file such as Xcode's device_set.plist is not a location to measure.
+            return listing.names.filter { !$0.hasPrefix(".") }.map { parent + "/" + $0 }.filter { path in
+                var child = stat()
+                return lstat(path, &child) != 0 || (child.st_mode & S_IFMT) == S_IFDIR
+            }
         }
         for entry in Coverage.entries {
             let root = entry.path(home: home)

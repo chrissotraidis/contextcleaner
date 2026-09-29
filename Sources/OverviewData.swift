@@ -451,3 +451,7 @@ func locationHint(_ path: String) -> String? {
 func missingPaths(_ paths: [String]) -> Set<String> {
     Set(paths.filter { path in var st = stat(); return lstat(path, &st) != 0 && (errno == ENOENT || errno == ENOTDIR) })
 }
+/// Known paths that are files rather than folders, such as Xcode's device_set.plist. Metadata only.
+func fileOnlyPaths(_ paths: [String]) -> Set<String> {
+    Set(paths.filter { path in var st = stat(); return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) != S_IFDIR })
+}

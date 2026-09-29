@@ -229,7 +229,7 @@ struct UsageChart: View {
         let when = span.map { "\($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) – \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" }
             ?? (startsLate ? "Since \(firstReading!.formatted(.dateTime.weekday(.abbreviated).day().hour())), the first reading" : "Last " + range.rawValue)
         guard let change else { return when + (span == nil ? " · Disk space is noted every hour while the app is open" : " · Drag across the blue area instead") }
-        return "\(when) · \(byteLabel(change.from.used)) → \(byteLabel(change.to.used)) used · point at the chart for any reading"
+        return "\(when) · \(byteLabel(change.from.used)) → \(byteLabel(change.to.used)) used"
     }
     /// True when readings begin well after the range starts. The chart then starts at the first reading
     /// instead of drawing an empty stretch.
@@ -251,7 +251,10 @@ struct UsageChart: View {
         let ticks = [axis.lowerBound, (axis.lowerBound + axis.upperBound) / 2]
         let picked = hover.flatMap { date in points.min { abs($0.reading.date.timeIntervalSince(date)) < abs($1.reading.date.timeIntervalSince(date)) } }
         let first = points.first?.reading.date ?? window.lowerBound
-        let domain = chartStartsLate(first, window: window) ? first...window.upperBound : window
+        // Run from the first reading (or the range start) to the latest reading, so the line always reaches both edges.
+        let lower = chartStartsLate(first, window: window) ? first : window.lowerBound
+        let upper = max(points.last?.reading.date ?? window.upperBound, lower.addingTimeInterval(3600))
+        let domain = lower...upper
         let fill = LinearGradient(colors: [Color.accentColor.opacity(0.32), Color.accentColor.opacity(0.02)], startPoint: .top, endPoint: .bottom)
         return Chart {
             if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.10)) }

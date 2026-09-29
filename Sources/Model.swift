@@ -77,6 +77,8 @@ struct FolderRow: Identifiable {
     @Published var simDevices: [String: SimDevice] = [:] { didSet { discoveryVersion += 1 } }
     /// Known folders that no longer exist on disk.
     @Published var gone: Set<String> = [] { didSet { discoveryVersion += 1 } }
+    /// Discovered paths that are files, not folders. Hidden from the lists.
+    @Published var fileOnly: Set<String> = [] { didSet { discoveryVersion += 1 } }
     /// Reads Xcode's simulator list in the background. Never changes simulators.
     func loadSimDevices() {
         DispatchQueue.global(qos: .utility).async {
@@ -96,7 +98,11 @@ struct FolderRow: Identifiable {
         let paths = Array(Set(discovery.profiles.map(\.path) + latest.map(\.profile.path)))
         DispatchQueue.global(qos: .utility).async {
             let missing = missingPaths(paths)
-            DispatchQueue.main.async { if missing != self.gone { self.gone = missing } }
+            let files = fileOnlyPaths(paths)
+            DispatchQueue.main.async {
+                if missing != self.gone { self.gone = missing }
+                if files != self.fileOnly { self.fileOnly = files }
+            }
         }
     }
     func adviceFor(_ m: FolderMeasurement) -> Advice { advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices) }
@@ -227,7 +233,7 @@ struct FolderRow: Identifiable {
         var attention = Set<String>()
         for item in current where !excluded(item.profile.path) && [.inaccessible, .limited, .missing, .failed].contains(item.state) { attention.insert(item.profile.path) }
         let known = Set(current.map { $0.profile.path })
-        let pendingCount = discovery.profiles.filter { !known.contains($0.path) && !excluded($0.path) }.count
+        let pendingCount = discovery.profiles.filter { !known.contains($0.path) && !excluded($0.path) && !fileOnly.contains($0.path) }.count
         let watching = preferences.locations.filter { ($0.value.isWatched) && !excluded($0.key) }.count
         let safe = measured.filter { adviceFor($0).verdict == .safe }.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }
         let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count, pendingCount: pendingCount, safe: safe, safeBytes: uniqueAllocatedTotal(safe))
@@ -245,7 +251,7 @@ struct FolderRow: Identifiable {
     }
     private func computeRows() -> [FolderRow] {
         var measures = latest
-        for profile in discovery.profiles where !measures.contains(where: { $0.profile.path == profile.path }) {
+        for profile in discovery.profiles where !fileOnly.contains(profile.path) && !measures.contains(where: { $0.profile.path == profile.path }) {
             measures.append(FolderMeasurement(profile: profile, observedAt: Date(), state: .pending, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Discovered; not yet measured.", elapsedSeconds: 0))
         }
         // Excluded locations remain manageable even if they have never been measured.

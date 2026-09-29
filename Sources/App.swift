@@ -403,7 +403,7 @@ struct MainView: View {
                         Image(systemName: verdict.verdict.symbol).foregroundStyle(verdict.verdict.tint).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(device.name).font(.callout).lineLimit(1)
-                            Text("\(device.runtime) · used \(device.lastUsed.map { ageText($0) } ?? "never")").font(.caption).foregroundStyle(.secondary)
+                            Text("\(device.runtime) · \(device.lastUsed.map { "used " + ageText($0) } ?? "never used")").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Text(device.dataBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit()

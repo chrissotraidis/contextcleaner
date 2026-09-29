@@ -8,7 +8,7 @@ struct TracePoint: Identifiable {
 }
 struct MainView: View {
     @ObservedObject var model: CleanerModel
-    @State var sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)]
+    @State var sortOrder = [KeyPathComparator(\FolderRow.idleScore, order: .reverse)]
     var appearance: String { model.preferences.appearance ?? "System" }
     @State var simulatorSearch = ""
     @State var showingAccessHelp = false
@@ -158,11 +158,11 @@ struct MainView: View {
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
             // The answer first: how much is safe, how much needs a look, how much to keep. Each tile is a filter.
-            let others: [LocationFilter] = [.growing, .unscanned, .reviewLater, .excluded]
+            let others: [LocationFilter] = [.growing, .unscanned, .reviewLater]
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
-                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "everything, largest first", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
+                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "everything except what you keep", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
                     ForEach(Verdict.allCases) { verdict in
                         let total = model.verdictTotal(verdict)
                         VerdictTile(title: verdict.title, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders") · \(verdict.meaning)", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
@@ -172,15 +172,18 @@ struct MainView: View {
                     let hidden = model.gone.isEmpty || model.locationFilter == .excluded ? "" : " · \(model.gone.count) \(model.gone.count == 1 ? "folder" : "folders") no longer on disk \(model.gone.count == 1 ? "is" : "are") hidden"
                     Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
+                    orderMenu
                     Menu {
                         ForEach(others) { filter in
                             Button { model.locationFilter = filter } label: { if model.locationFilter == filter { Label(filter.rawValue, systemImage: "checkmark") } else { Text(filter.rawValue) } }
                         }
                     } label: { Text(others.contains(model.locationFilter) ? "Showing: " + model.locationFilter.rawValue : "Other lists") }
                         .menuStyle(.borderlessButton).fixedSize().font(.caption)
-                        .help("Growing, not scanned yet, review later and turned-off folders")
+                        .help("Growing, not scanned yet and review later")
                 }
             }.padding(.horizontal, 16).padding(.bottom, 8)
+        } else if model.section == .kept {
+            keptBanner
         } else if !model.search.isEmpty {
             Text("\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
         }
@@ -194,6 +197,42 @@ struct MainView: View {
                 Button("Clear") { model.selection = [] }.controlSize(.small)
             }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
         }
+    }
+    /// How Folders are ordered. The default puts big folders you haven't used lately first.
+    private var orderName: String {
+        switch sortOrder.first?.keyPath {
+        case \FolderRow.idleScore: return "Big and unused first"
+        case \FolderRow.bytes: return "Largest first"
+        case \FolderRow.unusedKey: return "Longest unused first"
+        case \FolderRow.name: return "Name"
+        default: return "Custom"
+        }
+    }
+    var orderMenu: some View {
+        Menu {
+            Button("Big and unused first") { sortOrder = [KeyPathComparator(\FolderRow.idleScore, order: .reverse)] }
+            Button("Largest first") { sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)] }
+            Button("Longest unused first") { sortOrder = [KeyPathComparator(\FolderRow.unusedKey)] }
+            Button("Name") { sortOrder = [KeyPathComparator(\FolderRow.name)] }
+        } label: { Label("Order: " + orderName, systemImage: "arrow.up.arrow.down") }
+            .menuStyle(.borderlessButton).fixedSize().font(.caption)
+            .help("Big and unused first weighs each folder's size by how long it's gone unused")
+    }
+    /// The Kept view: what you've set aside, and how much of the disk it is.
+    var keptBanner: some View {
+        let summary = model.keptSummary
+        let total = Double(max(model.volume?.total ?? 1, 1))
+        func share(_ bytes: Int64) -> String { (Double(bytes) / total).formatted(.percent.precision(.fractionLength(0...1))) }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                VerdictTile(title: "Kept by you", value: byteLabel(summary.keptBytes), detail: "\(summary.kept.count) \(summary.kept.count == 1 ? "folder" : "folders") · \(share(summary.keptBytes)) of your disk", symbol: "hand.raised.fill", tint: .purple, selected: false) {}
+                    .allowsHitTesting(false)
+                VerdictTile(title: "Not scanned", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) · last known size", symbol: "eye.slash", tint: .secondary, selected: false) {}
+                    .allowsHitTesting(false)
+            }
+            Text("Right-click any folder and choose Keep, Never Suggest. Kept folders are still measured so you can see what they hold; they just never show up as something to remove.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.padding(.horizontal, 16).padding(.bottom, 8)
     }
     @ViewBuilder var categoryBanner: some View {
         if let category = model.categoryFilter {
@@ -378,6 +417,8 @@ struct MainView: View {
             Spacer()
             Button { model.policy(path) { $0.isWatched.toggle() } } label: { Label(policy.isWatched ? "Watching" : "Watch", systemImage: policy.isWatched ? "eye.fill" : "eye") }
                 .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")
+            Button { model.policy(path) { $0.isKept.toggle() } } label: { Label(policy.isKept ? "Kept" : "Keep", systemImage: policy.isKept ? "hand.raised.fill" : "hand.raised") }
+                .help(policy.isKept ? "Stop keeping: suggest it again when it looks safe to remove" : "Keep this folder: it's never suggested for removal and moves to Kept")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
         (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

@@ -4,13 +4,14 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview = "Overview", locations = "Folders", watching = "Watchlist", needsAttention = "Couldn't Scan", history = "Scan History"
+    case overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Kept", needsAttention = "Couldn't Scan", history = "Scan History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .overview: return "square.grid.2x2"
         case .locations: return "folder"
         case .watching: return "eye"
+        case .kept: return "hand.raised"
         case .needsAttention: return "exclamationmark.triangle"
         case .history: return "clock"
         }
@@ -20,6 +21,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .overview: return "How full your disk is, and what's filling it."
         case .locations: return "Every folder Context Cleaner knows, largest first."
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
+        case .kept: return "Folders you chose to keep or not scan. They're never suggested for removal."
         case .needsAttention: return "Folders a scan couldn't read, with a fix for each."
         case .history: return "Each scan: what it checked, when, and what it found."
         }
@@ -33,7 +35,7 @@ enum LocationFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Sizes from your latest scans. Each row says whether it's safe to remove."
+        case .all: return "Big folders you haven't used lately come first. Each row says whether it's safe to remove."
         case .safe: return "Tools recreate these. Remove them yourself in Finder or Xcode."
         case .check: return "Might be fine to remove, but look first. Each one says what to check."
         case .keep: return "App libraries and history. Manage these inside their own apps."
@@ -153,6 +155,9 @@ struct VerdictCard: View {
         VStack(alignment: .leading, spacing: 8) {
             Label(advice.verdict.title, systemImage: advice.verdict.symbol).font(.headline).foregroundStyle(advice.verdict.tint)
             Text(advice.reason).font(.callout).fixedSize(horizontal: false, vertical: true)
+            ForEach(advice.evidence, id: \.self) { line in
+                Label(line, systemImage: "arrow.triangle.branch").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             Text([advice.lastUsed.map { "Last used " + ageText($0) } ?? (neverUsed ? "Never started" : "Last use not recorded yet"), sizeSource].compactMap { $0 }.joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary)
             Divider()
@@ -228,6 +233,8 @@ struct LocationActions: View {
         Button("Scan This Folder") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
         Button(policy.isWatched ? "Remove from Watchlist" : "Add to Watchlist") { model.policy(path) { $0.isWatched.toggle() } }
+        Button(policy.isKept ? "Stop Keeping" : "Keep, Never Suggest") { model.policy(path) { $0.isKept.toggle() } }
+            .help(policy.isKept ? "Suggest this folder again when it looks safe to remove" : "Keep this folder out of every suggestion. It moves to Kept.")
         Button(policy.expected ? "Growth Is Not Expected" : "Growth Is Expected") { model.policy(path) { $0.expected.toggle() } }
         Button("Review Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
         Button("Tags and Notes…") { model.editing = path }
@@ -244,6 +251,7 @@ struct SelectionActions: View {
         Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
         Button("Watch All") { for path in paths { model.policy(path) { $0.isWatched = true } } }
         Button("Stop Watching All") { for path in paths { model.policy(path) { $0.isWatched = false; $0.autoWatched = nil } } }
+        Button("Keep All, Never Suggest") { for path in paths { model.policy(path) { $0.isKept = true } }; model.selection = [] }
         Divider()
         Button("Exclude All from Scans") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
         Button("Clear Selection") { model.selection = [] }

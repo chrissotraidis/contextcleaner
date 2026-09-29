@@ -162,6 +162,51 @@ import Foundation
         check(!verdictModel.rows.contains { $0.id == buildProfile.path } && verdictModel.gone.contains(buildProfile.path), "a folder that's no longer on disk is hidden from the list and counted as hidden")
         verdictModel.locationFilter = .safe
         check(verdictModel.rows.isEmpty, "a gone folder is never offered as safe to remove")
+        // Keep: one choice takes a folder out of every suggestion and into Kept, with its size.
+        verdictModel.gone = []
+        verdictModel.policy(buildProfile.path) { $0.isKept = true }
+        check(verdictModel.rows.isEmpty && verdictModel.overview.safe.isEmpty, "a kept folder is never suggested")
+        verdictModel.section = .kept
+        check(verdictModel.rows.first { $0.id == buildProfile.path }?.status == "Kept" && verdictModel.rows.allSatisfy { $0.policy.isKept || $0.policy.excluded }
+              && verdictModel.keptSummary.keptBytes == 5_000_000_000 && verdictModel.keptSummary.kept.map(\.profile.path) == [buildProfile.path],
+              "kept and turned-off folders share their own view, and kept ones have their own total")
+        verdictModel.policy(buildProfile.path) { $0.isKept = false }
+        verdictModel.section = .locations
+        check(verdictModel.rows.map(\.id) == [buildProfile.path], "stopping keeping brings the suggestion back")
+        let legacyPolicy = try? JSONDecoder().decode(LocationPolicy.self, from: Data(#"{"watched":false,"recurring":false,"expected":false,"excluded":false,"tags":[],"note":""}"#.utf8))
+        check(legacyPolicy?.isKept == false, "preferences saved before Keep existed still load")
+        // Gone folders are not problems to fix.
+        var goneProfile = Classifier.profile(path: home + "/verdict/Removed", home: home, readMetadata: false); goneProfile.category = .appData
+        var goneItem = measure(goneProfile, 1_000, t0); goneItem.state = .missing
+        verdictModel.records.append(ScanRecord(id: "missing", startedAt: t0, finishedAt: t0.addingTimeInterval(1), scope: "fixture", complete: false, measurements: [goneItem], discoveryNotes: []))
+        verdictModel.gone = [goneProfile.path]
+        verdictModel.section = .needsAttention
+        check(verdictModel.rows.isEmpty && verdictModel.attentionCount == 0, "a folder that's gone never shows up as a scan problem")
+        // Default order: big folders you haven't used lately come first.
+        let fresh = FolderRow(measurement: measure(libraryProfile, 50_000_000_000, t0), policy: LocationPolicy(), change: GrowthSummary(), advice: Advice(verdict: .check, reason: "", howTo: "", command: nil, lastUsed: Date()))
+        let idle = FolderRow(measurement: measure(buildProfile, 10_000_000_000, t0), policy: LocationPolicy(), change: GrowthSummary(), advice: Advice(verdict: .check, reason: "", howTo: "", command: nil, lastUsed: Date().addingTimeInterval(-120 * 86400)))
+        check(idle.idleScore > fresh.idleScore && fresh.idleScore == 0, "a 10 GB folder unused for four months outranks a 50 GB folder used today")
+        // Git activity, read from a real throwaway repository inside the fixture folder.
+        let repo = root.appendingPathComponent("gitfixture"), tree = root.appendingPathComponent("gitfixture-feature")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        func git(_ arguments: [String]) {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", repo.path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgsign=false"] + arguments
+            process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+            try? process.run(); process.waitUntilExit()
+        }
+        git(["init", "-q", "-b", "main"])
+        try Data("one".utf8).write(to: repo.appendingPathComponent("file.txt"))
+        git(["add", "file.txt"]); git(["commit", "-qm", "one"])
+        let clean = readProjectActivity(repo.path)
+        check(clean.branch == "main" && clean.uncommitted == 0 && clean.lastCommit != nil && !clean.isWorktree && clean.active(), "git activity reads the branch, a fresh commit and a clean tree")
+        try Data("two".utf8).write(to: repo.appendingPathComponent("file.txt"))
+        check(readProjectActivity(repo.path).uncommitted == 1, "uncommitted changes are counted")
+        git(["worktree", "add", "-q", "-b", "feature", tree.path])
+        let worktree = readProjectActivity(tree.path)
+        check(worktree.isWorktree && worktree.registered == true && worktree.merged == true && worktree.mainRepository == repo.path && worktree.branch == "feature",
+              "a worktree is recognized, with its main repository and merge state")
+        check(repositoryRoot(for: tree.path + "/build/intermediates", home: root.path) == tree.path && repositoryRoot(for: root.path + "/elsewhere", home: root.path) == nil, "a folder finds its project by looking for .git above it")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

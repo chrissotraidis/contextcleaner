@@ -96,6 +96,18 @@ import Foundation
             m.profile.project = project; return m
         }
         let staleBuild = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now)
+        // Git evidence: an active project is never called safe; a finished worktree offers git's own removal.
+        let activeProject = ProjectActivity(root: "/fixture/kartpad", isWorktree: false, mainRepository: nil, registered: nil, branch: "codex/x", defaultBranch: "main", lastCommit: now.addingTimeInterval(-86400), merged: false, uncommitted: 3)
+        let activeAdvice = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
+        check(activeAdvice.verdict == .check && activeAdvice.reason.contains("still working on kartpad") && activeAdvice.evidence.first?.contains("3 uncommitted changes") == true && activeAdvice.lastUsed == activeProject.lastCommit,
+              "build output of a project with fresh commits or uncommitted changes is check first, with the evidence")
+        let finishedWorktree = ProjectActivity(root: "/fixture/wt/kartpad-diag", isWorktree: true, mainRepository: "/fixture/kartpad", registered: true, branch: "codex/diag", defaultBranch: "main", lastCommit: now.addingTimeInterval(-20 * 86400), merged: true, uncommitted: 0)
+        let finishedAdvice = advice(for: folder("/fixture/wt/kartpad-diag/work", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: finishedWorktree, now: now)
+        check(finishedAdvice.reason.contains("looks finished") && finishedAdvice.command == #"git -C "/fixture/kartpad" worktree remove "/fixture/wt/kartpad-diag""# && finishedAdvice.evidence.first?.contains("merged into main") == true,
+              "a finished worktree says so and offers git's own removal, which refuses uncommitted work")
+        check(finishedWorktree.summary(now: now) == "Last commit 2 weeks ago on codex/diag · merged into main · nothing uncommitted", "git evidence reads as one plain sentence")
+        var keepPolicy = LocationPolicy(); keepPolicy.isKept = true
+        check(advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50), policy: keepPolicy, devices: [:], now: now).verdict == .keep, "your Keep wins over every rule")
         check(staleBuild.verdict == .safe && staleBuild.reason.contains("kartpad") && staleBuild.reason.contains("2 weeks ago"), "build output idle for weeks is safe and says which project and when")
         check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 0.2, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "build output changed today is check first")
         check(advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: nil, project: "kartpad"), policy: LocationPolicy(), devices: [:], now: now).verdict == .check, "unknown last use is never called safe")

@@ -390,12 +390,12 @@ struct UsageChart: View {
 
 struct Dashboard: View {
     @ObservedObject var model: CleanerModel
-    @State private var hovered: FolderCategory?
-    @State private var showingCaveats = false
+    @State private var hoveredSegment: String?
+    @State private var hoveredBucket: String?
+    @State private var mapByType = false
     @State private var showLargest = false
     private var groups: [StorageGroup] { model.overview.groups }
     private var measured: [FolderMeasurement] { model.overview.measuredBySize }
-    private var total: Int64 { model.overview.total }
     private func show(_ category: FolderCategory? = nil, filter: LocationFilter = .all) {
         model.categoryFilter = category; model.search = ""; model.section = .locations
         model.locationFilter = filter; model.selected = nil; model.inspector = "Overview"
@@ -407,10 +407,10 @@ struct Dashboard: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 14) {
                     hero(chartHeight)
-                    safeCard
+                    diskMap
                     statusLine
                     HStack(alignment: .top, spacing: 16) {
-                        categories.frame(maxWidth: .infinity)
+                        idlePanel.frame(maxWidth: .infinity)
                         foldersPanel.frame(maxWidth: .infinity)
                     }
                 }.padding(.horizontal, 22).padding(.bottom, 16)
@@ -468,88 +468,134 @@ struct Dashboard: View {
             Button("What gets scanned?") { model.showingScanPlan = true }.buttonStyle(.link)
         }.font(.callout).lineLimit(1)
     }
-    /// The answer to "what can I remove?", before anything else below the chart.
-    private var safeCard: some View {
-        let overview = model.overview
-        let names = overview.safe.prefix(3).map { $0.profile.displayName }.joined(separator: ", ")
-        let sizesFrom = overview.safe.map(\.observedAt).min()
-        return HStack(spacing: 14) {
-            Image(systemName: overview.safe.isEmpty ? "questionmark.circle" : "checkmark.circle.fill").font(.largeTitle)
-                .foregroundStyle(overview.safe.isEmpty ? Color.secondary : Verdict.safe.tint).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(overview.safe.isEmpty ? "Nothing is clearly safe to remove yet" : "About \(byteLabel(overview.safeBytes)) looks safe to remove")
-                    .font(.title2.weight(.semibold)).monospacedDigit()
-                Text(overview.safe.isEmpty ? "Scan your folders so Context Cleaner can see when each was last used." :
-                     "\(overview.safe.count) \(overview.safe.count == 1 ? "folder" : "folders") that tools recreate, like \(names). Sizes from \(ageText(sizesFrom)); you remove them yourself.")
-                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 12)
-            if overview.safe.isEmpty { Button("Scan Folders…") { model.showingScanPlan = true } }
-            else {
-                Button("Check First") { show(filter: .check) }.help("Folders that might be fine to remove, with what to check")
-                Button("Review Safe Folders") { show(filter: .safe) }.buttonStyle(.borderedProminent)
-            }
-        }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Verdict.safe.tint.opacity(overview.safe.isEmpty ? 0.0 : 0.08)).background(.background.secondary)
-    }
     private var dot: some View { Text("·").foregroundStyle(.tertiary) }
     private func link(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) { Text(title).foregroundStyle(tint).underline(false) }.buttonStyle(.plain).onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
     }
-    private var categories: some View {
-        Panel(title: "What's taking space", symbol: "square.stack.3d.up") {
-            HStack(alignment: .firstTextBaseline) {
-                Text(byteLabel(total)).font(.title2.weight(.semibold)).monospacedDigit()
-                Text("in scanned folders").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button { showingCaveats.toggle() } label: { Image(systemName: "info.circle") }.buttonStyle(.borderless).accessibilityLabel("About these totals")
-                    .popover(isPresented: $showingCaveats) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Scanned folders, not your whole disk").font(.headline)
-                            Text("The latest size of each scanned folder. Folders inside other folders are counted once.")
-                            Text("Removing a folder yourself may free less than its size, because APFS shares storage between files.")
-                        }.font(.callout).padding(18).frame(width: 320)
-                    }
+    /// One whole-disk picture: what's safe, what to check, what apps keep, what you keep, everything else and free space.
+    private struct Segment: Identifiable {
+        let id: String, title: String, detail: String, bytes: Int64, color: Color
+        var outlined = false
+        let action: (() -> Void)?
+    }
+    private var segments: [Segment] {
+        guard let volume = model.volume else { return [] }
+        var list: [Segment] = [], tracked: Int64 = 0
+        if mapByType {
+            for group in groups {
+                list.append(Segment(id: group.category.rawValue, title: group.category.displayName, detail: group.category.shortPurpose, bytes: group.bytes, color: group.category.tint, action: { show(group.category) }))
+                tracked += group.bytes
+            }
+        } else {
+            for verdict in Verdict.allCases {
+                let total = model.verdictTotal(verdict)
+                list.append(Segment(id: verdict.title, title: verdict.title, detail: verdict.meaning.prefix(1).uppercased() + verdict.meaning.dropFirst(), bytes: total.bytes, color: verdict.tint, action: { show(filter: verdict.filter) }))
+                tracked += total.bytes
+            }
+            let kept = model.keptSummary
+            list.append(Segment(id: "kept", title: "Kept by you", detail: "Never suggested", bytes: kept.keptBytes + kept.offBytes, color: .purple, action: { model.search = ""; model.categoryFilter = nil; model.section = .kept }))
+            tracked += kept.keptBytes + kept.offBytes
+        }
+        list.append(Segment(id: "other", title: "Everything else", detail: "macOS, apps and files outside the scanned folders", bytes: max(0, volume.used - tracked), color: Color.primary.opacity(0.16), action: nil))
+        list.append(Segment(id: "free", title: "Free", detail: "Space you have now", bytes: volume.free, color: .clear, outlined: true, action: nil))
+        return list.filter { $0.bytes > 0 }
+    }
+    private var diskMap: some View {
+        let safe = model.verdictTotal(.safe)
+        let capacity = Double(max(model.volume?.total ?? 1, 1))
+        let parts = segments
+        func share(_ bytes: Int64) -> String { (Double(bytes) / capacity).formatted(.percent.precision(.fractionLength(0))) }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(safe.count == 0 ? "Nothing is clearly safe to remove yet" : "About \(byteLabel(safe.bytes)) looks safe to remove")
+                        .font(.title2.weight(.semibold)).monospacedDigit()
+                    Text(safe.count == 0 ? "Scan your folders so Context Cleaner can see when each was last used." : "\(safe.count) \(safe.count == 1 ? "folder" : "folders") that tools recreate and you haven't needed lately. You remove them yourself.")
+                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Picker("Map", selection: $mapByType) { Text("By answer").tag(false); Text("By type").tag(true) }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+                if safe.count == 0 { Button("Scan Folders…") { model.showingScanPlan = true } }
+                else { Button("Review Safe Folders") { show(filter: .safe) }.buttonStyle(.borderedProminent) }
             }
             GeometryReader { geo in
-                let gaps = CGFloat(max(groups.count - 1, 0)) * 2
+                let gaps = CGFloat(max(parts.count - 1, 0)) * 2
                 HStack(spacing: 2) {
-                    ForEach(groups) { group in
-                        Rectangle().fill(group.category.tint.opacity(hovered == nil || hovered == group.category ? 1 : 0.28))
-                            .frame(width: max(2, (geo.size.width - gaps) * Double(group.bytes) / Double(max(total, 1))))
-                            .onHover { inside in hovered = inside ? group.category : (hovered == group.category ? nil : hovered) }
-                            .onTapGesture { show(group.category) }
-                            .accessibilityLabel(group.category.displayName + " " + byteLabel(group.bytes))
+                    ForEach(parts) { part in
+                        let width = max(3, (geo.size.width - gaps) * Double(part.bytes) / capacity)
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(part.color.opacity(hoveredSegment == nil || hoveredSegment == part.id ? 1 : 0.3))
+                            .overlay { if part.outlined { RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [3, 3])) } }
+                            .frame(width: width)
+                            .contentShape(Rectangle())
+                            .onHover { inside in hoveredSegment = inside ? part.id : (hoveredSegment == part.id ? nil : hoveredSegment) }
+                            .onTapGesture { part.action?() }
+                            .accessibilityElement().accessibilityLabel("\(part.title), \(byteLabel(part.bytes)), \(share(part.bytes)) of your disk").accessibilityAddTraits(part.action == nil ? [] : .isButton)
                     }
-                }.clipShape(RoundedRectangle(cornerRadius: 5))
-            }.frame(height: 18)
+                }
+            }.frame(height: 30)
             Group {
-                if let hovered, let group = groups.first(where: { $0.category == hovered }) {
-                    Text("\(group.category.displayName) · \(byteLabel(group.bytes)) · \((Double(group.bytes) / Double(max(total, 1))).formatted(.percent.precision(.fractionLength(0)))) · click to see its folders")
-                } else { Text("Point at a color to see what it is. Click to list its folders.") }
+                if let id = hoveredSegment, let part = parts.first(where: { $0.id == id }) {
+                    Text("\(part.title) · \(byteLabel(part.bytes)) · \(share(part.bytes)) of your disk · \(part.detail)" + (part.action == nil ? "" : " · click to list"))
+                } else { Text("Your whole disk, \(byteLabel(Int64(capacity))). Point at a color to see what it is; click to list those folders.") }
             }.font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            ForEach(groups.prefix(5)) { group in categoryRow(group) }
-            if groups.count > 5 {
-                Menu("\(groups.count - 5) more") {
-                    ForEach(groups.dropFirst(5)) { group in Button(group.category.displayName + " · " + byteLabel(group.bytes)) { show(group.category) } }
-                }.menuStyle(.borderlessButton).fixedSize().font(.callout)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 8, alignment: .leading)], alignment: .leading, spacing: 6) {
+                ForEach(parts) { part in
+                    Button { part.action?() } label: {
+                        HStack(spacing: 6) {
+                            RoundedRectangle(cornerRadius: 2).fill(part.color).frame(width: 10, height: 10)
+                                .overlay { if part.outlined { RoundedRectangle(cornerRadius: 2).strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1, dash: [2, 2])) } }
+                            Text(part.title).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(byteLabel(part.bytes)).monospacedDigit().foregroundStyle(.secondary)
+                        }.font(.callout).padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(hoveredSegment == part.id ? part.color.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            .contentShape(Rectangle())
+                    }.buttonStyle(.plain).disabled(part.action == nil)
+                        .onHover { inside in hoveredSegment = inside ? part.id : (hoveredSegment == part.id ? nil : hoveredSegment) }
+                }
             }
-            if groups.isEmpty { Text("Scan folders to see what's taking space.").font(.callout).foregroundStyle(.secondary) }
-        }
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
     }
-    private func categoryRow(_ group: StorageGroup) -> some View {
-        Button { show(group.category) } label: {
-            HStack {
-                Circle().fill(group.category.tint).frame(width: 9, height: 9).accessibilityHidden(true)
-                Text(group.category.displayName)
-                Spacer()
-                Text(byteLabel(group.bytes)).monospacedDigit().foregroundStyle(.secondary)
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
-            }.font(.callout).padding(.vertical, 3).padding(.horizontal, 6)
-                .background(hovered == group.category ? group.category.tint.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).help(group.category.shortPurpose)
-            .onHover { inside in hovered = inside ? group.category : (hovered == group.category ? nil : hovered) }
+    /// How long scanned space has sat unused, colored by answer. Big idle bars are the best places to look.
+    private var idlePanel: some View {
+        let buckets = model.idleBuckets
+        let stale = buckets.filter { $0.id == 2 || $0.id == 3 }.reduce(Int64(0)) { $0 + $1.total }
+        let staleSafe = buckets.filter { $0.id == 2 || $0.id == 3 }.reduce(Int64(0)) { $0 + ($1.bytes[.safe] ?? 0) }
+        return Panel(title: "How long it's sat unused", symbol: "hourglass") {
+            Text(stale > 0 ? "\(byteLabel(stale)) hasn't been touched in a month or more; \(byteLabel(staleSafe)) of it looks safe to remove." : "Most scanned space was used this month.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Chart {
+                ForEach(buckets) { bucket in
+                    ForEach(Verdict.allCases) { verdict in
+                        BarMark(x: .value("Last used", bucket.title), y: .value("Size", Double(bucket.bytes[verdict] ?? 0) / gibibyte))
+                            .foregroundStyle(by: .value("Answer", verdict.title))
+                            .cornerRadius(3)
+                            .opacity(hoveredBucket == nil || hoveredBucket == bucket.title ? 1 : 0.4)
+                    }
+                }
+            }
+            .chartForegroundStyleScale(domain: Verdict.allCases.map(\.title), range: Verdict.allCases.map(\.tint))
+            .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
+                AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))).font(.caption) } }
+            } }
+            .chartLegend(position: .bottom, alignment: .leading)
+            .chartOverlay { proxy in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        if case .active(let point) = phase { hoveredBucket = proxy.value(atX: point.x, as: String.self) } else { hoveredBucket = nil }
+                    }
+                    .onTapGesture { show(filter: .all) }
+            }
+            .frame(height: 170)
+            .accessibilityLabel("Scanned space by time since last use: " + buckets.map { "\($0.title) \(byteLabel($0.total))" }.joined(separator: ", "))
+            Text(hoveredBucket.flatMap { title in buckets.first { $0.title == title } }.map { bucket in
+                "\(bucket.title): \(byteLabel(bucket.total)) · " + Verdict.allCases.compactMap { v in (bucket.bytes[v] ?? 0) > 0 ? "\(v.title) \(byteLabel(bucket.bytes[v]!))" : nil }.joined(separator: " · ")
+            } ?? "Folders are listed biggest and longest unused first. Click the chart to see them.")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
     }
     /// What you can remove, biggest first, with the largest folders one click away.
     private var foldersPanel: some View {

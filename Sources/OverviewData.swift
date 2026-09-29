@@ -303,6 +303,8 @@ struct Advice: Equatable {
     let command: String?
     /// Best evidence of last use: Xcode's last-used date for simulators, otherwise the newest file change seen by a scan.
     let lastUsed: Date?
+    /// Plain sentences behind the answer, for example what git says about the project.
+    var evidence: [String] = []
 }
 /// Summary of the simulators Xcode knows about, for the Devices folder.
 struct SimSummary: Equatable { var total = 0; var idle = 0; var idleBytes: Int64 = 0; var bytes: Int64 = 0; var unavailable = 0 }
@@ -347,8 +349,32 @@ func sizeSourceText(_ m: FolderMeasurement) -> String? {
     guard m.state == .measured else { return nil }
     return m.scopeID == xcodeLiveScope ? "size from Xcode, now" : "size from " + ageText(m.observedAt)
 }
-/// The verdict rules. Evidence first (open files, your own marks, last use), then what the folder is.
-func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], now: Date = Date()) -> Advice {
+/// The verdict: your own choice first, then the folder rules, then what git says about its project.
+func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, now: Date = Date()) -> Advice {
+    if policy.isKept {
+        return Advice(verdict: .keep, reason: "You chose to keep this, so it's never suggested for removal.", howTo: "Choose Stop Keeping to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
+    }
+    var result = ruleAdvice(for: m, policy: policy, devices: devices, now: now)
+    guard let project, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData"), m.state == .measured else { return result }
+    let lastActivity = [m.latestModifiedAt, project.lastCommit].compactMap { $0 }.max()
+    let label = project.isWorktree ? "Worktree \(project.name)" : "Project \(project.name)"
+    let evidence = label + ": " + project.summary(now: now) + "."
+    if project.active(now: now) {
+        let reason = "You're still working on \(project.name): " + project.summary(now: now) + "."
+        result = Advice(verdict: .check, reason: reason, howTo: result.verdict == .safe ? "Wait until you're done with \(project.name). " + result.howTo : result.howTo, command: result.command, lastUsed: lastActivity)
+    } else if project.finished(now: now) {
+        let whole = project.removeWorktreeCommand
+        let reason = result.reason + " \(label) looks finished: " + project.summary(now: now) + "."
+        let howTo = whole == nil ? result.howTo : "The whole worktree looks finished. Removing it with git keeps the repository tidy, and git refuses if anything is uncommitted. Or: " + result.howTo
+        result = Advice(verdict: result.verdict, reason: reason, howTo: howTo, command: result.command ?? whole, lastUsed: lastActivity)
+    } else {
+        result = Advice(verdict: result.verdict, reason: result.reason, howTo: result.howTo, command: result.command, lastUsed: lastActivity)
+    }
+    result.evidence = [evidence]
+    return result
+}
+/// The folder rules. Evidence first (open files, your own marks, last use), then what the folder is.
+private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], now: Date) -> Advice {
     let path = m.profile.path
     let name = m.profile.displayName
     let trash = "Quit the app that uses it, then move it to the Trash in Finder. Empty the Trash when you're sure."
@@ -464,4 +490,98 @@ func savedProfilesToRefresh(_ saved: [FolderProfile], discovered: [FolderProfile
 }
 func fileOnlyPaths(_ paths: [String]) -> Set<String> {
     Set(paths.filter { path in var st = stat(); return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) != S_IFDIR })
+}
+
+// MARK: - Project evidence (read-only git metadata)
+
+/// What git says about the project a folder belongs to. Read with read-only commands; nothing is written,
+/// not even git's index (GIT_OPTIONAL_LOCKS=0).
+struct ProjectActivity: Equatable {
+    let root: String
+    let isWorktree: Bool
+    /// For a worktree: its main repository, and whether that repository still lists it.
+    let mainRepository: String?
+    let registered: Bool?
+    let branch: String?
+    let defaultBranch: String?
+    let lastCommit: Date?
+    /// True when the branch is already part of the default branch.
+    let merged: Bool?
+    /// Changed tracked files (capped at 999).
+    let uncommitted: Int?
+    var name: String { URL(fileURLWithPath: root).lastPathComponent }
+    /// Committed to or edited in the last 7 days, or holding uncommitted changes.
+    func active(now: Date = Date()) -> Bool {
+        if let uncommitted, uncommitted > 0 { return true }
+        if let lastCommit, now.timeIntervalSince(lastCommit) < 7 * 86400 { return true }
+        return false
+    }
+    /// Branch merged (or worktree no longer listed), nothing uncommitted, and no commits for 14 days.
+    func finished(now: Date = Date()) -> Bool {
+        guard uncommitted == 0, let lastCommit, now.timeIntervalSince(lastCommit) >= 14 * 86400 else { return false }
+        return merged == true || registered == false
+    }
+    /// One plain sentence, for example "Last commit 12 days ago on codex/fix · merged into main · nothing uncommitted".
+    func summary(now: Date = Date()) -> String {
+        var parts: [String] = []
+        if let lastCommit { parts.append("Last commit " + ageText(lastCommit, now: now) + (branch.map { " on \($0)" } ?? "")) }
+        if let merged, let branch, branch != defaultBranch, let defaultBranch { parts.append(merged ? "merged into \(defaultBranch)" : "not merged into \(defaultBranch)") }
+        if let uncommitted { parts.append(uncommitted == 0 ? "nothing uncommitted" : "\(uncommitted >= 999 ? "999+" : String(uncommitted)) uncommitted \(uncommitted == 1 ? "change" : "changes")") }
+        if registered == false { parts.append("its main repository no longer lists this worktree") }
+        return parts.isEmpty ? "Git history couldn't be read." : parts.joined(separator: " · ")
+    }
+    /// The git command that removes a finished worktree the safe way. Git refuses if anything is uncommitted.
+    var removeWorktreeCommand: String? {
+        guard isWorktree, registered == true, let mainRepository else { return nil }
+        return "git -C \"\(mainRepository)\" worktree remove \"\(root)\""
+    }
+}
+/// The nearest folder at or above path that holds a .git entry. Metadata only; stops at the home folder.
+func repositoryRoot(for path: String, home: String) -> String? {
+    var current = normalized(path)
+    while current.count > home.count, current.hasPrefix(home + "/") {
+        var st = stat()
+        if lstat(current + "/.git", &st) == 0 { return current }
+        guard let slash = current.lastIndex(of: "/") else { return nil }
+        current = String(current[..<slash])
+    }
+    return nil
+}
+/// Runs git read-only with a time limit. Returns trimmed output, or nil on failure.
+func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10) -> String? {
+    let process = Process(), pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.arguments = ["-C", root, "--no-optional-locks"] + arguments
+    var environment = ProcessInfo.processInfo.environment; environment["GIT_OPTIONAL_LOCKS"] = "0"; environment["GIT_TERMINAL_PROMPT"] = "0"
+    process.environment = environment
+    process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return nil }
+    let deadline = DispatchTime.now() + timeout
+    DispatchQueue.global().asyncAfter(deadline: deadline) { if process.isRunning { process.terminate() } }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else { return nil }
+    return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+/// Reads a project's git activity. Read-only.
+func readProjectActivity(_ root: String) -> ProjectActivity {
+    var isWorktree = false, mainRepository: String?, registered: Bool?
+    if let pointer = try? String(contentsOfFile: root + "/.git", encoding: .utf8), pointer.hasPrefix("gitdir:") {
+        isWorktree = true
+        let gitdir = pointer.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        var st = stat()
+        registered = lstat(gitdir, &st) == 0
+        if let range = gitdir.range(of: "/.git/worktrees/") { mainRepository = String(gitdir[..<range.lowerBound]) }
+    }
+    let branch = gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])
+    let lastCommit = gitOutput(root, ["log", "-1", "--format=%ct"]).flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
+    var defaultBranch = gitOutput(root, ["rev-parse", "--abbrev-ref", "origin/HEAD"])
+    if defaultBranch == nil || defaultBranch == "origin/HEAD" {
+        defaultBranch = ["main", "master"].first { gitOutput(root, ["rev-parse", "--verify", "--quiet", $0]) != nil }
+    }
+    var merged: Bool?
+    if let defaultBranch { merged = gitOutput(root, ["merge-base", "--is-ancestor", "HEAD", defaultBranch]) != nil }
+    let uncommitted = gitOutput(root, ["status", "--porcelain", "--untracked-files=no"]).map { $0.isEmpty ? 0 : min(999, $0.split(separator: "\n").count) }
+    return ProjectActivity(root: root, isWorktree: isWorktree, mainRepository: mainRepository, registered: registered, branch: branch,
+                           defaultBranch: defaultBranch.map { $0.hasPrefix("origin/") ? String($0.dropFirst(7)) : $0 }, lastCommit: lastCommit, merged: merged, uncommitted: uncommitted)
 }

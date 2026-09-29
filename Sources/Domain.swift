@@ -155,6 +155,9 @@ struct LocationPolicy: Codable, Equatable {
     /// Set when the app added this location to Watching because it grew; cleared by the user's undo.
     var autoWatched: Bool? = nil
     var autoWatchedBytes: Int64? = nil
+    /// You chose to keep this folder: never suggested for removal. Optional so older saved preferences still load.
+    var kept: Bool? = nil
+    var isKept: Bool { get { kept == true } set { kept = newValue ? true : nil } }
 }
 struct Preferences: Codable {
     var schema = 1

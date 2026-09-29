@@ -444,8 +444,9 @@ struct FolderRow: Identifiable {
         var total: Int64 { safe.bytes + inside.bytes + rebuild.bytes }
     }
     private var reclaimCache: (key: String, value: Reclaim) = ("", Reclaim())
+    /// Refreshes when a scan is saved or settings change; scan progress doesn't move it.
     var reclaim: Reclaim {
-        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)"
         if reclaimCache.key == key { return reclaimCache.value }
         var value = Reclaim()
         // Count each byte once: only the outermost scanned folder counts, whatever its answer.
@@ -474,7 +475,7 @@ struct FolderRow: Identifiable {
     /// Folders holding old items, biggest amount first.
     private var insideListCache: (key: String, value: [FolderMeasurement]) = ("", [])
     var insideFolders: [FolderMeasurement] {
-        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)"
         if insideListCache.key == key { return insideListCache.value }
         let value = ((verdictGroups[.rebuild] ?? []) + (verdictGroups[.check] ?? [])).map { ($0, adviceFor($0).staleBytes) }.filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }.map(\.0)
         insideListCache = (key, value)

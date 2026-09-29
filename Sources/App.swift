@@ -145,7 +145,8 @@ struct MainView: View {
         if model.section == .locations {
             HStack(spacing: 12) {
                 Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).fixedSize()
-                Text(model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                let hidden = model.gone.isEmpty || model.locationFilter == .excluded ? "" : " · \(model.gone.count) \(model.gone.count == 1 ? "folder" : "folders") no longer on disk \(model.gone.count == 1 ? "is" : "are") hidden"
+                Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
             }.padding(.horizontal, 16).padding(.bottom, 8)
         } else if !model.search.isEmpty {

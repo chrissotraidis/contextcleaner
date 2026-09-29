@@ -159,7 +159,7 @@ import Foundation
         verdictModel.gone = [buildProfile.path]
         check(verdictModel.overview.safe.isEmpty && !verdictModel.overview.measuredBySize.contains { $0.profile.path == buildProfile.path }, "a folder that's gone leaves the Overview's totals")
         verdictModel.locationFilter = .all
-        check(verdictModel.rows.first { $0.id == buildProfile.path }?.status == "Gone", "a gone folder says so in the list")
+        check(!verdictModel.rows.contains { $0.id == buildProfile.path } && verdictModel.gone.contains(buildProfile.path), "a folder that's no longer on disk is hidden from the list and counted as hidden")
         verdictModel.locationFilter = .safe
         check(verdictModel.rows.isEmpty, "a gone folder is never offered as safe to remove")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")

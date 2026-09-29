@@ -260,12 +260,12 @@ struct FolderRow: Identifiable {
             case .locations:
                 switch locationFilter {
                 case .excluded: return row.policy.excluded
-                case .all: return !preferences.excluded(p.path)
+                case .all: return !preferences.excluded(p.path) && !row.gone
                 case .safe: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .measured && row.advice.verdict == .safe
                 case .check: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .measured && row.advice.verdict == .check
                 case .keep: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .measured && row.advice.verdict == .keep
-                case .unscanned: return !preferences.excluded(p.path) && row.measurement.state == .pending
-                case .growing: return !preferences.excluded(p.path) && (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
+                case .unscanned: return !preferences.excluded(p.path) && !row.gone && row.measurement.state == .pending
+                case .growing: return !preferences.excluded(p.path) && !row.gone && (row.change.delta ?? 0) > 0 && (row.change.delta ?? 0) >= (row.policy.growthThresholdBytes ?? 0) && !row.policy.expected && (row.policy.reviewAfter ?? .distantPast) <= Date()
                 case .reviewLater: return !preferences.excluded(p.path) && (row.policy.reviewAfter ?? .distantPast) > Date()
                 }
             case .watching: return !preferences.excluded(p.path) && (row.policy.isWatched)

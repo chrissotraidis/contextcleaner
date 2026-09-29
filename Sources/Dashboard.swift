@@ -223,26 +223,37 @@ struct UsageChart: View {
                 return "\(reading.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(reading.used)) used · \(byteLabel(reading.free)) free"
             }
         }
-        let when = span.map { "\($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) – \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" } ?? "Last " + range.rawValue
+        let window = range.window(endingAt: model.usage.last?.date ?? Date())
+        let firstReading = model.usage.first { $0.date >= window.lowerBound }?.date
+        let startsLate = firstReading.map { chartStartsLate($0, window: window) } ?? false
+        let when = span.map { "\($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) – \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" }
+            ?? (startsLate ? "Since \(firstReading!.formatted(.dateTime.weekday(.abbreviated).day().hour())), the first reading" : "Last " + range.rawValue)
         guard let change else { return when + (span == nil ? " · Disk space is noted every hour while the app is open" : " · Drag across the blue area instead") }
         return "\(when) · \(byteLabel(change.from.used)) → \(byteLabel(change.to.used)) used · point at the chart for any reading"
     }
-    private var xStride: (Calendar.Component, Int) { range == .day ? (.hour, 6) : range == .week ? (.day, 1) : (.day, 5) }
-    private var xFormat: Date.FormatStyle { range == .day ? .dateTime.hour() : range == .week ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day() }
+    /// True when readings begin well after the range starts. The chart then starts at the first reading
+    /// instead of drawing an empty stretch.
+    private func chartStartsLate(_ first: Date, window: ClosedRange<Date>) -> Bool {
+        first.timeIntervalSince(window.lowerBound) > window.upperBound.timeIntervalSince(window.lowerBound) * 0.08
+    }
+    private func xStride(_ domain: ClosedRange<Date>) -> (Calendar.Component, Int) {
+        let days = domain.upperBound.timeIntervalSince(domain.lowerBound) / 86400
+        return days <= 1.5 ? (.hour, 6) : days <= 3 ? (.hour, 12) : days <= 8 ? (.day, 1) : (.day, 5)
+    }
+    private func xFormat(_ domain: ClosedRange<Date>) -> Date.FormatStyle {
+        let days = domain.upperBound.timeIntervalSince(domain.lowerBound) / 86400
+        return days <= 1.5 ? .dateTime.hour() : days <= 3 ? .dateTime.weekday(.abbreviated).hour() : days <= 8 ? .dateTime.weekday(.abbreviated).day() : .dateTime.month(.abbreviated).day()
+    }
     private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
         let axis = usageAxis(points.map(\.reading))
         let capacity = axis.upperBound
-        let ticks = [axis.lowerBound, (axis.lowerBound + axis.upperBound) / 2, axis.upperBound]
+        // The capacity line carries its own label, so the top tick would only repeat it.
+        let ticks = [axis.lowerBound, (axis.lowerBound + axis.upperBound) / 2]
         let picked = hover.flatMap { date in points.min { abs($0.reading.date.timeIntervalSince(date)) < abs($1.reading.date.timeIntervalSince(date)) } }
         let first = points.first?.reading.date ?? window.lowerBound
-        let hasGapBefore = first.timeIntervalSince(window.lowerBound) > (window.upperBound.timeIntervalSince(window.lowerBound)) * 0.08
+        let domain = chartStartsLate(first, window: window) ? first...window.upperBound : window
         let fill = LinearGradient(colors: [Color.accentColor.opacity(0.32), Color.accentColor.opacity(0.02)], startPoint: .top, endPoint: .bottom)
         return Chart {
-            if hasGapBefore {
-                RectangleMark(xStart: .value("From", window.lowerBound), xEnd: .value("To", first), yStart: .value("Low", axis.lowerBound), yEnd: .value("High", capacity))
-                    .foregroundStyle(Color.secondary.opacity(0.04))
-                    .annotation(position: .overlay, alignment: .center) { Text("No readings yet").font(.caption).foregroundStyle(.tertiary) }
-            }
             if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.10)) }
             RuleMark(y: .value("Capacity", capacity)).foregroundStyle(Color.secondary.opacity(0.45)).lineStyle(StrokeStyle(lineWidth: 0.75, dash: [3, 3]))
                 .annotation(position: .top, alignment: .trailing, spacing: 2) { Text("Capacity \(byteLabel(Int64(capacity * gibibyte)))").font(.caption).foregroundStyle(.secondary) }
@@ -274,9 +285,9 @@ struct UsageChart: View {
                     }
             }
         }
-        .chartXScale(domain: window)
+        .chartXScale(domain: domain)
         .chartYScale(domain: axis)
-        .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisValueLabel(format: xFormat).font(.caption).foregroundStyle(Color.secondary) } }
+        .chartXAxis { AxisMarks(values: .stride(by: xStride(domain).0, count: xStride(domain).1)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
         .chartYAxis {
             AxisMarks(position: .leading, values: ticks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
@@ -302,7 +313,7 @@ struct UsageChart: View {
                     RuleMark(y: .value("No change", 0)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 0.75))
                 }
                 .chartXScale(domain: window)
-                .chartXAxis { AxisMarks(values: .stride(by: xStride.0, count: xStride.1)) { _ in AxisValueLabel(format: xFormat).font(.caption).foregroundStyle(Color.secondary) } }
+                .chartXAxis { AxisMarks(values: .stride(by: xStride(window).0, count: xStride(window).1)) { _ in AxisValueLabel(format: xFormat(window)).font(.caption).foregroundStyle(Color.secondary) } }
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
                 .chartHover($hover)
                 .accessibilityLabel("Change in used space per \(range.bucketName). Orange bars used more space, green bars freed space.")

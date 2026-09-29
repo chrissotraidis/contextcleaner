@@ -66,7 +66,7 @@ Scans read folder sizes and dates only; they never open, change or delete files.
 
 ## Build and run
 
-Apple Silicon, macOS 14 or newer. Built with Xcode 27.0. Builds are ad‑hoc signed and **not notarized** for public distribution.
+Apple Silicon, macOS 14 or newer. Built with Xcode 27.0. Builds are **not notarized** for public distribution. The script signs with your Apple Development or Developer ID identity when one is in your keychain, so macOS remembers your privacy answers (other apps' data, Documents) across updates; otherwise it signs ad‑hoc and macOS asks again after each build. Set `CC_SIGN_IDENTITY` to pick an identity, or `-` for ad‑hoc.
 
 ```sh
 bash build-version.sh /absolute/path/to/new-build-output

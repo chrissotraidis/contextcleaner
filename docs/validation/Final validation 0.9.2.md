@@ -28,3 +28,20 @@ Nothing was deleted, moved or trashed. Every earlier build folder, DMG, fixture 
 - The complete full scan with the new scanner hasn't finished yet. It is waiting for the user's answer to the macOS permission dialogs. Until it finishes, many rows still show yesterday's imported sizes and "Not recorded".
 - Test builds are signed ad hoc, so macOS asks again after each new build.
 - "Safe to remove" totals changed during this pass (138 GiB, then 70 GiB) because the earlier interrupted scan marked large caches as too large or blocked. The full scan will settle it.
+
+
+## Optimization and error pass (build 18)
+
+Each finding below was measured on this Mac.
+
+| Problem | Evidence | Fix | Result |
+|---|---|---|---|
+| The interface stalled during scans | A copy of the real data loaded into the model: each scan update cost **256 ms** on the main thread (build 15: 321 ms). The profile showed pairwise folder-containment checks in the Overview totals, each normalizing paths with Foundation string search. | Containment uses a set and walks up parent folders (linear instead of pairwise); path checks are byte-level; history is rebuilt only when a scan is saved; scan progress reaches the interface in batches every 0.35 s. | **8 ms per update**, with the Overview at 4.5 ms (was 186 ms) |
+| Install caches reported "inaccessible" | The diagnostic was "Interrupted system call". The old binary failed the same way on a live run after 11.5 s. | open, readdir and lstat retry on EINTR. | Measured every time in repeated runs |
+| Full scans ran out of time | The build 15 scan measured 127 of 183 folders. Downloads spent 663 s on its first entry and Documents/Codex 399 s, both waiting on permission dialogs. | Documents, Desktop and Downloads are checked for permission before the timed pass; four folders are measured at once for scans you start (background checks stay at one). | A blocked folder no longer holds up the rest. One big folder still bounds the time: DerivedData, with 519k entries, takes about 45 s, and so does `du` |
+| Per-file overhead | On the 57 GiB cache: 15.6 s at build 14, then 5.1 s. | The top-level child is tracked on each directory cursor; hard links are keyed by numbers; the extension is read from the entry name. | 1.6 to 4.5 s (disk cache dependent), identical results |
+| macOS asked again after every update | Ad-hoc signing gives each build a new identity. | The build script signs with the Apple Development identity when one exists. The designated requirement is now identifier plus certificate. | One more round of answers, then kept across builds |
+
+Other checks: a clean compile with no warnings; 226 preserving checks, adding parallel-equals-serial, cancelled-parallel, path-normalization equivalence and whole-component containment tests; `codesign --verify --deep --strict` OK; DMG VALID; and the /Applications executable matches the build. Gatekeeper still rejects the build as unnotarized, which doesn't affect local installs.
+
+Open item: build 18's first scan is waiting on the one-time macOS permission dialogs for the new signing identity.

@@ -517,7 +517,10 @@ struct Dashboard: View {
         let safe = model.verdictTotal(.safe)
         let capacity = Double(max(model.volume?.total ?? 1, 1))
         let parts = segments
-        func share(_ bytes: Int64) -> String { (Double(bytes) / capacity).formatted(.percent.precision(.fractionLength(0))) }
+        func share(_ bytes: Int64) -> String {
+            let fraction = Double(bytes) / capacity
+            return fraction > 0 && fraction < 0.005 ? "under 1%" : fraction.formatted(.percent.precision(.fractionLength(0)))
+        }
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {

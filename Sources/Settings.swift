@@ -75,7 +75,7 @@ struct ScanningSettings: View {
                     Image(systemName: "lock.shield").font(.title3).foregroundStyle(Color.accentColor).frame(width: 24).accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("macOS permission").font(.headline)
-                        Text("macOS asks before Context Cleaner reads other apps' data (like iPhone install caches) or your Documents folder. Turning on Full Disk Access for Context Cleaner stops those questions. It's your choice.")
+                        Text("macOS asks before Context Cleaner reads other apps' data (like iPhone install caches) or your Documents folder. Turning on Full Disk Access for Context Cleaner stops those questions and lets it show how much your Trash holds. It's your choice.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 12)

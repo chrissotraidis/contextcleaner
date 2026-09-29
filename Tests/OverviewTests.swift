@@ -103,6 +103,9 @@ import Foundation
         let activeAdvice = advice(for: folder("/fixture/kartpad/build", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
         check(activeAdvice.verdict == .check && activeAdvice.reason.contains("probably still using it") && activeAdvice.evidence.first?.contains("3 uncommitted changes") == true && activeAdvice.lastUsed == activeProject.lastCommit,
               "build output of a project with fresh commits or uncommitted changes is check first, with the evidence")
+        let busyBuild = advice(for: folder("/fixture/kartpad/app/build", .buildOutput, lastChanged: 1, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: activeProject, now: now)
+        check(busyBuild.howTo.components(separatedBy: "Wait until").count == 2 && busyBuild.howTo.hasPrefix("Wait until you're done with kartpad. "),
+              "the removal advice says to wait once, naming the project")
         let finishedWorktree = ProjectActivity(root: "/fixture/wt/kartpad-diag", isWorktree: true, mainRepository: "/fixture/kartpad", registered: true, branch: "codex/diag", defaultBranch: "main", lastCommit: now.addingTimeInterval(-20 * 86400), merged: true, uncommitted: 0)
         let finishedAdvice = advice(for: folder("/fixture/wt/kartpad-diag/work", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: finishedWorktree, now: now)
         check(finishedAdvice.reason.contains("looks finished") && finishedAdvice.command == #"git -C "/fixture/kartpad" worktree remove "/fixture/wt/kartpad-diag""# && finishedAdvice.evidence.first?.contains("merged into main") == true,

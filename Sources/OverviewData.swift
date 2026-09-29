@@ -462,7 +462,10 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
     let evidence = label + ": " + project.summary(now: now) + "."
     if project.active(now: now) {
         let reason = "\(label) has recent activity, so you're probably still using it."
-        result = Advice(verdict: .check, reason: reason, howTo: "Wait until you're done with \(project.name). " + result.howTo, command: result.command, lastUsed: lastActivity)
+        // The rule's own advice may already say to wait; say it once, naming the project.
+        var rest = result.howTo
+        if rest.hasPrefix("Wait until you're done"), let end = rest.range(of: ". ") { rest = String(rest[end.upperBound...]) }
+        result = Advice(verdict: .check, reason: reason, howTo: "Wait until you're done with \(project.name). " + rest, command: result.command, lastUsed: lastActivity)
     } else if project.finished(now: now) {
         let whole = project.removeWorktreeCommand
         let reason = result.reason + " \(label) looks finished."

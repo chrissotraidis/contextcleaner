@@ -1,9 +1,42 @@
 import Foundation
 
-func normalized(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
+/// Absolute path without "." or ".." parts, repeated slashes or a trailing slash. Stored paths are almost always
+/// already in this form, so they're returned as-is; only unusual ones go through URL standardization.
+func normalized(_ path: String) -> String {
+    isCleanAbsolutePath(path) ? path : URL(fileURLWithPath: path).standardizedFileURL.path
+}
+/// Byte-level check: starts with "/", and no empty, "." or ".." component and no trailing slash (except "/" itself).
+func isCleanAbsolutePath(_ path: String) -> Bool {
+    let bytes = path.utf8
+    guard bytes.first == 0x2F else { return false }
+    if bytes.count == 1 { return true }
+    var length = 0, dots = 0
+    for byte in bytes.dropFirst() {
+        if byte == 0x2F {
+            if length == 0 || (dots == length && length <= 2) { return false }
+            length = 0; dots = 0
+        } else { length += 1; if byte == 0x2E { dots += 1 } }
+    }
+    return !(length == 0 || (dots == length && length <= 2))
+}
+/// True when the set holds this path or any folder above it. Paths must be normalized. Walks up at most one step per component.
+func hasAncestor(in set: Set<String>, _ path: String) -> Bool {
+    if set.isEmpty { return false }
+    var current = Substring(path)
+    while true {
+        if set.contains(String(current)) { return true }
+        guard let slash = current.utf8.lastIndex(of: 0x2F) else { return false }
+        if slash == current.startIndex { return current.count > 1 && set.contains("/") }
+        current = current[..<slash]
+    }
+}
 func containsPath(_ parent: String, _ path: String) -> Bool {
     let p = normalized(parent), c = normalized(path)
-    return p == c || (p == "/" ? c.hasPrefix("/") : c.hasPrefix(p + "/"))
+    if p == c { return true }
+    if p == "/" { return c.utf8.first == 0x2F }
+    let parentBytes = p.utf8, childBytes = c.utf8
+    guard childBytes.count > parentBytes.count, childBytes.starts(with: parentBytes) else { return false }
+    return childBytes[childBytes.index(childBytes.startIndex, offsetBy: parentBytes.count)] == 0x2F
 }
 func byteLabel(_ bytes: Int64) -> String {
     let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"]
@@ -190,10 +223,11 @@ func growth(_ path: String, records: [ScanRecord]) -> GrowthSummary {
     growth(points: historyPoints(path, records: records))
 }
 func uniqueAllocatedTotal(_ measurements: [FolderMeasurement]) -> Int64 {
-    var accepted: [String] = []
+    var accepted: Set<String> = []
     return measurements.filter { $0.state == .measured }.sorted { $0.profile.path.count < $1.profile.path.count }.reduce(0) { sum, item in
-        guard !accepted.contains(where: { containsPath($0, item.profile.path) }) else { return sum }
-        accepted.append(item.profile.path)
+        let path = normalized(item.profile.path)
+        guard !hasAncestor(in: accepted, path) else { return sum }
+        accepted.insert(path)
         return sum + (item.allocatedBytes ?? 0)
     }
 }

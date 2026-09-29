@@ -23,11 +23,12 @@ struct StorageGroup: Identifiable {
 // Keep parents and descendants out of the same sum. These are saved observations,
 // not a live whole-volume accounting and not a promise of reclaimable space.
 func overviewGroups(_ measurements: [FolderMeasurement], preferences: Preferences) -> [StorageGroup] {
-    var accepted: [String] = [], totals: [FolderCategory: (Int64, Int)] = [:]
+    var accepted: Set<String> = [], totals: [FolderCategory: (Int64, Int)] = [:]
     for item in measurements.sorted(by: { $0.profile.path.count == $1.profile.path.count ? $0.profile.path < $1.profile.path : $0.profile.path.count < $1.profile.path.count }) {
+        let path = normalized(item.profile.path)
         guard item.state == .measured, let bytes = item.allocatedBytes, !preferences.excluded(item.profile.path),
-              !accepted.contains(where: { containsPath($0, item.profile.path) }) else { continue }
-        accepted.append(item.profile.path)
+              !hasAncestor(in: accepted, path) else { continue }
+        accepted.insert(path)
         let old = totals[item.profile.category] ?? (0, 0)
         totals[item.profile.category] = (old.0 + bytes, old.1 + 1)
     }

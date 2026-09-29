@@ -36,12 +36,19 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIconFile</key><string>ContextCleaner</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.9.2</string>
-<key>CFBundleVersion</key><string>16</string>
+<key>CFBundleVersion</key><string>18</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-codesign --sign - "$app"
+# Sign with a stable identity when one exists, so macOS keeps your privacy answers (Documents, other apps' data)
+# across updates. Set CC_SIGN_IDENTITY to choose one, or "-" for ad-hoc. Falls back to ad-hoc if signing fails.
+sign_identity="${CC_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development|Developer ID Application/ { print $2; exit }')}"
+if [ -n "$sign_identity" ] && [ "$sign_identity" != "-" ] && codesign --force --sign "$sign_identity" --timestamp=none "$app" 2>/dev/null; then
+  echo "Signed with identity $sign_identity"
+else
+  codesign --force --sign - "$app"; echo "Signed ad-hoc"
+fi
 codesign --verify --deep --strict "$app"
 package_dir="$stage_dir/Package"
 mkdir "$package_dir"

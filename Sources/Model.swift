@@ -405,7 +405,10 @@ struct FolderRow: Identifiable {
         insideCache = (key, value)
         return value
     }
-    func groupSize(_ group: CoverageGroup) -> Int64 { Coverage.entries.filter { $0.group == group }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) } }
+    /// Scanned size of a Coverage group, counting only places that are turned on (the ones a scan reads).
+    func groupSize(_ group: CoverageGroup) -> Int64 {
+        Coverage.entries.filter { $0.group == group && !preferences.excluded($0.path(home: home)) }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) }
+    }
     /// A span of time since last use, with the scanned space in it by answer.
     struct IdleBucket: Identifiable { let id: Int; let title: String; var bytes: [Verdict: Int64] = [:]; var total: Int64 { bytes.values.reduce(0, +) } }
     private var idleCache: (key: String, value: [IdleBucket]) = ("", [])

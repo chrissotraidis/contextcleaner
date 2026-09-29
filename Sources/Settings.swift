@@ -170,7 +170,7 @@ struct CoverageSettings: View {
     private func groupHeader(_ group: CoverageGroup, entries: [CoverageEntry], open: Bool) -> some View {
         let paths = entries.map { $0.path(home: model.home) }
         let on = paths.filter { !model.preferences.excluded($0) }.count
-        let total = uniqueAllocatedTotal(model.latest.filter { item in item.state == .measured && paths.contains { containsPath($0, item.profile.path) } })
+        let total = model.groupSize(group)
         let summary = "\(on) of \(entries.count) on" + (total > 0 ? " · \(byteLabel(total))" : "")
         return HStack(spacing: 10) {
             Button { if openGroups.contains(group.id) { openGroups.remove(group.id) } else { openGroups.insert(group.id) } } label: {

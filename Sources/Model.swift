@@ -126,12 +126,21 @@ struct FolderRow: Identifiable {
         if adviceCache.key != key { adviceCache = (key, [:]) }
         let itemKey = m.profile.path + "|\(m.state.rawValue)|\(m.observedAt.timeIntervalSinceReferenceDate)|\(m.allocatedBytes ?? -1)"
         if let cached = adviceCache.value[itemKey] { return cached }
-        let value = advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices, project: project(for: m.profile.path))
+        var value = advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices, project: project(for: m.profile.path))
+        // Until git activity has been read, a project folder can't be called safe: it may be work in progress.
+        if !projectsRead, value.verdict == .safe, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData") {
+            var held = Advice(verdict: .check, reason: "Checking its project's git activity before answering. " + value.reason, howTo: value.howTo, command: value.command, lastUsed: value.lastUsed)
+            held.evidence = value.evidence
+            held.short = "Checking git…"
+            value = held
+        }
         adviceCache.value[itemKey] = value
         return value
     }
     /// Git activity for the projects that scanned folders belong to, keyed by project root. Read-only.
     @Published var projects: [String: ProjectActivity] = [:] { didSet { discoveryVersion += 1 } }
+    /// Whether git activity has been read at least once since launch.
+    private(set) var projectsRead = false
     private var projectRoots: [String: String] = [:]
     func project(for path: String) -> ProjectActivity? { projectRoots[path].flatMap { projects[$0] } }
     /// Reads git activity for every project folder in the background. Runs read-only git commands only.
@@ -143,7 +152,7 @@ struct FolderRow: Identifiable {
             for path in paths { if let root = repositoryRoot(for: path, home: home) { roots[path] = root } }
             var activity: [String: ProjectActivity] = [:]
             for root in Set(roots.values) { activity[root] = readProjectActivity(root) }
-            DispatchQueue.main.async { self.projectRoots = roots; self.projects = activity }
+            DispatchQueue.main.async { self.projectRoots = roots; self.projectsRead = true; self.projects = activity }
         }
     }
     func deviceAdvice(_ device: SimDevice) -> Advice {

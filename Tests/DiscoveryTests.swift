@@ -152,6 +152,12 @@ import Foundation
         verdictModel.records = [ScanRecord(id: "verdicts", startedAt: t0, finishedAt: t0, scope: "fixture", complete: true, measurements: [oldBuild, measure(libraryProfile, 9_000_000_000, t0)], discoveryNotes: [])]
         verdictModel.gone = []
         check(verdictModel.overview.safe.map(\.profile.path) == [buildProfile.path] && verdictModel.overview.safeBytes == 5_000_000_000, "the Overview totals only folders that are safe to remove")
+        // A project build folder waits for git activity before it can be called safe.
+        let heldModel = CleanerModel(home: home, dataRoot: storage.root)
+        var projectBuild = Classifier.profile(path: home + "/GitHub/held/build", home: home, readMetadata: false); projectBuild.category = .buildOutput
+        var oldProjectBuild = measure(projectBuild, 2_000_000_000, t0); oldProjectBuild.latestModifiedAt = Date().addingTimeInterval(-30 * 86400)
+        let held = heldModel.adviceFor(oldProjectBuild)
+        check(!heldModel.projectsRead && held.verdict == .check && held.short == "Checking git…", "a project build folder isn't called safe until its git activity has been read")
         verdictModel.section = .locations; verdictModel.locationFilter = .safe
         check(verdictModel.rows.map(\.id) == [buildProfile.path], "Safe to remove lists safe folders only")
         verdictModel.locationFilter = .keep

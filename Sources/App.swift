@@ -143,11 +143,29 @@ struct MainView: View {
     }
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
-            HStack(spacing: 12) {
-                Picker("Show", selection: $model.locationFilter) { ForEach(LocationFilter.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu).fixedSize()
-                let hidden = model.gone.isEmpty || model.locationFilter == .excluded ? "" : " · \(model.gone.count) \(model.gone.count == 1 ? "folder" : "folders") no longer on disk \(model.gone.count == 1 ? "is" : "are") hidden"
-                Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
+            // The answer first: how much is safe, how much needs a look, how much to keep. Each tile is a filter.
+            let others: [LocationFilter] = [.growing, .unscanned, .reviewLater, .excluded]
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
+                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "everything, largest first", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
+                    ForEach(Verdict.allCases) { verdict in
+                        let total = model.verdictTotal(verdict)
+                        VerdictTile(title: verdict.title, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders") · \(verdict.meaning)", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
+                    }
+                }
+                HStack(spacing: 12) {
+                    let hidden = model.gone.isEmpty || model.locationFilter == .excluded ? "" : " · \(model.gone.count) \(model.gone.count == 1 ? "folder" : "folders") no longer on disk \(model.gone.count == 1 ? "is" : "are") hidden"
+                    Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    Menu {
+                        ForEach(others) { filter in
+                            Button { model.locationFilter = filter } label: { if model.locationFilter == filter { Label(filter.rawValue, systemImage: "checkmark") } else { Text(filter.rawValue) } }
+                        }
+                    } label: { Text(others.contains(model.locationFilter) ? "Showing: " + model.locationFilter.rawValue : "Other lists") }
+                        .menuStyle(.borderlessButton).fixedSize().font(.caption)
+                        .help("Growing, not scanned yet, review later and turned-off folders")
+                }
             }.padding(.horizontal, 16).padding(.bottom, 8)
         } else if !model.search.isEmpty {
             Text("\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
@@ -187,6 +205,13 @@ struct MainView: View {
                         .help(row.measurement.profile.path)
                 }
             }.width(min: 170, ideal: 240)
+            TableColumn("Can I remove it?", value: \.verdictRank) { row in
+                Group {
+                    if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
+                    else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
+                    else { VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id)) }
+                }.help(row.advice.reason)
+            }.width(min: 120, ideal: 140)
             TableColumn("Size", value: \.bytes) { row in
                 Text(row.bytes >= 0 ? byteLabel(row.bytes) : "—").font(.callout).monospacedDigit().foregroundStyle(row.gone ? Color.secondary : Color.primary).strikethrough(row.gone)
             }.width(min: 80, ideal: 90)
@@ -199,13 +224,6 @@ struct MainView: View {
                        ? "Older scans didn't record when files here last changed. Scan this folder to find out."
                        : "Last used: the newest change a scan saw inside it, or when Xcode last ran a test device.")
             }.width(min: 90, ideal: 110)
-            TableColumn("Can I remove it?", value: \.verdictRank) { row in
-                Group {
-                    if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
-                    else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
-                    else { VerdictBadge(verdict: row.advice.verdict, selected: selectedRow(row.id)) }
-                }.help(row.advice.reason)
-            }.width(min: 120, ideal: 140)
         }
         .contextMenu(forSelectionType: String.self) { paths in
             if paths.count > 1 { SelectionActions(model: model, paths: Array(paths).sorted()) }

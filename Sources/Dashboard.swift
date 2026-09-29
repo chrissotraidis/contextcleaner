@@ -392,6 +392,7 @@ struct Dashboard: View {
     @ObservedObject var model: CleanerModel
     @State private var hovered: FolderCategory?
     @State private var showingCaveats = false
+    @State private var showLargest = false
     private var groups: [StorageGroup] { model.overview.groups }
     private var measured: [FolderMeasurement] { model.overview.measuredBySize }
     private var total: Int64 { model.overview.total }
@@ -410,7 +411,7 @@ struct Dashboard: View {
                     statusLine
                     HStack(alignment: .top, spacing: 16) {
                         categories.frame(maxWidth: .infinity)
-                        largest.frame(maxWidth: .infinity)
+                        foldersPanel.frame(maxWidth: .infinity)
                     }
                 }.padding(.horizontal, 22).padding(.bottom, 16)
             }.scrollBounceBehavior(.basedOnSize)
@@ -550,8 +551,48 @@ struct Dashboard: View {
         }.buttonStyle(.plain).help(group.category.shortPurpose)
             .onHover { inside in hovered = inside ? group.category : (hovered == group.category ? nil : hovered) }
     }
-    private var largest: some View {
-        Panel(title: "Largest folders", symbol: "folder") {
+    /// What you can remove, biggest first, with the largest folders one click away.
+    private var foldersPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label { Text(showLargest ? "Largest folders" : "Safe to remove").foregroundStyle(.primary) }
+                    icon: { Image(systemName: showLargest ? "folder" : Verdict.safe.symbol).foregroundStyle(showLargest ? Color.accentColor : Verdict.safe.tint) }.font(.headline)
+                Spacer()
+                Picker("Show", selection: $showLargest) { Text("Safe").tag(false); Text("Largest").tag(true) }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+            }
+            if showLargest { largestRows } else { safeRows }
+        }.padding(16).frame(maxWidth: .infinity, alignment: .topLeading).background(.background.secondary)
+    }
+    @ViewBuilder private var safeRows: some View {
+        let safe = model.overview.safe
+        ForEach(safe.prefix(6)) { item in
+            let advice = model.adviceFor(item)
+            HStack(spacing: 10) {
+                Image(systemName: Verdict.safe.symbol).foregroundStyle(Verdict.safe.tint).frame(width: 20).accessibilityHidden(true)
+                Button { model.open(item.profile.path) } label: {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(item.profile.displayName).font(.callout).lineLimit(1)
+                            Text([locationHint(item.profile.path) ?? item.profile.category.displayName, advice.lastUsed.map { "used " + ageText($0) }].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit()
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain).help(advice.reason)
+                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.profile.path)]) } label: { Image(systemName: "folder") }
+                    .buttonStyle(.borderless).help("Show in Finder. You remove it yourself.").accessibilityLabel("Show \(item.profile.displayName) in Finder")
+            }.padding(.vertical, 2).contextMenu { LocationActions(model: model, path: item.profile.path) }
+        }
+        if safe.isEmpty {
+            Text("Nothing is clearly safe to remove yet. Scan your folders so Context Cleaner can see when each was last used.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        } else {
+            Button(safe.count > 6 ? "See all \(safe.count) safe folders" : "See safe folders") { show(filter: .safe) }.buttonStyle(.link).font(.callout)
+        }
+    }
+    @ViewBuilder private var largestRows: some View {
+        Group {
             ForEach(measured.prefix(6)) { item in
                 let values = model.sparkline(item.profile.path)
                 Button { model.open(item.profile.path) } label: {

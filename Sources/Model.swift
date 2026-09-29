@@ -235,7 +235,7 @@ struct FolderRow: Identifiable {
         let known = Set(current.map { $0.profile.path })
         let pendingCount = discovery.profiles.filter { !known.contains($0.path) && !excluded($0.path) && !fileOnly.contains($0.path) }.count
         let watching = preferences.locations.filter { ($0.value.isWatched) && !excluded($0.key) }.count
-        let safe = measured.filter { adviceFor($0).verdict == .safe }.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }
+        let safe = verdictGroups[.safe] ?? []
         let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count, pendingCount: pendingCount, safe: safe, safeBytes: uniqueAllocatedTotal(safe))
         overviewCache = (key, nextReviewDeadline, snapshot)
         return snapshot
@@ -250,6 +250,16 @@ struct FolderRow: Identifiable {
         return result
     }
     private func computeRows() -> [FolderRow] {
+        return baseMeasures().map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path), advice: adviceFor($0), gone: gone.contains($0.profile.path)) }.filter { row in
+            let p = row.measurement.profile
+            if let categoryFilter, p.category != categoryFilter { return false }
+            guard search.isEmpty || (p.path + p.name + p.associatedApp + (p.project ?? "") + row.policy.tags.joined()).localizedCaseInsensitiveContains(search) else { return false }
+            return include(row, p)
+        }
+    }
+    /// Every known folder: saved sizes, discovered folders not yet scanned, and turned-off folders,
+    /// with Xcode's live facts for simulators.
+    private func baseMeasures() -> [FolderMeasurement] {
         var measures = latest
         for profile in discovery.profiles where !fileOnly.contains(profile.path) && !measures.contains(where: { $0.profile.path == profile.path }) {
             measures.append(FolderMeasurement(profile: profile, observedAt: Date(), state: .pending, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Discovered; not yet measured.", elapsedSeconds: 0))
@@ -258,10 +268,28 @@ struct FolderRow: Identifiable {
         for (path, policy) in preferences.locations where policy.excluded && !measures.contains(where: { $0.profile.path == path }) {
             measures.append(FolderMeasurement(profile: Classifier.profile(path: path, home: home, readMetadata: false), observedAt: Date(), state: .excluded, fileCount: 0, processes: [], activityCheckAvailable: false, diagnostic: "Excluded by you.", elapsedSeconds: 0))
         }
-        return measures.map { withSimulatorFacts($0, devices: simDevices) }.map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path), advice: adviceFor($0), gone: gone.contains($0.profile.path)) }.filter { row in
-            let p = row.measurement.profile
-            if let categoryFilter, p.category != categoryFilter { return false }
-            guard search.isEmpty || (p.path + p.name + p.associatedApp + (p.project ?? "") + row.policy.tags.joined()).localizedCaseInsensitiveContains(search) else { return false }
+        return measures.map { withSimulatorFacts($0, devices: simDevices) }
+    }
+    /// Scanned, included folders still on disk, grouped by answer and sorted largest first.
+    /// The Folders tiles, the Overview and the Safe to remove list all read this.
+    private var verdictCache: (key: String, value: [Verdict: [FolderMeasurement]]) = ("", [:])
+    var verdictGroups: [Verdict: [FolderMeasurement]] {
+        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
+        if verdictCache.key == key { return verdictCache.value }
+        var groups: [Verdict: [FolderMeasurement]] = [:]
+        for item in baseMeasures() where item.state == .measured && !preferences.excluded(item.profile.path) && !gone.contains(item.profile.path) {
+            groups[adviceFor(item).verdict, default: []].append(item)
+        }
+        let value = groups.mapValues { $0.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) } }
+        verdictCache = (key, value)
+        return value
+    }
+    /// Count and size for one answer, nested folders counted once.
+    func verdictTotal(_ verdict: Verdict) -> (count: Int, bytes: Int64) {
+        let items = verdictGroups[verdict] ?? []
+        return (items.count, uniqueAllocatedTotal(items))
+    }
+    private func include(_ row: FolderRow, _ p: FolderProfile) -> Bool {
             switch section {
             case .locations:
                 switch locationFilter {
@@ -278,7 +306,6 @@ struct FolderRow: Identifiable {
             case .needsAttention: return !preferences.excluded(p.path) && [.inaccessible, .limited, .missing, .failed].contains(row.measurement.state)
             default: return !preferences.excluded(p.path)
             }
-        }
     }
     /// Locations that could not be measured completely, for the sidebar badge.
     var attentionCount: Int { overview.attentionCount }

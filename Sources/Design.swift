@@ -87,6 +87,49 @@ extension Verdict {
         case .keep: return "hand.raised.fill"
         }
     }
+    /// The Folders list that shows this answer.
+    var filter: LocationFilter {
+        switch self {
+        case .safe: return .safe
+        case .check: return .check
+        case .keep: return .keep
+        }
+    }
+    /// What the answer means, in a few words.
+    var meaning: String {
+        switch self {
+        case .safe: return "tools recreate these"
+        case .check: return "look inside first"
+        case .keep: return "manage in their apps"
+        }
+    }
+}
+/// A large, clickable total for one answer at the top of Folders.
+struct VerdictTile: View {
+    let title: String
+    let value: String
+    let detail: String
+    let symbol: String
+    let tint: Color
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 3) {
+                Label(title, systemImage: symbol).font(.callout.weight(.semibold)).foregroundStyle(tint).lineLimit(1)
+                Text(value).font(.title2.weight(.semibold)).monospacedDigit().foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.7)
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(tint.opacity(selected ? 0.20 : hovering ? 0.13 : 0.07), in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(tint.opacity(selected ? 0.85 : 0), lineWidth: 1.5))
+            .contentShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain).onHover { hovering = $0 }
+        .accessibilityLabel("\(title), \(value), \(detail)").accessibilityAddTraits(selected ? .isSelected : [])
+    }
 }
 /// The one-glance answer used in tables and lists.
 struct VerdictBadge: View {

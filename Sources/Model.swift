@@ -500,7 +500,7 @@ struct FolderRow: Identifiable {
     struct SpaceWent { var from: Date; var diskChange: Int64?; var places: [SpaceChange]; var explained: Int64 { places.reduce(0) { $0 + $1.bytes } } }
     private var wentCache: (key: String, value: SpaceWent?) = ("", nil)
     func spaceWent(from start: Date, to end: Date) -> SpaceWent? {
-        let key = "\(recordsVersion)|\(discoveryVersion)|\(preferencesVersion)|\(usage.count)|\(Int(start.timeIntervalSince1970))|\(Int(end.timeIntervalSince1970))"
+        let key = "\(recordsVersion)|\(discoveryVersion)|\(preferencesVersion)|\(usage.count)|\(usage.last?.used ?? 0)|\(Int(start.timeIntervalSince1970))|\(Int(end.timeIntervalSince1970))"
         if wentCache.key == key { return wentCache.value }
         refreshDerived()
         let readings = usage

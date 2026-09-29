@@ -115,6 +115,7 @@ struct MainView: View {
     /// Scope and progress while a scan runs, then a one-line result.
     @ViewBuilder var scanBanner: some View {
         if model.running || model.discovering {
+            VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 if model.running && model.targetCount > 0 {
                     ProgressView(value: Double(model.completed), total: Double(max(model.targetCount, 1))).frame(width: 140)
@@ -128,6 +129,19 @@ struct MainView: View {
                 Text("Reading sizes only").font(.caption).foregroundStyle(.secondary)
                 Button("Stop") { model.cancelWork() }.controlSize(.small)
             }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.accentColor.opacity(0.08))
+            // Reading another app's container makes macOS ask once, and the scan waits for the answer. Say so plainly.
+            if model.progress.contains("/Library/Containers/") || model.progress.contains("/Library/Group Containers/") {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "hand.raised.fill").foregroundStyle(Color.growing).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("macOS may be asking for permission").font(.callout.weight(.semibold))
+                        Text("If a dialog says “Context Cleaner would like to access data from other apps”, the scan waits for your answer. Allow lets it measure caches kept inside other apps, like iPhone install caches. Don't Allow skips them. It only reads sizes either way.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.growing.opacity(0.10))
+            }
+            }
         } else if let result = model.lastResult {
             let stopped = result.hasPrefix("Stopped")
             let unreadable = result.contains("couldn't be read")

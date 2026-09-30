@@ -29,7 +29,7 @@
   <a href="#build-from-source">Build it</a>
 </p>
 
-![Context Cleaner's Overview: 110 GiB free of 3.63 TiB, a chart of used space climbing toward Full with 141 GiB more used this week, "You can get back about 496 GiB" split into safe, old items and rebuildable, where the week's space went led by Codex scratch, and a Start here list](docs/images/overview-dark.png)
+![Context Cleaner Overview: 60 GiB free of 3.63 TiB, a chart of used space climbing toward Full, and Free up space listing idle build folders, a recovery copy and Codex scratch biggest first, each with what removing it costs and how long it has been untouched](docs/images/overview-dark.png)
 
 > [!IMPORTANT]
 > **Context Cleaner never deletes, moves or empties anything.** It measures folders, explains them, and tells you how to remove them yourself: in Finder, or with a command it copies for you to run. There is no clean button, on purpose.

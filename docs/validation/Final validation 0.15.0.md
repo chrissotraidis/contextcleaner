@@ -27,6 +27,7 @@ Goal loop: [GOAL_LOOP_0.15.md](../GOAL_LOOP_0.15.md). Trigger: Chris couldn't te
 | Preserving suites | 260 checks: 28 core, 22 detail, 72 discovery/model, 91 overview, 19 planner, 28 bounded-scan |
 | New tests | Trash command escaping; subfolder and project naming; ~ paths; Back returns to the Overview in one step and Forward returns to the folder; Ignored status |
 | Main-thread cost | 4.9 ms CPU per scan update (180 folders) |
+| Look Inside, on screen | Opened from the disk map's Everything else in the installed build. It listed 123 folders, biggest first, with sizes and Show in Finder buttons, and "1.71 TiB found in these folders, of 3.52 TiB used". Look Again and Done both work. |
 | Native UI | Overview (free-space chart, get-back bar, rates, Start here), Folders with biggest first, the subfolder card with path and Up link, Up then Back, Copy Move-to-Trash Command on cards |
 | Package | `hdiutil verify` VALID; `codesign --verify --deep --strict` OK; /Applications executable matches the build |
 | Source | `534c863` |
@@ -37,6 +38,6 @@ Nothing on the Mac was deleted, moved or trashed. The trash commands were compil
 
 ## Limits
 
-- The Look Inside sheet itself was checked headlessly, not clicked on screen: Computer Use approval for Context Cleaner lapsed during this pass.
+- Its folder buttons are announced to VoiceOver as "Move" (the icon's name) instead of "Show in Finder"; the tooltip is correct. Fix in the next release.
 - A few seconds after launch, before git is read, project folders show "Checking git…" and the totals are lower.
 - "Everything else" can't be split into scanned places; Look Inside shows its biggest folders instead.

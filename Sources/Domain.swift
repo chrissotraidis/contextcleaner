@@ -38,6 +38,11 @@ func containsPath(_ parent: String, _ path: String) -> Bool {
     guard childBytes.count > parentBytes.count, childBytes.starts(with: parentBytes) else { return false }
     return childBytes[childBytes.index(childBytes.startIndex, offsetBy: parentBytes.count)] == 0x2F
 }
+/// A path with the home folder shown as ~.
+func abbreviatedPath(_ path: String) -> String {
+    let home = NSHomeDirectory()
+    return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+}
 func byteLabel(_ bytes: Int64) -> String {
     let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"]
     var amount = Double(bytes), index = 0

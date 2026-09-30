@@ -256,7 +256,7 @@ enum Verdict: Int, Comparable, CaseIterable, Identifiable {
         case .safe: return "Safe to remove"
         case .rebuild: return "Rebuildable"
         case .check: return "Your call"
-        case .keep: return "Keep"
+        case .keep: return "Leave it"
         }
     }
 }
@@ -329,9 +329,14 @@ struct StaleItem: Equatable, Identifiable {
     let modifiedAt: Date?
 }
 /// A command that moves items to the Trash (reversible; nothing is erased). Context Cleaner only copies it.
+/// A Terminal command that moves items to the Trash through Finder, for the user to run themselves.
+/// Finder renames an item if the Trash already holds one with its name, and Put Back works afterwards.
+/// Each path is escaped for AppleScript, then the whole script for the shell. Context Cleaner never runs it.
 func trashCommand(_ paths: [String]) -> String {
-    let quoted = paths.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-    return "mv -n " + quoted.joined(separator: " ") + " ~/.Trash/"
+    func appleScriptString(_ text: String) -> String { "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+    let items = paths.map { "POSIX file " + appleScriptString($0) + " as alias" }.joined(separator: ", ")
+    let script = "tell application \"Finder\" to delete {" + items + "}"
+    return "osascript -e '" + script.replacingOccurrences(of: "'", with: "'\\''") + "' >/dev/null"
 }
 /// Readable names for processes that hold files open.
 func friendlyApp(_ command: String) -> String {
@@ -399,8 +404,8 @@ func sizeSourceText(_ m: FolderMeasurement) -> String? {
 /// The verdict: your own choice first, then the folder rules, then what git says about its project.
 func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, now: Date = Date()) -> Advice {
     if policy.isKept {
-        var kept = Advice(verdict: .keep, reason: "You chose to keep this. It's never suggested for removal.", howTo: "Choose Stop Keeping to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
-        kept.short = "Kept by you"
+        var kept = Advice(verdict: .keep, reason: "You chose to ignore this. It's still scanned but never suggested.", howTo: "Choose Stop Ignoring to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
+        kept.short = "Ignored by you"
         return kept
     }
     var result = projectAdvice(for: m, policy: policy, devices: devices, project: project, now: now)

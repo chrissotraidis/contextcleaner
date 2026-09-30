@@ -34,7 +34,7 @@ struct FolderRow: Identifiable {
     /// One plain word, shown only when it tells you something. Empty for an ordinary scanned folder.
     var status: String {
         if policy.excluded { return "Not scanned" }
-        if policy.isKept { return "Kept" }
+        if policy.isKept { return "Ignored" }
         if gone { return "Gone" }
         if measurement.state == .pending { return "Not scanned" }
         if measurement.state != .measured {
@@ -68,20 +68,22 @@ struct FolderRow: Identifiable {
     @Published var records: [ScanRecord] = [] { didSet { recordsVersion += 1 } }
     @Published var preferences = Preferences() { didSet { preferencesVersion += 1 } }
     @Published var discovery = Discovery(profiles: [], notes: []) { didSet { discoveryVersion += 1 } }
-    @Published var selected: String? { didSet { if let s = selected { if selection != [s] { selection = [s] } } else if !selection.isEmpty { selection = [] } } }
+    @Published var selected: String? { willSet { placeWillChange() } didSet { if let s = selected { if selection != [s] { selection = [s] } } else if !selection.isEmpty { selection = [] } } }
     /// Table selection. One item drives the inspector; several show a summed summary.
     @Published var selection: Set<String> = [] { didSet { if selection.count == 1, selected != selection.first { selected = selection.first } else if selection.isEmpty, selected != nil { selected = nil } } }
     /// A changed view or filter must never leave actions targeting hidden rows.
     func retainVisibleSelection() {
         let visible = Set(rows.map(\.id))
+        // A folder opened from inside a listed folder ("What's inside", Up, Back) stays selected.
+        if selection.count == 1, let only = selection.first, visible.contains(where: { containsPath($0, only) }) { return }
         let retained = selection.intersection(visible)
         if retained != selection { selection = retained }
     }
-    @Published var section: AppSection = .overview
-    @Published var locationFilter: LocationFilter = .all
+    @Published var section: AppSection = .overview { willSet { placeWillChange() } }
+    @Published var locationFilter: LocationFilter = .all { willSet { placeWillChange() } }
     @Published var editing: String?
     @Published var search = ""
-    @Published var categoryFilter: FolderCategory?
+    @Published var categoryFilter: FolderCategory? { willSet { placeWillChange() } }
     @Published var volume = VolumeSnapshot.read()
     /// Hourly disk-capacity readings for the Space used chart. Append-only.
     @Published var capacity: [CapacityReading] = []
@@ -231,6 +233,125 @@ struct FolderRow: Identifiable {
         }
         return false
     }
+    // MARK: Everything else
+
+    /// Used space that isn't in any scanned folder or any folder you ignored: the disk map's "Everything else".
+    var everythingElseBytes: Int64 {
+        guard let used = volume?.used else { return 0 }
+        let r = reclaim, kept = keptSummary
+        return max(0, used - (r.safe.bytes + r.inside.bytes + r.rebuild.bytes + r.check.bytes + r.keep.bytes + kept.keptBytes + kept.offBytes))
+    }
+
+    /// One place outside the scanned folders, measured once on request. Never saved, never part of any answer.
+    struct ElsewhereItem: Identifiable { var id: String { path }; let path: String; let name: String; let bytes: Int64?; let note: String? }
+    @Published var showingElsewhere = false
+    @Published private(set) var elsewhere: [ElsewhereItem] = []
+    @Published private(set) var elsewhereDate: Date?
+    @Published private(set) var lookingElsewhere = false
+    private var elsewhereCancellation = Cancellation()
+    /// Sizes the top level of your home folder, your Library and Applications, leaving out every folder
+    /// Context Cleaner already scans or you turned off, so nothing is counted twice. Reads metadata only.
+    func lookElsewhere() {
+        guard !lookingElsewhere else { return }
+        lookingElsewhere = true; elsewhere = []
+        elsewhereCancellation = Cancellation(); let token = elsewhereCancellation
+        let home = home
+        var prefs = preferences
+        let known = latest.filter { $0.state == .measured }.map(\.profile.path) + preferences.locations.filter { $0.value.excluded }.map(\.key)
+        for path in known { var policy = prefs.policy(path); policy.excluded = true; prefs.locations[normalized(path)] = policy }
+        let skipped: [String: String] = [home + "/Library/CloudStorage": "Cloud storage isn't read, so nothing is downloaded.", home + "/Library/Mobile Documents": "iCloud Drive isn't read, so nothing is downloaded."]
+        DispatchQueue.global(qos: .userInitiated).async {
+            func children(_ folder: String) -> [String] {
+                ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).sorted().map { folder + "/" + $0 }
+            }
+            var targets = ["/Applications"]
+            for path in children(home) where path != home + "/Library" { targets.append(path) }
+            targets += children(home + "/Library")
+            var results = [ElsewhereItem?](repeating: nil, count: targets.count)
+            results.withUnsafeMutableBufferPointer { slots in
+                let base = slots.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: targets.count) { index in
+                    let path = targets[index]
+                    let name = abbreviatedPath(path)
+                    if let note = skipped[path] { base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: note); return }
+                    guard !prefs.excluded(path), !token.stopped else { return }
+                    var st = stat()
+                    guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return }
+                    let profile = FolderProfile(path: path, name: name, category: .unknown, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: [])
+                    let m = TreeMeasure.measure(profile, preferences: prefs, cancellation: token, activity: [], activityAvailable: false, limits: ScanLimits(seconds: 180, entries: 5_000_000))
+                    switch m.state {
+                    case .measured:
+                        // A folder that holds scanned folders is counted without them: "the rest of ~/GitHub".
+                        let holdsScanned = known.contains { $0.hasPrefix(path + "/") }
+                        if (m.allocatedBytes ?? 0) > 0 { base[index] = ElsewhereItem(path: path, name: holdsScanned ? name + " (the rest of it)" : name, bytes: m.allocatedBytes, note: holdsScanned ? "Not counting the folders inside it that Context Cleaner already scans." : nil) }
+                    case .inaccessible: base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: "macOS didn't allow reading it. Full Disk Access lets Context Cleaner size it.")
+                    case .limited: base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed.")
+                    default: break
+                    }
+                }
+            }
+            let found = results.compactMap { $0 }.sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
+            DispatchQueue.main.async { self.elsewhere = found; self.elsewhereDate = Date(); self.lookingElsewhere = false }
+        }
+    }
+    func stopLookingElsewhere() { elsewhereCancellation.cancel() }
+
+    // MARK: Back and Forward
+
+    /// Where you are: the view, its filter and the folder shown. Search is typing, so it isn't a place.
+    struct Place: Equatable {
+        var section: AppSection, filter: LocationFilter, category: FolderCategory?, selected: String?
+    }
+    var place: Place { Place(section: section, filter: locationFilter, category: categoryFilter, selected: selected) }
+    @Published private(set) var backStack: [Place] = []
+    @Published private(set) var forwardStack: [Place] = []
+    private var placeOrigin: Place?
+    private var restoringPlace = false
+    /// Several properties change together when you open something; they're merged into one step.
+    private func placeWillChange() {
+        guard !restoringPlace, placeOrigin == nil else { return }
+        placeOrigin = place
+        DispatchQueue.main.async { [weak self] in self?.commitPlace() }
+    }
+    private func commitPlace() {
+        guard let origin = placeOrigin else { return }
+        placeOrigin = nil
+        let now = place
+        guard now != origin else { return }
+        // Clicking from one listed row to another isn't a new place.
+        if origin.section == now.section && origin.filter == now.filter && origin.category == now.category {
+            let visible = Set(rows.map(\.id))
+            if (now.selected.map(visible.contains) ?? true) && (origin.selected.map(visible.contains) ?? true) { return }
+        }
+        backStack.append(origin)
+        if backStack.count > 60 { backStack.removeFirst() }
+        forwardStack = []
+    }
+    func goBack() { guard let target = backStack.popLast() else { return }; forwardStack.append(place); apply(target) }
+    func goForward() { guard let target = forwardStack.popLast() else { return }; backStack.append(place); apply(target) }
+    private func apply(_ target: Place) {
+        restoringPlace = true
+        categoryFilter = target.category; search = ""; section = target.section; locationFilter = target.filter; selected = target.selected
+        restoringPlace = false
+    }
+    /// What Back would return to, for its tooltip.
+    var backTitle: String? { backStack.last.map(placeTitle) }
+    var forwardTitle: String? { forwardStack.last.map(placeTitle) }
+    private func placeTitle(_ p: Place) -> String {
+        if let path = p.selected { return displayName(path) }
+        if p.section == .locations { return p.category?.displayName ?? (p.filter == .all ? "Folders" : p.filter.rawValue) }
+        return p.section.rawValue
+    }
+    /// The nearest folder above this one that Context Cleaner knows, for "Up to…".
+    func knownParent(of path: String) -> String? {
+        var current = (path as NSString).deletingLastPathComponent
+        let known = Set(latest.map(\.profile.path) + discovery.profiles.map(\.path))
+        while current.count > home.count {
+            if known.contains(current) { return current }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
     /// Shows the Folders list, optionally narrowed to one type or answer.
     func showFolders(_ category: FolderCategory? = nil, filter: LocationFilter = .all) {
         categoryFilter = category; search = ""; section = .locations
@@ -312,6 +433,15 @@ struct FolderRow: Identifiable {
             var saved: [String: FolderMeasurement] = [:]
             for record in records.sorted(by: { $0.finishedAt < $1.finishedAt }) {
                 for item in record.measurements where item.state != .cancelled { saved[item.profile.path] = item }
+            }
+            // Older scans saved names from earlier naming rules. Show today's names: subfolders named for
+            // themselves, projects named for their own folder. Saved files are never changed.
+            let home = self.home
+            for (path, item) in saved where ![.simulator].contains(item.profile.category) && SimulatorLocations.containerRoot(path) == nil {
+                let fresh = Classifier.profile(path: path, home: home, readMetadata: false)
+                guard fresh.category == item.profile.category else { continue }
+                var m = item; m.profile.name = fresh.name; m.profile.project = fresh.project
+                saved[path] = m
             }
             let history = historyIndex(records)
             derived.historyKey = recordsVersion; derived.saved = saved
@@ -529,7 +659,12 @@ struct FolderRow: Identifiable {
         return value
     }
     /// Where used space went since from, by place; plus the disk's own change over the same span.
-    struct SpaceWent { var from: Date; var diskChange: Int64?; var places: [SpaceChange]; var explained: Int64 { places.reduce(0) { $0 + $1.bytes } } }
+    struct SpaceWent {
+        var from: Date; var to: Date; var diskChange: Int64?; var places: [SpaceChange]
+        var explained: Int64 { places.reduce(0) { $0 + $1.bytes } }
+        /// Days the span covers, at least an hour's worth, for rates.
+        var days: Double { max(to.timeIntervalSince(from), 3600) / 86400 }
+    }
     private var wentCache: (key: String, value: SpaceWent?) = ("", nil)
     func spaceWent(from start: Date, to end: Date) -> SpaceWent? {
         let key = "\(recordsVersion)|\(discoveryVersion)|\(preferencesVersion)|\(usage.count)|\(usage.last?.used ?? 0)|\(Int(start.timeIntervalSince1970))|\(Int(end.timeIntervalSince1970))"
@@ -539,7 +674,7 @@ struct FolderRow: Identifiable {
         guard let first = readings.first(where: { $0.date >= start && $0.date <= end }), let last = readings.last(where: { $0.date <= end && $0.date >= start }), first.date < last.date else { wentCache = (key, nil); return nil }
         let current = derived.saved.values.filter { !isExcluded($0.profile.path) && !gone.contains($0.profile.path) }
         let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, to: last.date, home: home)
-        let value = SpaceWent(from: first.date, diskChange: last.used - first.used, places: places)
+        let value = SpaceWent(from: first.date, to: last.date, diskChange: last.used - first.used, places: places)
         wentCache = (key, value)
         return value
     }
@@ -850,7 +985,7 @@ struct FolderRow: Identifiable {
         }
         if check.count > 40 { text += "- and \(check.count - 40) more in the app\n" }
         let kept = keptSummary
-        text += "\n## 5. Keep · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries, chat history and folders you chose to keep. Manage these inside their own apps.\n\n"
+        text += "\n## 5. Leave it, or ignored by you · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries and chat history (manage these inside their own apps), and folders you chose to ignore.\n\n"
         for m in keep + kept.kept { text += "- **\(m.profile.displayName)** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown")\n" }
         return text
     }

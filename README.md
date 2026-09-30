@@ -54,7 +54,7 @@ Context Cleaner answers those questions for the places where this data piles up,
 
 | | What to expect |
 |---|---|
-| **Answers** | Safe to remove, Rebuildable, Your call or Keep, ranked by what removing costs |
+| **Answers** | Safe to remove, Rebuildable, Your call or Leave it, ranked by what removing costs |
 | **Evidence** | Newest file change, read-only git status, whether git ignores the folder, open files, and Xcode's own simulator data |
 | **Inside folders** | Dated experiment builds and old downloads inside folders you still use, listed with dates and sizes |
 | **History** | Disk space every hour while open, folder sizes at every scan, and what grew in between |
@@ -63,6 +63,17 @@ Context Cleaner answers those questions for the places where this data piles up,
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
 ## What's new
+
+**0.15 makes it easier to know where you are and what everything means:**
+
+- **Back and Forward** (⌘[ and ⌘]) in the toolbar. Open a folder from the Overview, dig into it, and go back to exactly where you were.
+- **Every folder card shows its full path** and an **Up to** link to the folder it sits in. Subfolders are named for themselves, such as "project_dex_archive in Android build intermediates".
+- **Copy Move-to-Trash Command on every card.** It asks Finder to move the folder, so **Put Back** works and same-named folders don't collide. You run it; Context Cleaner never does.
+- **Biggest first** is the default order in Folders.
+- **One vocabulary.** **Ignore** is your choice, so the folder is never suggested. **Leave it** is the app's answer for app libraries you manage inside their own apps.
+- **How fast it's growing.** Where the space went shows each place's change and its rate per day.
+- **A free-space chart** that falls toward "Full" as your disk fills, and a shorter Overview.
+- **Everything else, explained.** Click it to see what it is, and **Look Inside** sizes the rest of your home folder, Library and Applications. It's read-only and saves nothing.
 
 **0.14 is a speed release.** Nothing it shows changed, only how fast it gets there:
 
@@ -92,7 +103,7 @@ flowchart LR
     D -->|nothing| E["Safe to remove"]
     D -->|a rebuild| F["Rebuildable"]
     D -->|maybe your only copy| G["Your call"]
-    D -->|breaks the app| H["Keep"]
+    D -->|breaks the app| H["Leave it"]
     E & F & G --> I["You remove it<br/>in Finder or Terminal"]
 ```
 
@@ -108,7 +119,7 @@ flowchart LR
 | 🟢 **Safe to remove** | Nothing | Idle package caches, Xcode DerivedData, iPhone install caches, build output from finished projects |
 | 🔵 **Rebuildable** | Waiting for the next build or download | Build output and caches you used this week |
 | 🟠 **Your call** | It may be the only copy of something | Recovery copies, scratch `work` folders, virtual machines, folders git tracks |
-| ⚪ **Keep** | Breaks the app | Chat history, app libraries |
+| ⚪ **Leave it** | Breaks the app | Chat history, app libraries |
 
 **Old items inside** are counted on their own. Codex worktrees and project `build`, `generated` and `work` folders keep one subfolder per build or experiment. When one of those folders is still in use, every subfolder untouched for 7 days or more is listed with its date and size (30 days for caches). On the Mac this was built on, that found 205 GiB, including a single 33 GiB experiment build from ten days earlier.
 
@@ -118,7 +129,7 @@ A few rules keep the answers honest:
 - **Git decides what's build output.** A `build` folder that git tracks may hold source, so it's your call.
 - **Finished worktrees say so.** A worktree that's merged, clean and quiet for two weeks offers `git worktree remove`, which git refuses if anything is uncommitted.
 - **Simulators are listed by name**, such as "iPhone 17 Pro · iOS 26.5", with size and last use from Xcode.
-- **Your choice wins.** Right-click any folder to **Always Keep This Folder** or **Stop Scanning This Folder**. Both move it to **Ignored**.
+- **Your choice wins.** Right-click any folder to **Ignore This Folder** (still scanned, never suggested) or **Stop Scanning This Folder**. Both move it to **Ignored**.
 
 ## A tour
 
@@ -205,7 +216,7 @@ From where the folder is, plus evidence. Each place in [What it looks at](#what-
 
 ### Can I stop it suggesting a folder?
 
-Yes. Right-click it and choose **Always Keep This Folder**, or **Stop Scanning This Folder** to leave it out of scans. Both are listed under **Ignored**, with their total.
+Yes. Right-click it and choose **Ignore This Folder**, or **Stop Scanning This Folder** to leave it out of scans. Both are listed under **Ignored**, with their total.
 
 ### Does it run in the background?
 

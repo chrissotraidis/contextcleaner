@@ -8,7 +8,14 @@ struct Classifier {
         var p = FolderProfile(path: path, name: url.lastPathComponent, category: .unknown, project: nil,
             associatedApp: "Unknown", explanation: "No specific classification is established for this location.",
             consequence: "Contents may be unique. Inspect before making any decision outside Context Cleaner.", evidence: [])
+        /// The recognized folder a path sits in, when the path is below it. Subfolders are named for themselves:
+        /// "project_dex_archive in Android build intermediates", never just their parent's name.
+        var recognizedRoot: String?
         func assign(_ category: FolderCategory, _ name: String, _ app: String, _ explanation: String, _ consequence: String) {
+            var name = name
+            if let root = recognizedRoot, root != path, path.hasPrefix(root + "/") {
+                name = String(path.dropFirst(root.count + 1)).split(separator: "/").joined(separator: " › ") + " in " + name
+            }
             p.category = category; p.name = name; p.associatedApp = app; p.explanation = explanation; p.consequence = consequence
             p.evidence.append(Evidence(label: "Association", value: app, level: .inferred, source: "Matched known directory structure; not proof of the historical writer."))
         }
@@ -34,10 +41,13 @@ struct Classifier {
             let app = path.contains("huggingface") ? "Hugging Face ecosystem" : "LM Studio"
             assign(.model, app + " downloads", app, "Models, datasets or runtime assets may be downloaded here.", "Review individual models and offline needs. Downloads may be large or unavailable later.")
         } else if path.hasSuffix("/android/app/.cxx") || path.contains("/android/app/.cxx/") {
+            recognizedRoot = String(path[..<path.range(of: "/android/app/.cxx")!.upperBound])
             assign(.buildOutput, "Android native compiler cache", "Gradle / CMake", "Generated native compilation output in an Android project.", "Recompilation may be expensive. Wait for builds to finish; folder structure alone does not prove inactivity.")
         } else if path.hasSuffix("/android/app/build/intermediates") || path.contains("/android/app/build/intermediates/") {
+            recognizedRoot = String(path[..<path.range(of: "/android/app/build/intermediates")!.upperBound])
             assign(.buildOutput, "Android build intermediates", "Android Gradle tooling", "Intermediate compilation and packaging data, separate from normal project source.", "Subsequent builds recreate intermediate output. Preserve any deliberately saved diagnostics you still need.")
         } else if containsPath(home + "/Library/Developer/Xcode/DerivedData", path) {
+            recognizedRoot = home + "/Library/Developer/Xcode/DerivedData"
             assign(.buildOutput, "Xcode DerivedData", "Xcode", "Compiler output, indexes and test results.", "Rebuilds and reindexing take time; test results may be evidence worth retaining.")
         } else {
             let cacheRules: [(String,String,String)] = [
@@ -46,6 +56,7 @@ struct Classifier {
                 ("Library/Caches/pip", "pip download cache", "pip"), ("Library/Caches/Homebrew", "Homebrew downloads", "Homebrew"),
                 ("Library/Caches/Yarn", "Yarn download cache", "Yarn"), ("Library/Caches/ms-playwright", "Playwright browsers", "Playwright")]
             if let rule = cacheRules.first(where: { containsPath(home + "/" + $0.0, path) }) {
+                recognizedRoot = home + "/" + rule.0
                 assign(.packageCache, rule.1, rule.2, "Downloaded dependencies or generated package assets in a recognized tool cache.", "Future commands may require fresh downloads or rebuilds. Avoid manual changes while the tool is running.")
             } else if containsPath(home + "/Downloads", path) {
                 assign(.download, "Downloads · " + url.lastPathComponent, "Multiple applications", "Downloaded files may include installers, documents and unique user data.", "Review each item; being in Downloads does not establish that another copy exists.")
@@ -70,7 +81,7 @@ struct Classifier {
             let gitFile = URL(fileURLWithPath: root + "/" + projectFolder + "/.git")
             if readMetadata, let data = MetadataReader.data(gitFile.path, preferences: preferences), let text = String(data: data, encoding: .utf8), text.hasPrefix("gitdir:"), let boundary = text.range(of: "/.git/worktrees/") {
                 let repoPath = String(text[..<boundary.lowerBound]).replacingOccurrences(of: "gitdir:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
-                p.project = URL(fileURLWithPath: repoPath).lastPathComponent
+                // A worktree is named for its own folder; the repository it came from is evidence.
                 p.evidence.append(Evidence(label: "Repository", value: repoPath, level: .observed, source: gitFile.path))
             }
             p.evidence.append(Evidence(label: "Workspace", value: projectFolder, level: .observed, source: "Path component; not proof of the process that wrote its contents"))

@@ -111,9 +111,10 @@ struct FolderTrend: View {
     private var series: [TracePoint] {
         var out: [TracePoint] = [], segment = 0, scope: String?
         for point in points where point.state != .cancelled {
-            guard let bytes = point.bytes, point.state == .measured else { segment += 1; scope = nil; continue }
-            if let scope, scope != point.scopeID { segment += 1 }
-            scope = point.scopeID
+            // A scan that couldn't read the folder says nothing about its size; the line carries on across it.
+            guard let bytes = point.bytes, point.state == .measured else { continue }
+            // One continuous line: every saved size of this folder, in order.
+            _ = scope
             out.append(TracePoint(id: point.id, date: point.date, bytes: bytes, segment: segment))
         }
         return out
@@ -154,7 +155,7 @@ struct FolderTrend: View {
                 }
                 .frame(height: 110)
                 .accessibilityLabel("Folder size from \(byteLabel(first.bytes)) to \(byteLabel(series.last!.bytes)) across \(series.count) scans")
-                Text(picked.map { "\($0.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel($0.bytes))" } ?? "\(series.count) scans since \(first.date.formatted(date: .abbreviated, time: .omitted)). Gaps mean the scan scope changed or a scan failed.")
+                Text(picked.map { "\($0.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel($0.bytes))" } ?? "\(series.count) scans since \(first.date.formatted(date: .abbreviated, time: .omitted)). Point at the chart for a reading.")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(2)
             }
         }
@@ -189,19 +190,16 @@ struct UsageChart: View {
                 else { levelChart(points, window: window) }
             }.frame(height: chartHeight)
             HStack(spacing: 10) {
-                Picker("Chart", selection: $perBucket) { Text("Space used").tag(false); Text("Change per \(range.bucketName)").tag(true) }
+                Picker("Chart", selection: $perBucket) { Text("Free space").tag(false); Text("Change per \(range.bucketName)").tag(true) }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
                 Spacer()
                 if span != nil { Button("Show All \(range.rawValue)") { model.chartSpan = nil }.controlSize(.small) }
                 else if !perBucket {
                     HStack(spacing: 10) {
-                        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(Color.accentColor).frame(width: 10, height: 10); Text("Used") }
-                        HStack(spacing: 4) { RoundedRectangle(cornerRadius: 2).fill(Color.stable.opacity(0.35)).frame(width: 10, height: 10); Text("Free") }
-                        Text("· Point for a reading. Click a \(range.bucketName) or drag to look closer.")
+                        Text("Lower means less free space. Point for a reading; click a \(range.bucketName) or drag to look closer.")
                     }.font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            grew(from: active.lowerBound, to: active.upperBound)
         }
         .onChange(of: model.chartRange) { _, _ in hover = nil }
         .onChange(of: perBucket) { _, _ in model.chartSpan = nil; hover = nil }
@@ -269,44 +267,38 @@ struct UsageChart: View {
         return ticks
     }
     private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
-        let axis = usageAxis(points.map(\.reading))
-        let capacity = axis.upperBound
-        // The capacity line carries its own label, so the top tick would only repeat it.
-        let ticks = [axis.lowerBound, (axis.lowerBound + axis.upperBound) / 2]
+        // Free space, from zero: the line falls as the disk fills, and zero is where it runs out.
+        let frees = points.map { Double($0.reading.free) / gibibyte }
+        let top = niceStep(max(frees.max() ?? 1, 1) * 1.2 / 4) * 4
+        let ticks = [0, top / 2, top]
         let picked = hover.flatMap { date in points.min { abs($0.reading.date.timeIntervalSince(date)) < abs($1.reading.date.timeIntervalSince(date)) } }
         let first = points.first?.reading.date ?? window.lowerBound
-        // Run from the first reading (or the range start) to the latest reading, so the line always reaches both edges.
         let lower = chartStartsLate(first, window: window) ? first : window.lowerBound
         let upper = max(points.last?.reading.date ?? window.upperBound, lower.addingTimeInterval(3600))
         let domain = lower...upper
-        let fill = LinearGradient(colors: [Color.accentColor.opacity(0.32), Color.accentColor.opacity(0.02)], startPoint: .top, endPoint: .bottom)
+        let fill = LinearGradient(colors: [Color.stable.opacity(0.35), Color.stable.opacity(0.04)], startPoint: .top, endPoint: .bottom)
         return Chart {
             if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.10)) }
-            RuleMark(y: .value("Capacity", capacity)).foregroundStyle(Color.secondary.opacity(0.45)).lineStyle(StrokeStyle(lineWidth: 0.75, dash: [3, 3]))
-                .annotation(position: .top, alignment: .trailing, spacing: 2) { Text("Capacity \(byteLabel(Int64(capacity * gibibyte)))").font(.caption).foregroundStyle(.secondary) }
             ForEach(points) { point in
-                let used = Double(point.reading.used) / gibibyte
-                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Floor", axis.lowerBound), yEnd: .value("Used", used), series: .value("Series", "used-\(point.segment)"))
+                let free = Double(point.reading.free) / gibibyte
+                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Zero", 0), yEnd: .value("Free", free), series: .value("Series", "free-\(point.segment)"))
                     .foregroundStyle(fill).interpolationMethod(.monotone)
-                // Free space: the band between used space and the disk's capacity.
-                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Used", used), yEnd: .value("Capacity", capacity), series: .value("Series", "free-\(point.segment)"))
-                    .foregroundStyle(Color.stable.opacity(0.13)).interpolationMethod(.monotone)
-                LineMark(x: .value("Time", point.reading.date), y: .value("Used", used), series: .value("Series", "line-\(point.segment)"))
-                    .foregroundStyle(Color.accentColor).lineStyle(StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
+                LineMark(x: .value("Time", point.reading.date), y: .value("Free", free), series: .value("Series", "line-\(point.segment)"))
+                    .foregroundStyle(Color.stable).lineStyle(StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
             }
             if let last = points.last, picked == nil {
-                let used = Double(last.reading.used) / gibibyte
-                PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor.opacity(0.2)).symbolSize(180)
-                PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(45)
-                    .annotation(position: .bottom, alignment: .trailing, spacing: 6) {
+                let free = Double(last.reading.free) / gibibyte
+                PointMark(x: .value("Time", last.reading.date), y: .value("Free", free)).foregroundStyle(Color.stable.opacity(0.25)).symbolSize(180)
+                PointMark(x: .value("Time", last.reading.date), y: .value("Free", free)).foregroundStyle(Color.stable).symbolSize(45)
+                    .annotation(position: .top, alignment: .trailing, spacing: 6) {
                         Text("\(byteLabel(last.reading.free)) free now").font(.caption.weight(.semibold)).monospacedDigit()
                             .padding(.horizontal, 6).padding(.vertical, 2).background(.regularMaterial, in: Capsule())
                     }
             }
             if let picked {
-                let used = Double(picked.reading.used) / gibibyte
+                let free = Double(picked.reading.free) / gibibyte
                 RuleMark(x: .value("Reading", picked.reading.date)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 1))
-                PointMark(x: .value("Reading", picked.reading.date), y: .value("Used", used)).foregroundStyle(Color.accentColor).symbolSize(60)
+                PointMark(x: .value("Reading", picked.reading.date), y: .value("Free", free)).foregroundStyle(Color.stable).symbolSize(60)
                     .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         VStack(spacing: 0) {
                             Text("\(byteLabel(picked.reading.free)) free").font(.caption.weight(.semibold)).monospacedDigit()
@@ -316,17 +308,17 @@ struct UsageChart: View {
             }
         }
         .chartXScale(domain: domain)
-        .chartYScale(domain: axis)
+        .chartYScale(domain: 0...top)
         .chartXAxis { AxisMarks(values: xTicks(domain)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
         .chartYAxis {
             AxisMarks(position: .leading, values: ticks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
-                AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } }
+                AxisValueLabel { if let v = value.as(Double.self) { Text(v == 0 ? "Full" : byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } }
             }
         }
         .chartLegend(.hidden)
         .chartOverlay { proxy in interactionLayer(proxy) }
-        .accessibilityLabel("Used disk space \(range.phrase). \(points.count) readings. The dashed line is capacity.")
+        .accessibilityLabel("Free disk space \(range.phrase). \(points.count) readings. The bottom of the chart means the disk is full.")
     }
     private func bucketChart(_ readings: [UsageReading], window: ClosedRange<Date>) -> some View {
         let buckets = usageBuckets(readings, window: window, component: range.bucket).filter { $0.delta != nil }
@@ -336,7 +328,8 @@ struct UsageChart: View {
             } else {
                 Chart {
                     ForEach(buckets) { bucket in
-                        BarMark(x: .value("When", bucket.start, unit: range.bucket), y: .value("Change", Double(bucket.delta!) / gibibyte))
+                        // Change in free space: bars below the line lost space, bars above it freed space.
+                        BarMark(x: .value("When", bucket.start, unit: range.bucket), y: .value("Change", -Double(bucket.delta!) / gibibyte))
                             .foregroundStyle(bucket.delta! > 0 ? Color.growing.gradient : Color.stable.gradient).cornerRadius(3)
                             .opacity(hover.map { bucket.start <= $0 && $0 < bucket.end } ?? true ? 1 : 0.45)
                     }
@@ -347,7 +340,7 @@ struct UsageChart: View {
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
                 .chartHover($hover)
                 .chartOverlay { proxy in interactionLayer(proxy) }
-                .accessibilityLabel("Change in used space per \(range.bucketName). Blue bars used more space, green bars freed space.")
+                .accessibilityLabel("Change in free space per \(range.bucketName). Blue bars below the line lost space, green bars above it freed space.")
             }
         }
     }
@@ -411,7 +404,8 @@ struct Dashboard: View {
     var body: some View {
         GeometryReader { geometry in
             // The chart grows into spare height on large windows; everything else keeps its size.
-            let chartHeight = min(300, max(136, geometry.size.height - 690))
+            // A steady chart height keeps the whole Overview on screen in a normal window.
+            let chartHeight = min(190, max(120, geometry.size.height - 720))
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 14) {
                     // Freshness and counts first, so you know how current everything below is.
@@ -515,13 +509,13 @@ struct DiskMap: View {
             list.append(Segment(id: "inside", title: "Old items", detail: "Builds and downloads untouched for a week or more", bytes: r.inside.bytes, color: .insideTint, action: { model.showFolders(filter: .inside) }))
             list.append(Segment(id: "rebuild", title: "Rebuildable", detail: "In use; costs a rebuild", bytes: r.rebuild.bytes, color: Verdict.rebuild.tint, action: { model.showFolders(filter: .rebuild) }))
             list.append(Segment(id: "check", title: "Your call", detail: "May be the only copy", bytes: r.check.bytes, color: Verdict.check.tint, action: { model.showFolders(filter: .check) }))
-            list.append(Segment(id: "keep", title: "Keep", detail: "Manage inside their apps", bytes: r.keep.bytes, color: Verdict.keep.tint, action: { model.showFolders(filter: .keep) }))
+            list.append(Segment(id: "keep", title: "Leave it", detail: "Manage inside their own apps", bytes: r.keep.bytes, color: Verdict.keep.tint, action: { model.showFolders(filter: .keep) }))
             tracked = r.safe.bytes + r.inside.bytes + r.rebuild.bytes + r.check.bytes + r.keep.bytes
             let kept = model.keptSummary
-            list.append(Segment(id: "kept", title: "Ignored by you", detail: "Kept or not scanned, never suggested", bytes: kept.keptBytes + kept.offBytes, color: .ignored, action: { model.search = ""; model.categoryFilter = nil; model.section = .kept }))
+            list.append(Segment(id: "kept", title: "Ignored by you", detail: "You chose to ignore or not scan these", bytes: kept.keptBytes + kept.offBytes, color: .ignored, action: { model.search = ""; model.categoryFilter = nil; model.section = .kept }))
             tracked += kept.keptBytes + kept.offBytes
         }
-        list.append(Segment(id: "other", title: "Everything else", detail: "macOS, apps and files outside the scanned folders", bytes: max(0, volume.used - tracked), color: Color.primary.opacity(0.16), action: nil))
+        list.append(Segment(id: "other", title: "Everything else", detail: "macOS, apps and folders it doesn't scan. Click to see what's in it", bytes: max(0, volume.used - tracked), color: Color.primary.opacity(0.16), action: { model.showingElsewhere = true }))
         list.append(Segment(id: "free", title: "Free", detail: "Space you have now", bytes: volume.free, color: .clear, outlined: true, action: nil))
         return list.filter { $0.bytes > 0 }
     }
@@ -593,30 +587,35 @@ struct WentPanel: View {
         Panel(title: "Where the space went", symbol: "chart.bar.xaxis", tint: .growing) {
             let active = model.chartActiveWindow
             if let went = model.spaceWent(from: active.lowerBound, to: active.upperBound), let change = went.diskChange {
-                let grew = Array(went.places.filter { $0.bytes >= 256 << 20 }.prefix(6))
-                let shrank = Array(went.places.filter { $0.bytes <= -(256 << 20) }.sorted { $0.bytes < $1.bytes }.prefix(3))
+                let grew = Array(went.places.filter { $0.bytes >= 256 << 20 }.prefix(5))
+                let shrank = Array(went.places.filter { $0.bytes <= -(256 << 20) }.sorted { $0.bytes < $1.bytes }.prefix(2))
                 let named = (grew + shrank).reduce(Int64(0)) { $0 + $1.bytes }
                 let outside = change - named
                 let largest = Double(max((grew + shrank).map { abs($0.bytes) }.max() ?? 1, abs(outside), 1))
-                Text((change >= 0 ? "\(byteLabel(change)) more used" : "\(byteLabel(-change)) freed") + " · " + model.chartWindowPhrase)
-                    .font(.callout).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(change >= 0 ? "\(byteLabel(change)) more used" : "\(byteLabel(-change)) freed").font(.callout.weight(.semibold)).foregroundStyle(change >= 0 ? Color.growing : Color.stable)
+                    Text("· about \(byteLabel(Int64(Double(abs(change)) / went.days))) a day · \(model.chartWindowPhrase)").font(.callout).foregroundStyle(.secondary)
+                }.monospacedDigit()
                 VStack(spacing: 2) {
-                    ForEach(grew + shrank) { place in placeRow(place, largest: largest) }
+                    ForEach(grew + shrank) { place in placeRow(place, largest: largest, days: went.days) }
                     if abs(outside) >= 1 << 30 {
-                        bar(outside >= 0 ? "Outside scanned folders" : "Freed outside scanned folders", detail: outside >= 0 ? "macOS, apps and other files" : "Including folders you removed", bytes: outside, largest: largest, open: false, opens: false)
+                        Button { model.showingElsewhere = true } label: {
+                            bar(outside >= 0 ? "Everything else" : "Freed elsewhere", detail: rateText(outside, days: went.days), bytes: outside, largest: largest, open: false, opens: false)
+                        }.buttonStyle(.plain).help("See what's outside the scanned folders")
                     }
                 }
-                Text("Click a place to see its folders. Change the range or select days on the chart above.")
+                Text("Click a place to see its folders. \"Everything else\" is outside the scanned folders; click it to look inside. The range follows the chart.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Needs disk readings from two times in this range. Context Cleaner notes disk space every hour while it's open.").font(.callout).foregroundStyle(.secondary)
             }
         }
     }
-    @ViewBuilder private func placeRow(_ place: SpaceChange, largest: Double) -> some View {
+    private func rateText(_ bytes: Int64, days: Double) -> String { "\(byteLabel(Int64(Double(abs(bytes)) / days))) a day" }
+    @ViewBuilder private func placeRow(_ place: SpaceChange, largest: Double, days: Double) -> some View {
         let open = selected == place.title
         Button { withAnimation(.easeOut(duration: 0.15)) { selected = open ? nil : place.title } } label: {
-            bar(place.title, detail: place.newFolders > 0 ? "\(place.newFolders) new \(place.newFolders == 1 ? "folder" : "folders")" : nil, bytes: place.bytes, largest: largest, open: open)
+            bar(place.title, detail: ([rateText(place.bytes, days: days)] + (place.newFolders > 0 ? ["\(place.newFolders) new"] : [])).joined(separator: " · "), bytes: place.bytes, largest: largest, open: open)
         }.buttonStyle(.plain).accessibilityHint(open ? "Hides its folders" : "Shows its folders")
         if open {
             VStack(alignment: .leading, spacing: 4) {
@@ -639,15 +638,14 @@ struct WentPanel: View {
         return HStack(spacing: 10) {
             Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(.tertiary).frame(width: 10)
                 .opacity(opens ? 1 : 0)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.callout).lineLimit(1)
-                if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-            }.frame(width: 180, alignment: .leading)
+            // One line per place: name, bar, change, and the rate beside it.
+            Text(title).font(.callout).lineLimit(1).frame(width: 170, alignment: .leading)
             GeometryReader { geo in
                 RoundedRectangle(cornerRadius: 3).fill(tint.opacity(0.85)).frame(width: max(3, geo.size.width * Double(abs(bytes)) / largest))
-            }.frame(height: 10)
-            Text(signedBytes(bytes)).font(.callout).monospacedDigit().foregroundStyle(tint).frame(width: 92, alignment: .trailing)
-        }.padding(.vertical, 5).padding(.horizontal, 4)
+            }.frame(height: 8)
+            Text(signedBytes(bytes)).font(.callout).monospacedDigit().foregroundStyle(tint).frame(width: 88, alignment: .trailing)
+            Text(detail ?? "").font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).frame(width: 118, alignment: .trailing)
+        }.padding(.vertical, 3).padding(.horizontal, 4)
             .background(open ? Color.secondary.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
     }
@@ -720,4 +718,65 @@ struct StartPanel: View {
 extension View {
     /// Shows the pointing hand over plain buttons that look like text.
     func pointingHand() -> some View { onHover { inside in if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() } } }
+}
+
+/// What "Everything else" is, and a read-only look inside it.
+struct ElsewhereView: View {
+    @ObservedObject var model: CleanerModel
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        let volumeUsed = model.volume?.used ?? 0
+        let other = model.everythingElseBytes
+        let found = model.elsewhere.compactMap(\.bytes).reduce(0, +)
+        let largest = Double(max(model.elsewhere.compactMap(\.bytes).max() ?? 1, max(other - found, 1)))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Everything else · \(byteLabel(other))").font(.title2.weight(.semibold))
+            Text("Space outside the places Context Cleaner scans: macOS and its system data, your apps, Photos, Mail and Messages, other users, local snapshots, and your own folders. It isn't ignored. Context Cleaner just doesn't scan it every time, because most of it isn't the kind of data that piles up.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if model.lookingElsewhere {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sizing your home folder, Library and Applications. This reads sizes only and can take a few minutes.").font(.callout); Spacer(); Button("Stop") { model.stopLookingElsewhere() } }
+            } else if model.elsewhere.isEmpty {
+                HStack {
+                    Button("Look Inside", systemImage: "magnifyingglass") { model.lookElsewhere() }.buttonStyle(.borderedProminent)
+                    Text("Sizes the top-level folders of your home, Library and Applications, leaving out what's already scanned. It reads sizes only and saves nothing.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if !model.elsewhere.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.elsewhere.prefix(40)) { item in
+                            HStack(spacing: 10) {
+                                Text(item.name).font(.callout).lineLimit(1).truncationMode(.middle).frame(width: 300, alignment: .leading).help(item.note.map { item.path + "\n" + $0 } ?? item.path)
+                                if let bytes = item.bytes {
+                                    GeometryReader { geo in RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.5)).frame(width: max(3, geo.size.width * Double(bytes) / largest)) }.frame(height: 10)
+                                    Text(byteLabel(bytes)).font(.callout).monospacedDigit().frame(width: 90, alignment: .trailing)
+                                } else {
+                                    Text(item.note ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Image(systemName: "folder") }
+                                    .buttonStyle(.borderless).help("Show in Finder")
+                            }
+                        }
+                        if other - found > 0 {
+                            HStack(spacing: 10) {
+                                Text("macOS, system data and the rest").font(.callout).frame(width: 300, alignment: .leading)
+                                    .help("What remains once the folders above are counted: macOS itself, system caches and logs, local Time Machine snapshots, other users, and anything these folders couldn't read.")
+                                GeometryReader { geo in RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.16)).frame(width: max(3, geo.size.width * Double(other - found) / largest)) }.frame(height: 10)
+                                Text(byteLabel(other - found)).font(.callout).monospacedDigit().frame(width: 90, alignment: .trailing)
+                                Color.clear.frame(width: 16)
+                            }
+                        }
+                    }
+                }.frame(maxHeight: 380)
+                Text("Measured \(model.elsewhereDate?.formatted(date: .omitted, time: .shortened) ?? "") · \(byteLabel(found)) found in these folders, of \(byteLabel(volumeUsed)) used on your disk. These sizes aren't saved or used in any answer.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Text("To have Context Cleaner track a folder here, add it with File › Add Folder to Scan.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                if !model.elsewhere.isEmpty && !model.lookingElsewhere { Button("Look Again") { model.lookElsewhere() } }
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(22).frame(width: 660)
+    }
 }

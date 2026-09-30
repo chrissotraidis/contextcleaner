@@ -173,7 +173,7 @@ import Foundation
         verdictModel.policy(buildProfile.path) { $0.isKept = true }
         check(verdictModel.rows.isEmpty && verdictModel.overview.safe.isEmpty, "a kept folder is never suggested")
         verdictModel.section = .kept
-        check(verdictModel.rows.first { $0.id == buildProfile.path }?.status == "Kept" && verdictModel.rows.allSatisfy { $0.policy.isKept || $0.policy.excluded }
+        check(verdictModel.rows.first { $0.id == buildProfile.path }?.status == "Ignored" && verdictModel.rows.allSatisfy { $0.policy.isKept || $0.policy.excluded }
               && verdictModel.keptSummary.keptBytes == 5_000_000_000 && verdictModel.keptSummary.kept.map(\.profile.path) == [buildProfile.path],
               "kept and turned-off folders share their own view, and kept ones have their own total")
         verdictModel.policy(buildProfile.path) { $0.isKept = false }
@@ -185,6 +185,21 @@ import Foundation
               && verdictModel.sortedRows(byName).map(\.id) == verdictModel.rows.sorted(using: byName).map(\.id)
               && verdictModel.sortedRows(byScore).map(\.id) == verdictModel.rows.sorted(using: byScore).map(\.id),
               "the cached table order matches a fresh sort, for the default order and after switching orders")
+        // Back and Forward: opening a folder from the Overview, then going up, can be walked back step by step.
+        let navModel = CleanerModel(home: home, dataRoot: storage.root)
+        navModel.records = verdictModel.records
+        navModel.section = .overview
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        navModel.open(buildProfile.path)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        navModel.selected = libraryProfile.path
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let afterClicks = navModel.backStack.count
+        navModel.goBack()
+        check(afterClicks == 1 && navModel.section == .overview && navModel.selected == nil && navModel.forwardStack.count == 1,
+              "Back returns to the Overview in one step; clicking between listed rows isn't a separate step")
+        navModel.goForward()
+        check(navModel.section == .locations && navModel.selected == libraryProfile.path, "Forward returns to the folder")
         let legacyPolicy = try? JSONDecoder().decode(LocationPolicy.self, from: Data(#"{"watched":false,"recurring":false,"expected":false,"excluded":false,"tags":[],"note":""}"#.utf8))
         check(legacyPolicy?.isKept == false, "preferences saved before Keep existed still load")
         // Gone folders are not problems to fix.

@@ -19,7 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .overview: return "How full your disk is, and what's filling it."
-        case .locations: return "Every folder Context Cleaner knows. Big folders you haven't used lately come first."
+        case .locations: return "Every folder Context Cleaner knows, biggest first."
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
         case .kept: return "Folders you keep out of suggestions, or don't scan at all. Context Cleaner leaves them alone."
         case .needsAttention: return "Folders a scan couldn't read, with a fix for each."
@@ -31,7 +31,7 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Your call", keep = "Keep", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
+    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Your call", keep = "Leave it", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
     var id: String { rawValue }
     var explanation: String {
         switch self {
@@ -162,8 +162,11 @@ struct VerdictCard: View {
     let advice: Advice
     let sizeSource: String?
     var neverUsed = false
+    /// The folder, when moving it to the Trash yourself is a sensible option.
+    var trashPath: String? = nil
     @State private var copied = false
     @State private var copiedTrash = false
+    @State private var copiedFolder = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(advice.verdict.title, systemImage: advice.verdict.symbol).font(.headline).foregroundStyle(advice.verdict.tint)
@@ -177,6 +180,12 @@ struct VerdictCard: View {
             Divider()
             Text("How to remove it yourself").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Text(advice.howTo).font(.callout).fixedSize(horizontal: false, vertical: true)
+            if let trashPath, advice.verdict != .keep {
+                Button(copiedFolder ? "Copied" : "Copy Move-to-Trash Command", systemImage: "doc.on.clipboard") {
+                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand([trashPath]), forType: .string); copiedFolder = true
+                }.controlSize(.small)
+                    .help("Copies a Terminal command that asks Finder to move this whole folder to the Trash. Put Back works, and Finder renames it if the Trash already has one with its name. Context Cleaner never runs it.")
+            }
             if let command = advice.command {
                 HStack(spacing: 8) {
                     Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
@@ -188,7 +197,7 @@ struct VerdictCard: View {
             }
         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
             .background(advice.verdict.tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
-            .onChange(of: advice) { _, _ in copied = false; copiedTrash = false }
+            .onChange(of: advice) { _, _ in copied = false; copiedTrash = false; copiedFolder = false }
     }
     /// The old items inside a busy folder: the part you can remove without disturbing current work.
     private var staleSection: some View {
@@ -210,7 +219,7 @@ struct VerdictCard: View {
                     .controlSize(.small).help("Selects these items in Finder. Press ⌘⌫ there to move them to the Trash yourself.")
                 Button(copiedTrash ? "Copied" : "Copy Move-to-Trash Command") {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(items.map(\.path)), forType: .string); copiedTrash = true
-                }.controlSize(.small).help("Copies a Terminal command that moves these items to the Trash, where you can still get them back. Context Cleaner never runs it.")
+                }.controlSize(.small).help("Copies a Terminal command that asks Finder to move these items to the Trash. Put Back works, and same-named items don't collide. Context Cleaner never runs it.")
             }
         }
     }
@@ -278,12 +287,12 @@ struct LocationActions: View {
         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
         Button("Scan Again") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
-        Button(policy.isKept ? "Stop Keeping" : "Always Keep This Folder") { model.policy(path) { $0.isKept.toggle() } }
-            .help(policy.isKept ? "Suggest this folder again when it looks safe to remove" : "Keep this folder out of every suggestion. It moves to Ignored.")
+        Button(policy.isKept ? "Stop Ignoring" : "Ignore This Folder") { model.policy(path) { $0.isKept.toggle() } }
+            .help(policy.isKept ? "Suggest this folder again when it looks safe to remove" : "Still scanned, but never suggested. It moves to Ignored.")
         Button(policy.isWatched ? "Stop Watching" : "Watch for Growth") { model.policy(path) { $0.isWatched.toggle() } }
             .help("Watched folders are scanned first and listed in Watchlist")
         Button(policy.expected ? "Warn Me When It Grows" : "Its Growth Is Normal") { model.policy(path) { $0.expected.toggle() } }
-            .help(policy.expected ? "Show it under Growing again" : "Stop listing it under Growing; it's marked Keep")
+            .help(policy.expected ? "Show it under Growing again" : "Stop listing it under Growing; its answer becomes Leave it")
         Button("Remind Me Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
         Button("Tags & Notes…") { model.editing = path }
         Divider()
@@ -299,7 +308,7 @@ struct SelectionActions: View {
         Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
         Button("Watch All") { for path in paths { model.policy(path) { $0.isWatched = true } } }
         Button("Stop Watching All") { for path in paths { model.policy(path) { $0.isWatched = false; $0.autoWatched = nil } } }
-        Button("Always Keep These Folders") { for path in paths { model.policy(path) { $0.isKept = true } }; model.selection = [] }
+        Button("Ignore These Folders") { for path in paths { model.policy(path) { $0.isKept = true } }; model.selection = [] }
         Divider()
         Button("Stop Scanning All") { for path in paths { model.policy(path) { $0.excluded = true } } }.disabled(model.running || model.inspecting)
         Button("Clear Selection") { model.selection = [] }

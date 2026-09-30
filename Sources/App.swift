@@ -8,7 +8,7 @@ struct TracePoint: Identifiable {
 }
 struct MainView: View {
     @ObservedObject var model: CleanerModel
-    @State var sortOrder = [KeyPathComparator(\FolderRow.idleScore, order: .reverse)]
+    @State var sortOrder = [KeyPathComparator(\FolderRow.bytes, order: .reverse)]
     var appearance: String { model.preferences.appearance ?? "System" }
     @State var simulatorSearch = ""
     @State var showingAccessHelp = false
@@ -64,6 +64,14 @@ struct MainView: View {
         .onChange(of: model.locationFilter) { _, _ in model.retainVisibleSelection() }
         .onChange(of: model.categoryFilter) { _, _ in model.retainVisibleSelection() }
         .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button { model.goBack() } label: { Label("Back", systemImage: "chevron.left") }
+                    .disabled(model.backStack.isEmpty).keyboardShortcut("[", modifiers: .command)
+                    .help(model.backTitle.map { "Back to \($0) (Command-[)" } ?? "Back")
+                Button { model.goForward() } label: { Label("Forward", systemImage: "chevron.right") }
+                    .disabled(model.forwardStack.isEmpty).keyboardShortcut("]", modifiers: .command)
+                    .help(model.forwardTitle.map { "Forward to \($0) (Command-])" } ?? "Forward")
+            }
             ToolbarItemGroup {
                 if model.running || model.discovering {
                     Button { model.cancelWork() } label: { Label("Stop Scan", systemImage: "stop.circle").labelStyle(.titleAndIcon) }
@@ -84,6 +92,7 @@ struct MainView: View {
             PolicyEditor(path: target.id, initial: model.preferences.policy(target.id)) { value in model.policy(target.id) { $0 = value }; model.editing = nil }
         }
         .sheet(isPresented: $model.showingScanPlan) { ScanPlanView(model: model) }
+        .sheet(isPresented: $model.showingElsewhere) { ElsewhereView(model: model) }
         .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
         .sheet(isPresented: Binding(get: { model.reportPreview != nil }, set: { if !$0 { model.reportPreview = nil } })) {
             ReportPreview(model: model, text: model.reportPreview ?? "")
@@ -166,7 +175,7 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
-                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "not counting kept", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
+                    VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "not counting ignored", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
                     ForEach(Verdict.allCases) { verdict in
                         let total = model.verdictTotal(verdict)
                         VerdictTile(title: verdict.shortTitle, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders")", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
@@ -203,7 +212,7 @@ struct MainView: View {
             }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
         }
     }
-    /// How Folders are ordered. The default puts big folders you haven't used lately first.
+    /// How Folders are ordered. The default is biggest first.
     private var orderName: String {
         switch sortOrder.first?.keyPath {
         case \FolderRow.idleScore: return "Biggest unused first"
@@ -218,17 +227,15 @@ struct MainView: View {
     }
     var orderMenu: some View {
         Menu {
-            Section("Where to start") {
-                orderButton("Biggest unused first", [KeyPathComparator(\FolderRow.idleScore, order: .reverse)])
-            }
+            orderButton("Biggest first", [KeyPathComparator(\FolderRow.bytes, order: .reverse)])
+            orderButton("Biggest unused first", [KeyPathComparator(\FolderRow.idleScore, order: .reverse)])
             Section("Other orders") {
-                orderButton("Biggest first", [KeyPathComparator(\FolderRow.bytes, order: .reverse)])
                 orderButton("Unused longest first", [KeyPathComparator(\FolderRow.unusedKey)])
                 orderButton("Name", [KeyPathComparator(\FolderRow.name)])
             }
         } label: { Label("Sort: " + orderName, systemImage: "arrow.up.arrow.down") }
             .menuStyle(.borderlessButton).fixedSize().font(.caption)
-            .help("Biggest unused first weighs each folder's size by how long it's gone unused, so big forgotten folders come first")
+            .help("Biggest first by default. Biggest unused first weighs size by how long a folder has gone unused.")
     }
     /// The Ignored view: folders you keep out of suggestions, and folders you don't scan, with their share of the disk.
     var keptBanner: some View {
@@ -238,7 +245,7 @@ struct MainView: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 if !summary.kept.isEmpty {
-                    VerdictTile(title: "Never suggested", value: byteLabel(summary.keptBytes), detail: "\(summary.kept.count) \(summary.kept.count == 1 ? "folder" : "folders") · \(share(summary.keptBytes)) of your disk", symbol: "hand.raised.fill", tint: .ignored, selected: false) {}
+                    VerdictTile(title: "Ignored, still scanned", value: byteLabel(summary.keptBytes), detail: "\(summary.kept.count) \(summary.kept.count == 1 ? "folder" : "folders") · \(share(summary.keptBytes)) of your disk", symbol: "hand.raised.fill", tint: .ignored, selected: false) {}
                         .allowsHitTesting(false)
                 }
                 if !summary.off.isEmpty {
@@ -246,7 +253,7 @@ struct MainView: View {
                         .allowsHitTesting(false)
                 }
             }
-            Text("Add a folder by right-clicking it: Always Keep This Folder, or Stop Scanning This Folder. Right-click it here to undo.")
+            Text("Right-click any folder and choose Ignore This Folder (still scanned, never suggested) or Stop Scanning This Folder. Right-click it here to undo.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 16).padding(.bottom, 8)
     }
@@ -278,7 +285,7 @@ struct MainView: View {
                 Group {
                     if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
                     else if row.policy.excluded { Label("Not scanned", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
-                    else if row.policy.isKept { Label("Never suggested", systemImage: "hand.raised.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.ignored) }
+                    else if row.policy.isKept { Label("Ignored", systemImage: "eye.slash.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.ignored) }
                     else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
                     else {
                         VStack(alignment: .leading, spacing: 2) {
@@ -439,14 +446,23 @@ struct MainView: View {
                 Text((locationHint(item.profile.path) ?? item.profile.project ?? item.profile.associatedApp) + " · " + item.profile.category.displayName).font(.caption).foregroundStyle(.secondary).help(item.profile.path)
             }
         }
+        // Exactly which folder this is, and the way back up.
+        VStack(alignment: .leading, spacing: 4) {
+            Text(abbreviatedPath(path)).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                .lineLimit(2).truncationMode(.head).textSelection(.enabled).help(path)
+            if let parent = model.knownParent(of: path) {
+                Button { model.selected = parent } label: { Label("Up to " + model.displayName(parent), systemImage: "arrow.turn.left.up").lineLimit(1) }
+                    .buttonStyle(.link).font(.caption).help(parent)
+            }
+        }
         HStack(alignment: .firstTextBaseline) {
             Text(item.state == .pending ? "Not scanned" : item.allocatedBytes.map(byteLabel) ?? "Size unknown").font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.5)
             Spacer()
             Button { model.policy(path) { $0.isWatched.toggle() } } label: { Label(policy.isWatched ? "Watching" : "Watch", systemImage: policy.isWatched ? "eye.fill" : "eye") }
                 .help(policy.isWatched ? "Remove from your watchlist" : "Add to your watchlist; scheduled checks look at it first")
-            Button { model.policy(path) { $0.isKept.toggle() } } label: { Label(policy.isKept ? "Kept" : "Keep", systemImage: policy.isKept ? "hand.raised.fill" : "hand.raised") }
-                .help(policy.isKept ? "Stop keeping: suggest it again when it looks safe to remove" : "Keep this folder: it's never suggested for removal and moves to Ignored")
+            Button { model.policy(path) { $0.isKept.toggle() } } label: { Label(policy.isKept ? "Ignored" : "Ignore", systemImage: policy.isKept ? "eye.slash.fill" : "eye.slash") }
+                .help(policy.isKept ? "Stop ignoring: suggest it again when it looks safe to remove" : "Ignore this folder: it's still scanned but never suggested, and it moves to Ignored")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
         (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -454,7 +470,8 @@ struct MainView: View {
         if model.gone.contains(path) {
             Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)
         } else if item.state == .measured || simulatorRoot || SimulatorLocations.deviceRoot(path) != nil {
-            VerdictCard(advice: model.adviceFor(item), sizeSource: sizeSourceText(item), neverUsed: item.scopeID == xcodeLiveScope)
+            VerdictCard(advice: model.adviceFor(item), sizeSource: sizeSourceText(item), neverUsed: item.scopeID == xcodeLiveScope,
+                        trashPath: [.virtualMachine, .simulator, .history, .appData].contains(item.profile.category) || item.profile.path.hasSuffix("/CoreSimulator/Devices") ? nil : path)
         }
         if simulatorRoot { simulatorDeviceList() }
         if item.state != .measured && item.state != .pending {

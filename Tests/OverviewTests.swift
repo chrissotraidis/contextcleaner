@@ -150,7 +150,13 @@ import Foundation
         let derivedAdvice = advice(for: derived, policy: LocationPolicy(), devices: [:], now: now)
         check(derivedAdvice.verdict == .rebuild && derivedAdvice.staleItems.map(\.name) == ["OldGame-abc"] && derivedAdvice.staleBytes == 3 * gib && derivedAdvice.staleDays == 30 && derivedAdvice.short == "3 GiB old inside",
               "a busy cache points at the old items inside it, ignoring tiny ones")
-        check(trashCommand(["/a/it's here", "/b"]) == #"mv -n '/a/it'\''s here' '/b' ~/.Trash/"#, "the Trash command quotes every path and never overwrites")
+        check(trashCommand(["/a/it's \"here\"", "/b\\c"]) == #"osascript -e 'tell application "Finder" to delete {POSIX file "/a/it'\''s \"here\"" as alias, POSIX file "/b\\c" as alias}' >/dev/null"#,
+              "the Trash command asks Finder, escaping each path for AppleScript and the whole script for the shell")
+        let dex = Classifier.profile(path: "/Users/x/GitHub/kr/android/app/build/intermediates/project_dex_archive", home: "/Users/x", readMetadata: false)
+        let parent = Classifier.profile(path: "/Users/x/GitHub/kr/android/app/build/intermediates", home: "/Users/x", readMetadata: false)
+        check(dex.displayName == "kr · project_dex_archive in Android build intermediates" && parent.displayName == "kr · Android build intermediates" && dex.project == "kr",
+              "a subfolder is named for itself, and the project is its own folder")
+        check(abbreviatedPath(NSHomeDirectory() + "/GitHub/x") == "~/GitHub/x" && abbreviatedPath("/Applications") == "/Applications", "paths show the home folder as ~")
         check(usedPercentText(0.995) == "99.5%" && usedPercentText(0.5) == "50%" && usedPercentText(0.9999) == "99.9%" && usedPercentText(1) == "100%", "a nearly full disk never reads as 100% used")
         check(friendlyApp("prl_vm_app") == "Parallels Desktop" && friendlyApp("node") == "node", "processes get the names people know")
         check(advice(for: folder("/fixture/Library/Application Support/OpenEmu", .appData, lastChanged: 200), policy: LocationPolicy(), devices: [:], now: now).verdict == .keep, "app libraries are kept however old")

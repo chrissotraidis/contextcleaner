@@ -190,14 +190,13 @@ struct UsageChart: View {
                 else { levelChart(points, window: window) }
             }.frame(height: chartHeight)
             HStack(spacing: 10) {
-                Picker("Chart", selection: $perBucket) { Text("Free space").tag(false); Text("Change per \(range.bucketName)").tag(true) }
+                Picker("Chart", selection: $perBucket) { Text("Space used").tag(false); Text("Change per \(range.bucketName)").tag(true) }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
                 Spacer()
                 if span != nil { Button("Show All \(range.rawValue)") { model.chartSpan = nil }.controlSize(.small) }
-                else if !perBucket {
-                    HStack(spacing: 10) {
-                        Text("Lower means less free space. Point for a reading; click a \(range.bucketName) or drag to look closer.")
-                    }.font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                else {
+                    Text(perBucket ? "Up: that \(range.bucketName) used more space. Down: space came back." : "The line climbs as your disk fills. Point for a reading; click a \(range.bucketName) or drag to look closer.")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
                 }
             }
         }
@@ -208,9 +207,9 @@ struct UsageChart: View {
         VStack(alignment: .leading, spacing: 2) {
             if let change {
                 let delta = change.delta
-                // Said in free space, the number people act on: "251 GiB less free space".
+                // One framing everywhere: space used. Up and blue means the disk filled; down and green means space came back.
                 (Text(delta == 0 ? "No change" : byteLabel(abs(delta))).foregroundColor(delta > 0 ? .growing : delta < 0 ? .stable : .primary)
-                 + Text(delta > 0 ? " less free space" : delta < 0 ? " more free space" : " in free space").foregroundColor(.primary))
+                 + Text(delta > 0 ? " more space used" : delta < 0 ? " of space freed" : " in space used").foregroundColor(.primary))
                     .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
             } else {
                 Text(span == nil ? "Not enough readings yet" : "No readings in this span").font(.title2.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
@@ -222,11 +221,12 @@ struct UsageChart: View {
         if let hover {
             if perBucket {
                 let bucket = usageBuckets(model.usage, window: range.window(endingAt: model.usage.last?.date ?? Date()), component: range.bucket).first { $0.start <= hover && hover < $0.end }
-                guard let bucket else { return " " }
-                let label = bucket.start.formatted(range == .day ? .dateTime.weekday(.abbreviated).hour() : .dateTime.weekday(.wide).month(.abbreviated).day())
-                return label + " · " + (bucket.delta.map { signedBytes($0) + " used" } ?? "no readings")
-            }
-            if let reading = model.usage.min(by: { abs($0.date.timeIntervalSince(hover)) < abs($1.date.timeIntervalSince(hover)) }) {
+                // Hours and days without readings say nothing rather than "no readings".
+                if let bucket, let delta = bucket.delta {
+                    let label = bucket.start.formatted(range == .day ? .dateTime.weekday(.abbreviated).hour() : .dateTime.weekday(.wide).month(.abbreviated).day())
+                    return label + " · " + usedChangeText(delta)
+                }
+            } else if let reading = model.usage.min(by: { abs($0.date.timeIntervalSince(hover)) < abs($1.date.timeIntervalSince(hover)) }) {
                 return "\(reading.date.formatted(date: .abbreviated, time: .shortened)) · \(byteLabel(reading.used)) used · \(byteLabel(reading.free)) free"
             }
         }
@@ -236,7 +236,7 @@ struct UsageChart: View {
         let when = span.map { "\($0.lowerBound.formatted(.dateTime.month(.abbreviated).day().hour())) – \($0.upperBound.formatted(.dateTime.month(.abbreviated).day().hour()))" }
             ?? (startsLate ? "Since \(firstReading!.formatted(.dateTime.weekday(.abbreviated).day().hour())), the first reading" : "Last " + range.rawValue)
         guard let change else { return when + (span == nil ? " · Disk space is noted every hour while the app is open" : " · Drag across the blue area instead") }
-        return "\(when) · free space \(byteLabel(change.from.free)) → \(byteLabel(change.to.free))"
+        return "\(when) · used \(byteLabel(change.from.used)) → \(byteLabel(change.to.used)) · \(byteLabel(change.to.free)) free"
     }
     /// True when readings begin well after the range starts. The chart then starts at the first reading
     /// instead of drawing an empty stretch.
@@ -267,80 +267,85 @@ struct UsageChart: View {
         return ticks
     }
     private func levelChart(_ points: [UsagePoint], window: ClosedRange<Date>) -> some View {
-        // Free space, from zero: the line falls as the disk fills, and zero is where it runs out.
-        let frees = points.map { Double($0.reading.free) / gibibyte }
-        let top = niceStep(max(frees.max() ?? 1, 1) * 1.2 / 4) * 4
-        let ticks = [0, top / 2, top]
+        // Used space, climbing toward the dashed Full line as the disk fills. Straight lines between readings:
+        // smoothing overshoots the jumps that removing a big folder makes.
+        let axis = usageAxis(points.map(\.reading))
+        let full = axis.upperBound
+        let ticks = [axis.lowerBound, (axis.lowerBound + full) / 2, full]
         let picked = hover.flatMap { date in points.min { abs($0.reading.date.timeIntervalSince(date)) < abs($1.reading.date.timeIntervalSince(date)) } }
         let first = points.first?.reading.date ?? window.lowerBound
         let lower = chartStartsLate(first, window: window) ? first : window.lowerBound
         let upper = max(points.last?.reading.date ?? window.upperBound, lower.addingTimeInterval(3600))
         let domain = lower...upper
-        let fill = LinearGradient(colors: [Color.stable.opacity(0.35), Color.stable.opacity(0.04)], startPoint: .top, endPoint: .bottom)
+        let fill = LinearGradient(colors: [Color.growing.opacity(0.35), Color.growing.opacity(0.05)], startPoint: .top, endPoint: .bottom)
         return Chart {
             if let span { RectangleMark(xStart: .value("From", span.lowerBound), xEnd: .value("To", span.upperBound)).foregroundStyle(Color.accentColor.opacity(0.10)) }
+            RuleMark(y: .value("Full", full)).foregroundStyle(Color.secondary.opacity(0.6)).lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
             ForEach(points) { point in
-                let free = Double(point.reading.free) / gibibyte
-                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Zero", 0), yEnd: .value("Free", free), series: .value("Series", "free-\(point.segment)"))
-                    .foregroundStyle(fill).interpolationMethod(.monotone)
-                LineMark(x: .value("Time", point.reading.date), y: .value("Free", free), series: .value("Series", "line-\(point.segment)"))
-                    .foregroundStyle(Color.stable).lineStyle(StrokeStyle(lineWidth: 2.25, lineCap: .round, lineJoin: .round)).interpolationMethod(.monotone)
+                let used = Double(point.reading.used) / gibibyte
+                AreaMark(x: .value("Time", point.reading.date), yStart: .value("Base", axis.lowerBound), yEnd: .value("Used", used), series: .value("Series", "used-\(point.segment)"))
+                    .foregroundStyle(fill).interpolationMethod(.linear)
+                LineMark(x: .value("Time", point.reading.date), y: .value("Used", used), series: .value("Series", "line-\(point.segment)"))
+                    .foregroundStyle(Color.growing).lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)).interpolationMethod(.linear)
             }
             if let last = points.last, picked == nil {
-                let free = Double(last.reading.free) / gibibyte
-                PointMark(x: .value("Time", last.reading.date), y: .value("Free", free)).foregroundStyle(Color.stable.opacity(0.25)).symbolSize(180)
-                PointMark(x: .value("Time", last.reading.date), y: .value("Free", free)).foregroundStyle(Color.stable).symbolSize(45)
-                    .annotation(position: .top, alignment: .trailing, spacing: 6) {
+                let used = Double(last.reading.used) / gibibyte
+                PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.growing.opacity(0.25)).symbolSize(180)
+                PointMark(x: .value("Time", last.reading.date), y: .value("Used", used)).foregroundStyle(Color.growing).symbolSize(45)
+                    .annotation(position: .bottom, alignment: .trailing, spacing: 6) {
                         Text("\(byteLabel(last.reading.free)) free now").font(.caption.weight(.semibold)).monospacedDigit()
                             .padding(.horizontal, 6).padding(.vertical, 2).background(.regularMaterial, in: Capsule())
                     }
             }
             if let picked {
-                let free = Double(picked.reading.free) / gibibyte
+                let used = Double(picked.reading.used) / gibibyte
                 RuleMark(x: .value("Reading", picked.reading.date)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 1))
-                PointMark(x: .value("Reading", picked.reading.date), y: .value("Free", free)).foregroundStyle(Color.stable).symbolSize(60)
-                    .annotation(position: .top, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                PointMark(x: .value("Reading", picked.reading.date), y: .value("Used", used)).foregroundStyle(Color.growing).symbolSize(60)
+                    .annotation(position: .bottom, spacing: 6, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
                         VStack(spacing: 0) {
-                            Text("\(byteLabel(picked.reading.free)) free").font(.caption.weight(.semibold)).monospacedDigit()
+                            Text("\(byteLabel(picked.reading.used)) used · \(byteLabel(picked.reading.free)) free").font(.caption.weight(.semibold)).monospacedDigit()
                             Text(picked.reading.date.formatted(.dateTime.weekday(.abbreviated).hour().minute())).font(.caption2).foregroundStyle(.secondary)
                         }.padding(.horizontal, 6).padding(.vertical, 3).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
                     }
             }
         }
         .chartXScale(domain: domain)
-        .chartYScale(domain: 0...top)
+        .chartYScale(domain: axis)
         .chartXAxis { AxisMarks(values: xTicks(domain)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
         .chartYAxis {
             AxisMarks(position: .leading, values: ticks) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
-                AxisValueLabel { if let v = value.as(Double.self) { Text(v == 0 ? "Full" : byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } }
+                AxisValueLabel { if let v = value.as(Double.self) { Text(v == full ? "Full" : byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } }
             }
         }
         .chartLegend(.hidden)
         .chartOverlay { proxy in interactionLayer(proxy) }
-        .accessibilityLabel("Free disk space \(range.phrase). \(points.count) readings. The bottom of the chart means the disk is full.")
+        .accessibilityLabel("Space used \(range.phrase). \(points.count) readings. The dashed line at the top means the disk is full.")
     }
     private func bucketChart(_ readings: [UsageReading], window: ClosedRange<Date>) -> some View {
         let buckets = usageBuckets(readings, window: window, component: range.bucket).filter { $0.delta != nil }
+        // Start at the first hour or day with readings, so days before tracking began aren't drawn as empty.
+        let first = buckets.first?.start ?? window.lowerBound
+        let domain = (chartStartsLate(first, window: window) ? first : window.lowerBound)...window.upperBound
         return Group {
             if buckets.isEmpty {
                 placeholder("No complete \(range.bucketName)s of readings yet. They build up while the app is open.")
             } else {
                 Chart {
                     ForEach(buckets) { bucket in
-                        // Change in free space: bars below the line lost space, bars above it freed space.
-                        BarMark(x: .value("When", bucket.start, unit: range.bucket), y: .value("Change", -Double(bucket.delta!) / gibibyte))
+                        // Change in space used: bars above the line used space, bars below it freed space.
+                        BarMark(x: .value("When", bucket.start, unit: range.bucket), y: .value("Change", Double(bucket.delta!) / gibibyte))
                             .foregroundStyle(bucket.delta! > 0 ? Color.growing.gradient : Color.stable.gradient).cornerRadius(3)
                             .opacity(hover.map { bucket.start <= $0 && $0 < bucket.end } ?? true ? 1 : 0.45)
                     }
                     RuleMark(y: .value("No change", 0)).foregroundStyle(Color.secondary.opacity(0.5)).lineStyle(StrokeStyle(lineWidth: 0.75))
                 }
-                .chartXScale(domain: window)
-                .chartXAxis { AxisMarks(values: .stride(by: xStride(window).0, count: xStride(window).1)) { _ in AxisValueLabel(format: xFormat(window)).font(.caption).foregroundStyle(Color.secondary) } }
+                .chartXScale(domain: domain)
+                .chartXAxis { AxisMarks(values: .stride(by: xStride(domain).0, count: xStride(domain).1)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
                 .chartHover($hover)
                 .chartOverlay { proxy in interactionLayer(proxy) }
-                .accessibilityLabel("Change in free space per \(range.bucketName). Blue bars below the line lost space, green bars above it freed space.")
+                .accessibilityLabel("Change in space used per \(range.bucketName). Blue bars above the line used space, green bars below it freed space.")
             }
         }
     }
@@ -731,10 +736,10 @@ struct ElsewhereView: View {
         let largest = Double(max(model.elsewhere.compactMap(\.bytes).max() ?? 1, max(other - found, 1)))
         VStack(alignment: .leading, spacing: 12) {
             Text("Everything else · \(byteLabel(other))").font(.title2.weight(.semibold))
-            Text("Space outside the places Context Cleaner scans: macOS and its system data, your apps, Photos, Mail and Messages, other users, local snapshots, and your own folders. It isn't ignored. Context Cleaner just doesn't scan it every time, because most of it isn't the kind of data that piles up.")
+            Text("Space outside the places Context Cleaner scans: macOS and its system data, your apps, Photos, Mail and Messages, local snapshots, and your own folders. Look Inside sizes it; open any row to see what's in it. Projects say whether they're backed up.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if model.lookingElsewhere {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sizing your home folder, Library and Applications. This reads sizes only and can take a few minutes.").font(.callout); Spacer(); Button("Stop") { model.stopLookingElsewhere() } }
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sizing your home folder, Library and Applications. It reads sizes only and can take a few minutes. If macOS asks about other apps' data, sizing waits for your answer.").font(.callout).fixedSize(horizontal: false, vertical: true); Spacer(); Button("Stop") { model.stopLookingElsewhere() } }
             } else if model.elsewhere.isEmpty {
                 HStack {
                     Button("Look Inside", systemImage: "magnifyingglass") { model.lookElsewhere() }.buttonStyle(.borderedProminent)
@@ -743,32 +748,23 @@ struct ElsewhereView: View {
             }
             if !model.elsewhere.isEmpty {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(model.elsewhere.prefix(40)) { item in
-                            HStack(spacing: 10) {
-                                Text(item.name).font(.callout).lineLimit(1).truncationMode(.middle).frame(width: 300, alignment: .leading).help(item.note.map { item.path + "\n" + $0 } ?? item.path)
-                                if let bytes = item.bytes {
-                                    GeometryReader { geo in RoundedRectangle(cornerRadius: 3).fill(Color.secondary.opacity(0.5)).frame(width: max(3, geo.size.width * Double(bytes) / largest)) }.frame(height: 10)
-                                    Text(byteLabel(bytes)).font(.callout).monospacedDigit().frame(width: 90, alignment: .trailing)
-                                } else {
-                                    Text(item.note ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Image(systemName: "folder") }
-                                    .buttonStyle(.borderless).help("Show in Finder")
-                            }
-                        }
+                    LazyVStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.elsewhere.prefix(40)) { item in ElsewhereRow(model: model, item: item, depth: 0, largest: largest) }
                         if other - found > 0 {
-                            HStack(spacing: 10) {
-                                Text("macOS, system data and the rest").font(.callout).frame(width: 300, alignment: .leading)
-                                    .help("What remains once the folders above are counted: macOS itself, system caches and logs, local Time Machine snapshots, other users, and anything these folders couldn't read.")
-                                GeometryReader { geo in RoundedRectangle(cornerRadius: 3).fill(Color.primary.opacity(0.16)).frame(width: max(3, geo.size.width * Double(other - found) / largest)) }.frame(height: 10)
-                                Text(byteLabel(other - found)).font(.callout).monospacedDigit().frame(width: 90, alignment: .trailing)
-                                Color.clear.frame(width: 16)
+                            HStack(spacing: 8) {
+                                Color.clear.frame(width: 12)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("macOS, system data and the rest").font(.callout)
+                                    Text("macOS itself, system caches and logs, local Time Machine snapshots, other users, and anything these folders couldn't read.").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                                SizeBar(fraction: Double(other - found) / largest, color: Color.primary.opacity(0.16))
+                                Text(byteLabel(other - found)).font(.callout).monospacedDigit().frame(width: 84, alignment: .trailing)
+                                Color.clear.frame(width: 18)
                             }
                         }
-                    }
-                }.frame(maxHeight: 380)
-                Text("Measured \(model.elsewhereDate?.formatted(date: .omitted, time: .shortened) ?? "") · \(byteLabel(found)) found in these folders, of \(byteLabel(volumeUsed)) used on your disk. These sizes aren't saved or used in any answer.")
+                    }.padding(.trailing, 8)
+                }.frame(minHeight: 260, maxHeight: 460)
+                Text("Measured \(model.elsewhereDate?.formatted(date: .omitted, time: .shortened) ?? "") · \(byteLabel(found)) found in these folders, of \(byteLabel(volumeUsed)) used on your disk. These sizes aren't saved or used in any answer. Backed up means pushed as of the last fetch.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
@@ -777,6 +773,94 @@ struct ElsewhereView: View {
                 if !model.elsewhere.isEmpty && !model.lookingElsewhere { Button("Look Again") { model.lookElsewhere() } }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
-        }.padding(22).frame(width: 660)
+        }.padding(22).frame(width: 780)
+    }
+}
+private struct SizeBar: View {
+    let fraction: Double
+    var color: Color = Color.secondary.opacity(0.5)
+    var body: some View {
+        GeometryReader { geo in RoundedRectangle(cornerRadius: 3).fill(color).frame(width: max(3, geo.size.width * min(1, max(0, fraction)))) }
+            .frame(width: 150, height: 10)
+    }
+}
+/// One place in Everything else. Opening it sizes what's inside, one level at a time.
+private struct ElsewhereRow: View {
+    @ObservedObject var model: CleanerModel
+    let item: ElsewhereItem
+    let depth: Int
+    let largest: Double
+    @State private var open = false
+    @State private var copied = false
+    private var openable: Bool { item.isFolder && item.bytes != nil }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(open ? 90 : 0)).frame(width: 12).opacity(openable ? 1 : 0).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                    if let line = subtitle { Text(line).font(.caption).foregroundStyle(tint).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                if let bytes = item.bytes {
+                    SizeBar(fraction: Double(bytes) / largest)
+                    Text(byteLabel(bytes)).font(.callout).monospacedDigit().frame(width: 84, alignment: .trailing)
+                }
+                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Image(systemName: "folder") }
+                    .buttonStyle(.borderless).help("Show in Finder").accessibilityLabel("Show in Finder")
+            }
+            .padding(.leading, CGFloat(depth) * 18)
+            .contentShape(Rectangle())
+            .onTapGesture { toggle() }
+            .help(item.path + (subtitle.map { "\n" + $0 } ?? ""))
+            .accessibilityElement(children: .contain)
+            .accessibilityAction(named: open ? "Close" : "Open") { toggle() }
+            if open { inside }
+        }
+    }
+    private func toggle() {
+        guard openable else { return }
+        withAnimation(.snappy(duration: 0.18)) { open.toggle() }
+        if open { model.openElsewhere(item.path) }
+    }
+    /// What it is, whether it's backed up, when it was last used, and what's scanned apart.
+    private var subtitle: String? {
+        var parts: [String] = []
+        if let note = item.note { parts.append(note) }
+        else if let backup = item.backup { parts.append(backup.line) }
+        else if let about = item.about { parts.append(about) }
+        if item.backup != nil || depth > 0, let used = item.lastUsed { parts.append("last used " + ageText(used)) }
+        if item.scannedInside > 0 { parts.append("+\(byteLabel(item.scannedInside)) scanned") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+    private var tint: Color {
+        guard let backup = item.backup else { return .secondary }
+        return backup.removable ? .stable : .caution
+    }
+    @ViewBuilder private var inside: some View {
+        let indent = CGFloat(depth + 1) * 18 + 20
+        if model.elsewhereOpening.contains(item.path) {
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sizing what's inside…").font(.caption).foregroundStyle(.secondary) }.padding(.leading, indent)
+        } else if let children = model.elsewhereChildren[item.path] {
+            let idle = idleBackedUp(children)
+            if !idle.isEmpty {
+                let bytes = idle.reduce(Int64(0)) { $0 + $1.totalBytes }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "checkmark.icloud").foregroundStyle(Color.stable)
+                    Text("\(idle.count) \(idle.count == 1 ? "project is" : "projects are") backed up and unchanged for a month: \(byteLabel(bytes)) with build folders. Nothing in \(idle.count == 1 ? "it" : "them") exists only on this Mac.")
+                        .font(.caption).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button(copied ? "Copied" : "Copy Move-to-Trash Command") {
+                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(idle.map(\.path)), forType: .string); copied = true
+                    }.controlSize(.small).help("Copies a Terminal command that moves these projects to the Trash through Finder. Context Cleaner doesn't run it.")
+                }.padding(8).background(Color.stable.opacity(0.08), in: RoundedRectangle(cornerRadius: 6)).padding(.leading, indent)
+            }
+            if children.isEmpty {
+                Text("Nothing else inside. What's here is scanned separately.").font(.caption).foregroundStyle(.secondary).padding(.leading, indent)
+            }
+            let biggest = Double(max(children.compactMap(\.bytes).max() ?? 1, 1))
+            ForEach(children.prefix(30)) { child in AnyView(ElsewhereRow(model: model, item: child, depth: depth + 1, largest: biggest)) }
+            if children.count > 30 { Text("and \(children.count - 30) smaller items").font(.caption).foregroundStyle(.secondary).padding(.leading, indent) }
+        }
     }
 }

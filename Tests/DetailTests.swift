@@ -66,6 +66,41 @@ import Foundation
         let aliasProfile = Classifier.profile(path: parentAlias.appendingPathComponent("nested").path, home: base.path, readMetadata: false)
         check(TreeMeasure.measure(aliasProfile, preferences: Preferences(), cancellation: Cancellation(), activity: [], activityAvailable: false).state == .excluded, "scan cannot traverse a symbolic-link ancestor")
         check(try Data(contentsOf: plistURL) == metadata && Data(contentsOf: root.appendingPathComponent("nested/first.log")) == payload, "original metadata and payload remain byte-identical")
+        // Backup status read from real fixture repositories: read-only git, no network.
+        func git(_ dir: URL, _ arguments: [String]) {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-C", dir.path, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "commit.gpgsign=false"] + arguments
+            var environment = ProcessInfo.processInfo.environment; environment["GIT_CONFIG_GLOBAL"] = "/dev/null"; environment["GIT_CONFIG_NOSYSTEM"] = "1"
+            process.environment = environment; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+            try! process.run(); process.waitUntilExit(); precondition(process.terminationStatus == 0, "fixture git " + arguments.joined(separator: " "))
+        }
+        let remote = base.appendingPathComponent("remote.git"), repo = base.appendingPathComponent("repo")
+        try fm.createDirectory(at: remote, withIntermediateDirectories: true); try fm.createDirectory(at: repo, withIntermediateDirectories: true)
+        git(remote, ["init", "--bare", "-q"]); git(repo, ["init", "-q", "-b", "main"])
+        try writeNew(Data("build/\nprivate/\n".utf8), to: repo.appendingPathComponent(".gitignore"))
+        try writeNew(payload, to: repo.appendingPathComponent("source.txt"))
+        git(repo, ["add", "."]); git(repo, ["commit", "-q", "-m", "first"])
+        check(!readRepoBackup(repo.path).backedUp && readRepoBackup(repo.path).summary.hasPrefix("Not backed up: no remote"), "a repository with no remote is not backed up")
+        git(repo, ["remote", "add", "origin", remote.path]); git(repo, ["push", "-q", "-u", "origin", "main"])
+        try fm.createDirectory(at: repo.appendingPathComponent("build"), withIntermediateDirectories: true); try writeNew(payload, to: repo.appendingPathComponent("build/out.o"))
+        let pushed = readRepoBackup(repo.path)
+        check(pushed.fullyBackedUp && pushed.lastCommit != nil, "a pushed, clean repository is backed up, ignored build output aside")
+        try fm.createDirectory(at: repo.appendingPathComponent("private"), withIntermediateDirectories: true); try writeNew(payload, to: repo.appendingPathComponent("private/save.dat"))
+        let withPrivate = readRepoBackup(repo.path)
+        check(withPrivate.backedUp && !withPrivate.fullyBackedUp && withPrivate.unkeptIgnored == ["private/"], "ignored private files are named as not backed up")
+        try writeNew(payload, to: repo.appendingPathComponent("notes.txt"))
+        check(readRepoBackup(repo.path).changes == 1 && !readRepoBackup(repo.path).backedUp, "an untracked file means not backed up")
+        git(repo, ["add", "notes.txt"]); git(repo, ["commit", "-q", "-m", "notes"])
+        let ahead = readRepoBackup(repo.path)
+        check(ahead.unpushed == 1 && ahead.changes == 0 && ahead.summary == "Not backed up: 1 commit not pushed", "a commit that isn't pushed is counted")
+        let tree = base.appendingPathComponent("tree")
+        git(repo, ["worktree", "add", "-q", "-b", "fixture/tree", tree.path])
+        let clean = readRepoBackup(tree.path)
+        check(clean.isWorktree && clean.branch == "fixture/tree" && clean.unpushed == 1 && clean.fullyBackedUp, "a clean worktree counts only its own branch, and its commits stay in the repository")
+        let main = readRepoBackup(repo.path)
+        check(main.worktrees == 1 && !main.removable && main.lastActivity != nil, "the repository knows a worktree uses it, so it's never offered for the Trash")
+        try writeNew(payload, to: tree.appendingPathComponent("draft.txt"))
+        check(!readRepoBackup(tree.path).backedUp, "a worktree with a new file is not backed up")
         print("SUCCESS: \(count) detail checks; all fixtures preserved at \(base.path)")
     }
 }

@@ -119,6 +119,10 @@ struct UsageChange {
     let to: UsageReading
     var delta: Int64 { to.used - from.used }
 }
+/// A change in space used, said the way the charts draw it: "+12.4 GiB used", "5 GiB freed".
+func usedChangeText(_ delta: Int64) -> String {
+    delta > 0 ? "+" + byteLabel(delta) + " used" : delta < 0 ? byteLabel(-delta) + " freed" : "No change"
+}
 /// Change in used space between the first and last readings inside a span.
 func usageChange(_ readings: [UsageReading], from: Date, to: Date) -> UsageChange? {
     let inside = readings.filter { $0.date >= from && $0.date <= to }
@@ -155,7 +159,8 @@ func usageAxis(_ readings: [UsageReading]) -> ClosedRange<Double> {
     let gib = 1_073_741_824.0
     guard let total = readings.map(\.total).max(), total > 0, let minUsed = readings.map(\.used).min() else { return 0...1 }
     let capacity = Double(total) / gib, low = Double(minUsed) / gib
-    let lower = max(0, low - max(2 * (capacity - low), capacity * 0.05))
+    // Room below the lowest reading equal to the room above it, so a week's change fills the chart.
+    let lower = max(0, low - max(capacity - low, capacity * 0.03))
     let step = niceStep((capacity - lower) / 4)
     return max(0, floor(lower / step) * step)...capacity
 }
@@ -412,7 +417,9 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
     // A folder you're still using may hold old items that tools recreate. Point at those instead of the whole folder.
     let rebuildable: Bool = {
         switch m.profile.category {
-        case .packageCache, .installCache, .buildOutput, .debugSymbols, .model: return true
+        case .packageCache, .installCache, .buildOutput, .debugSymbols: return true
+        // DiffusionBee keeps the pictures you made next to its models; those don't come back.
+        case .model: return m.profile.associatedApp != "DiffusionBee"
         case .workspace: return ["/build", "/generated", "/intermediates", "/.cxx"].contains { m.profile.path.hasSuffix($0) }
         default: return false
         }
@@ -458,7 +465,7 @@ private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActi
         if let idle, idle < 7 { return "Used " + ageText(a.lastUsed, now: now) }
         switch m.profile.category {
         case .backup: return "May be the only copy"
-        case .workspace: return m.profile.path.hasSuffix("/work") ? "Scratch, not in git" : "Project files"
+        case .workspace: return m.profile.path.contains("/.codex/scratch/") ? "Left by a Codex task" : m.profile.path.hasSuffix("/work") ? "Scratch, not in git" : "Project files"
         case .model: return "Re-download to restore"
         case .download: return "Your downloads"
         case .virtualMachine: return "Whole computer"
@@ -583,13 +590,17 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     case .workspace:
         let rebuildable = ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) }
         if rebuildable { return projectBuild() }
+        if path.contains("/.codex/scratch/") { return Advice(verdict: .check, reason: "Left behind by a Codex task: builds, downloads, logs or test copies. Codex doesn't clean these up.", howTo: "If the task is done, look for anything you made by hand, then move the folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch space for \(project): logs, test installs and experiments. It can also hold files you made by hand.", howTo: "Remove the experiment folders you're done with. Keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Files in the \(project) project. Some may be your only copy.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     case .backup:
+        if path.contains("/.codex/scratch/") { return Advice(verdict: .check, reason: "A backup a Codex task saved, such as app data copied off a device. It may be your only copy.", howTo: "Check you have these files somewhere else, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Codex copied this before a risky change. Once that work is safely in the project, you don't need it.", howTo: "Open the project and check the change is there. Then move this copy to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .history:
         return Advice(verdict: .keep, reason: "Your past conversations. Removing them loses them for good.", howTo: "Archive old conversations in the app instead.", command: nil, lastUsed: m.latestModifiedAt)
     case .model:
+        if m.profile.associatedApp == "Ollama" { return Advice(verdict: .check, reason: "Language models you downloaded with Ollama. You can get them again, but they're large.", howTo: "In Terminal, list them with ollama list, then remove one you don't use with ollama rm and its name.", command: "ollama list", lastUsed: m.latestModifiedAt) }
+        if m.profile.associatedApp == "DiffusionBee" { return Advice(verdict: .check, reason: "DiffusionBee's image models and the pictures it made. Models can be downloaded again; your pictures may be the only copy.", howTo: "Remove models you don't use in DiffusionBee's settings. Save pictures you want to keep first.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "AI models you downloaded. You can get them again, but they're large.", howTo: "Remove models you don't use from inside \(m.profile.associatedApp).", command: nil, lastUsed: m.latestModifiedAt)
     case .appData:
         let app = m.profile.associatedApp
@@ -600,6 +611,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         let app = m.profile.associatedApp
         let docker = app == "Docker Desktop"
         let howTo = docker ? "In Docker Desktop, remove images and containers you no longer need, or lower the disk limit in Settings › Resources. This command shows how much is reclaimable:"
+            : app == "Android Emulator" ? "In Android Studio, open Device Manager, then delete the device. That removes its disk and snapshots."
             : app == "Parallels Desktop" ? "In Parallels Desktop's Control Center, delete old snapshots or use Reclaim Disk Space to shrink it. To remove the whole machine, right-click it › Remove."
             : "Remove or shrink it inside \(app)."
         let running = m.processes.isEmpty ? "" : " It's running right now."
@@ -617,6 +629,7 @@ func locationHint(_ path: String) -> String? {
     if let i = parts.firstIndex(of: "worktrees"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex worktree " + parts[i + 1] }
     if let i = parts.firstIndex(of: "GitHub"), i + 1 < parts.count { return "GitHub/" + parts[i + 1] }
     if let i = parts.firstIndex(of: "backups"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex backup" }
+    if let i = parts.firstIndex(of: "scratch"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex scratch" }
     return nil
 }
 /// Paths that no longer exist on disk. Only reads metadata.
@@ -742,6 +755,189 @@ func readProjectActivity(_ root: String) -> ProjectActivity {
     let uncommitted = gitOutput(root, ["status", "--porcelain", "--untracked-files=no"]).map { $0.isEmpty ? 0 : min(999, $0.split(separator: "\n").count) }
     return ProjectActivity(root: root, isWorktree: isWorktree, mainRepository: mainRepository, registered: registered, branch: branch,
                            defaultBranch: defaultBranch.map { $0.hasPrefix("origin/") ? String($0.dropFirst(7)) : $0 }, lastCommit: lastCommit, merged: merged, uncommitted: uncommitted)
+}
+
+// MARK: - Everything else
+
+/// One place outside the scanned folders, measured on request. Never saved, never part of any answer.
+struct ElsewhereItem: Identifiable {
+    var id: String { path }
+    let path: String
+    let name: String
+    let bytes: Int64?
+    let note: String?
+    /// What this place is, when Context Cleaner knows: "Ollama's models".
+    var about: String? = nil
+    /// Newest change inside it, scanned folders included.
+    var modified: Date? = nil
+    /// Scanned folders inside it, counted with those: a project's build folders, for example.
+    var scannedInside: Int64 = 0
+    /// For a git checkout: whether everything in it is on a remote.
+    var backup: RepoBackup? = nil
+    var isFolder = false
+    /// Newest change in the scanned folders inside it, such as a project's builds.
+    var scannedModified: Date? = nil
+    /// Last sign of use. For a git checkout: its last commit, checkout or build. Otherwise the newest change inside.
+    var lastUsed: Date? { backup.map { [$0.lastActivity, scannedModified].compactMap { $0 }.max() } ?? modified }
+    /// Its whole size, including the scanned folders inside it.
+    var totalBytes: Int64 { (bytes ?? 0) + scannedInside }
+}
+/// Whether a git checkout is backed up, read without network: every local commit is on a remote
+/// (as of the last fetch), and nothing is uncommitted or stashed. Ignored files are listed apart,
+/// because git never keeps them anywhere.
+struct RepoBackup: Equatable {
+    var hasRemote: Bool
+    var unpushed: Int?
+    var changes: Int?
+    var stashes: Int
+    /// Ignored items that aren't build output or caches, such as private inputs, saves or .env files.
+    var unkeptIgnored: [String]
+    var lastCommit: Date?
+    /// A worktree shares its repository's branches: removing its folder keeps every commit on its branch.
+    var isWorktree = false
+    var branch: String? = nil
+    /// Other worktrees that share this repository. Removing the repository would break them.
+    var worktrees = 0
+    /// Last sign of work: the newest commit on any local branch, or the last checkout or pull.
+    /// File dates don't count; git and worktrees touch .git every day.
+    var lastActivity: Date? = nil
+    /// Clean worktree on a branch: nothing in the folder exists only there, though its commits may not be pushed.
+    var keptByRepository: Bool { isWorktree && changes == 0 && branch != nil }
+    var backedUp: Bool { (hasRemote && unpushed == 0 && changes == 0 && stashes == 0) || keptByRepository }
+    var fullyBackedUp: Bool { backedUp && unkeptIgnored.isEmpty }
+    /// Backed up, and no other worktree depends on it.
+    var removable: Bool { fullyBackedUp && worktrees == 0 }
+    var summary: String {
+        if keptByRepository, unpushed != 0 || !hasRemote, let branch {
+            let commits = unpushed.map { "its \($0) unpushed \($0 == 1 ? "commit stays" : "commits stay")" } ?? "its commits stay"
+            return withIgnored("Clean worktree: " + commits + " in the main repository on " + branch)
+        }
+        if !hasRemote { return "Not backed up: no remote, so it's only on this Mac" }
+        guard let unpushed, let changes else { return "Backup unknown: git didn't answer in time" }
+        var missing: [String] = []
+        if unpushed > 0 { missing.append("\(unpushed) \(unpushed == 1 ? "commit" : "commits") not pushed") }
+        if changes > 0 { missing.append("\(changes) \(changes == 1 ? "file" : "files") not committed") }
+        if stashes > 0 { missing.append("\(stashes) \(stashes == 1 ? "stash" : "stashes")") }
+        if !missing.isEmpty { return "Not backed up: " + missing.joined(separator: ", ") }
+        return withIgnored("Backed up: pushed and clean")
+    }
+    private func withIgnored(_ text: String) -> String {
+        guard !unkeptIgnored.isEmpty else { return text }
+        let shown = unkeptIgnored.prefix(3).joined(separator: ", ")
+        let more = unkeptIgnored.count > 3 ? " and \(unkeptIgnored.count - 3) more" : ""
+        return text + ". Not in git: " + shown + more
+    }
+    /// The summary plus anything that depends on it.
+    var line: String { worktrees > 0 ? summary + " · \(worktrees) \(worktrees == 1 ? "worktree uses" : "worktrees use") it" : summary }
+}
+/// Counts uncommitted files and lists ignored items worth keeping, from git status --porcelain --ignored.
+func parseRepoStatus(_ porcelain: String) -> (changes: Int, unkeptIgnored: [String]) {
+    var changes = 0, ignored: [String] = []
+    for line in porcelain.split(separator: "\n") where line.count > 3 {
+        let path = String(line.dropFirst(3))
+        if line.hasPrefix("!! ") { if !rebuildableName(path) { ignored.append(path) } } else { changes += 1 }
+    }
+    return (changes, ignored)
+}
+/// Ignored items that builds, package managers or the system recreate: nothing lost if they go.
+func rebuildableName(_ path: String) -> Bool {
+    let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
+    let parts = trimmed.split(separator: "/").map(String.init)
+    // Anything inside a build or cache folder is rebuildable too: .pytest_cache/CACHEDIR.TAG.
+    if parts.count > 1, parts.dropLast().contains(where: { rebuildableName($0) }) { return true }
+    let name = parts.last ?? trimmed
+    let names: Set<String> = ["build", "generated", "node_modules", ".cxx", ".gradle", "DerivedData", "dist", "out", "target", ".build",
+        "__pycache__", ".venv", "venv", ".next", ".nuxt", ".DS_Store", ".cache", ".pytest_cache", ".mypy_cache", ".ruff_cache", "Pods",
+        "intermediates", ".idea", ".swiftpm", "xcuserdata", ".turbo", "coverage", ".expo", ".parcel-cache", ".tox", ".dart_tool",
+        ".externalNativeBuild", "local.properties", "Thumbs.db", ".vscode", "bin", "obj", ".eslintcache", ".sass-cache", ".svelte-kit", ".kotlin"]
+    // Dated or per-platform build folders: build-ios-device, build_host, cmake-build-debug, macos-build.
+    let buildLike = ["build-", "build_", "cmake-build"].contains { name.hasPrefix($0) } || name.hasSuffix("-build")
+    return buildLike || names.contains(name) || [".log", ".pyc", ".o", ".egg-info", ".xcuserstate", ".swp"].contains { name.hasSuffix($0) }
+}
+/// Reads whether a checkout is backed up. Read-only git, no fetch.
+/// A repository counts commits on all its branches; a worktree only its own, since the branches outlive its folder.
+func readRepoBackup(_ root: String) -> RepoBackup {
+    var st = stat()
+    let isWorktree = lstat(root + "/.git", &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+    let remotes = gitOutput(root, ["remote"]) ?? ""
+    let scope = isWorktree ? ["HEAD"] : ["--branches"]
+    let unpushed = gitOutput(root, ["rev-list", "--count"] + scope + ["--not", "--remotes"]).flatMap { Int($0) }
+    // "matching" lists ignored folders without walking into them: fast even on huge build trees.
+    let status = gitOutput(root, ["status", "--porcelain", "--ignored=matching", "--untracked-files=normal"], timeout: 20).map(parseRepoStatus)
+    let stashes = isWorktree ? 0 : gitOutput(root, ["stash", "list"]).map { $0.isEmpty ? 0 : $0.split(separator: "\n").count } ?? 0
+    let lastCommit = gitOutput(root, ["log", "-1", "--format=%ct"]).flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
+    let branch = isWorktree ? gitOutput(root, ["symbolic-ref", "--short", "-q", "HEAD"]).flatMap { $0.isEmpty ? nil : $0 } : nil
+    let worktrees = isWorktree ? 0 : max(0, (gitOutput(root, ["worktree", "list", "--porcelain"]) ?? "").components(separatedBy: "\nworktree ").count - 1)
+    // A worktree's own HEAD and checkouts only; the repository's newest commit is anywhere in its family.
+    let newestBranch = isWorktree ? nil : gitOutput(root, ["for-each-ref", "--sort=-committerdate", "--count=1", "--format=%(committerdate:unix)", "refs/heads"]).flatMap(Double.init)
+    let lastCheckout = gitOutput(root, ["log", "-g", "-1", "--format=%ct"]).flatMap(Double.init)
+    let activity = [newestBranch, lastCheckout, lastCommit?.timeIntervalSince1970].compactMap { $0 }.max().map { Date(timeIntervalSince1970: $0) }
+    return RepoBackup(hasRemote: !remotes.isEmpty, unpushed: unpushed, changes: status?.changes, stashes: stashes, unkeptIgnored: status?.unkeptIgnored ?? [], lastCommit: lastCommit,
+                      isWorktree: isWorktree, branch: branch, worktrees: worktrees, lastActivity: activity)
+}
+/// Projects that are fully backed up and haven't been touched in a while: the ones you can remove and clone again.
+func idleBackedUp(_ items: [ElsewhereItem], now: Date = Date(), days: Double = 30) -> [ElsewhereItem] {
+    items.filter { item in
+        guard item.backup?.removable == true, let used = item.lastUsed else { return false }
+        return now.timeIntervalSince(used) >= days * 86400
+    }
+}
+/// What a place outside the scanned folders is, in a sentence, when Context Cleaner knows.
+func elsewhereAbout(_ path: String, home: String) -> String? {
+    let relative = path.hasPrefix(home + "/") ? String(path.dropFirst(home.count + 1)) : path
+    let known: [String: String] = [
+        "/Applications": "Apps for everyone on this Mac. Uninstall ones you don't use.",
+        "Applications": "Apps installed just for you. Uninstall ones you don't use.",
+        "GitHub": "Your projects: source, git history and assets. Open it to see which are backed up. Build folders inside are scanned separately.",
+        ".codex": "Codex's own folder. Open it to see its parts. Conversations, scratch, backups and worktree builds are scanned separately.",
+        ".codex/worktrees": "Codex's copies of your projects, one per task. Open it to see which are backed up. Their build folders are scanned separately.",
+        ".ollama": "Ollama. Its models are scanned separately; this is the rest.",
+        ".gemini": "Gemini CLI and Antigravity: settings, history, browser profiles and copies of Antigravity's data.",
+        ".gemini/antigravity-backup": "A backup of Antigravity's data. If Antigravity works, you likely don't need it.",
+        ".android": "Android Emulator settings and logs. The virtual devices are scanned separately.",
+        "Library/Android": "The Android SDK: system images, NDKs, platforms and build tools. Remove old versions in Android Studio › Settings › Android SDK.",
+        "Library/Android/sdk": "The Android SDK. Remove old versions in Android Studio › Settings › Android SDK.",
+        "Library/Android/sdk/system-images": "Emulator system images. Remove ones no device uses in Android Studio's SDK settings.",
+        "Library/Android/sdk/ndk": "Android NDK versions. Projects download the one they need, so old ones can go.",
+        "models": "Model files you downloaded yourself.",
+        "ComfyUI-Shared": "ComfyUI models and the images it made.",
+        ".rustup": "Rust toolchains. rustup toolchain list shows them; rustup toolchain uninstall removes one.",
+        ".cargo": "Rust packages and tools installed with cargo.",
+        ".nuget": ".NET's package cache. dotnet nuget locals all --clear empties it; builds download again.",
+        ".m2": "Maven's Java package cache. Builds download again what they need.",
+        ".npm": "npm's own folder. Its download cache and npx installs are scanned separately.",
+        ".bun": "Bun and its package cache.",
+        ".nvm": "Node.js versions installed with nvm. nvm ls shows them; nvm uninstall removes one.",
+        ".pyenv": "Python versions installed with pyenv.",
+        ".conda": "Conda environments. conda env list shows them.",
+        "miniconda3": "Miniconda and its environments. conda env list shows them.",
+        "anaconda3": "Anaconda and its environments. conda env list shows them.",
+        "miniforge3": "Miniforge and its environments. conda env list shows them.",
+        ".docker": "Docker settings and build data. Docker's disk is scanned separately.",
+        ".cache": "Caches from command-line tools, which recreate them. The uv, Hugging Face and LM Studio caches are scanned separately.",
+        ".vscode": "VS Code extensions and settings.",
+        ".cursor": "Cursor extensions and settings.",
+        ".gradle": "Gradle's home. Its caches are scanned separately; the rest is wrapper downloads and daemons.",
+        "Movies": "Your movies and screen recordings, including iMovie and Final Cut libraries.",
+        "Pictures": "Your pictures, including the Photos library.",
+        "Music": "Your music, and GarageBand or Logic projects.",
+        "Documents": "Your documents. Codex task outputs inside are scanned separately.",
+        "Desktop": "Files on your desktop.",
+        "Library/Containers": "Data for App Store apps and other sandboxed apps.",
+        "Library/Group Containers": "Data apps share with each other, such as Office and Messages.",
+        "Library/Application Support": "Data for apps. The apps Context Cleaner knows are scanned separately.",
+        "Library/Caches": "App caches. Apps recreate them; quit an app before removing its cache.",
+        "Library/Developer": "Xcode data not scanned separately, such as archives and device logs.",
+        "Library/Developer/Xcode/Archives": "Builds you archived for release. Keep the ones you may need to read crash reports.",
+        "Library/Messages": "Your Messages history and attachments.",
+        "Library/Mail": "Your Mail messages and attachments.",
+        "Library/Logs": "Logs from apps and macOS.",
+    ]
+    if let text = known[relative] { return text }
+    let name = relative.split(separator: "/").last.map(String.init) ?? relative
+    if name.lowercased().contains("backup") { return "Backups you made. Before removing one, make sure the files are somewhere else too." }
+    if name.hasSuffix(".app") { return "An app. Uninstall it if you don't use it." }
+    return nil
 }
 
 /// Share of the disk in use, never rounded up to a full disk: 18 GiB free on 3.6 TiB reads "99.5%", not "100%".

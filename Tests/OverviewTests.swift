@@ -229,6 +229,61 @@ import Foundation
         let workspace = FolderProfile(path: "/fixture/project/build", name: "build", category: .workspace, project: "Project A", associatedApp: "Compiler", explanation: "", consequence: "", evidence: [])
         check(workspace.displayName == "Project A · build", "generic build folders identify their project")
         check(FolderCategory.workspace.rawValue == "Mixed workspace" && FolderCategory.workspace.displayName == "Project files", "plain labels preserve stored category identifiers")
+        // 0.16: one framing for the charts, space used.
+        check(usedChangeText(5 * gib).hasPrefix("+") && usedChangeText(5 * gib).hasSuffix(" used") && usedChangeText(-5 * gib).hasSuffix(" freed") && !usedChangeText(-5 * gib).contains("−") && usedChangeText(0) == "No change",
+              "chart changes read as space used: up is +used, down is freed")
+        // 0.16: git backup status for projects outside the scanned folders.
+        let parsed = parseRepoStatus(" M a.swift\n?? notes.txt\n!! build/\n!! private/\n!! .env\n!! app.log\n!! android/app/.cxx/\n")
+        check(parsed.changes == 2 && parsed.unkeptIgnored == ["private/", ".env"], "status counts uncommitted files and lists only ignored items worth keeping")
+        let clean = RepoBackup(hasRemote: true, unpushed: 0, changes: 0, stashes: 0, unkeptIgnored: [], lastCommit: nil)
+        check(clean.fullyBackedUp && clean.summary == "Backed up: pushed and clean", "a pushed, clean checkout is backed up")
+        var privateInputs = clean; privateInputs.unkeptIgnored = ["private/"]
+        check(privateInputs.backedUp && !privateInputs.fullyBackedUp && privateInputs.summary == "Backed up: pushed and clean. Not in git: private/", "ignored private files keep a pushed checkout from counting as fully backed up")
+        check(rebuildableName("build-ios-device/") && rebuildableName("cmake-build-debug/") && rebuildableName("macos-build/") && rebuildableName(".pytest_cache/CACHEDIR.TAG") && !rebuildableName("ref/") && !rebuildableName("ref/game.iso") && !rebuildableName("artifacts/"), "dated and per-platform build folders are build output; reference files are not")
+        var worktree = clean; worktree.isWorktree = true; worktree.branch = "codex/fix"; worktree.unpushed = 3
+        check(worktree.fullyBackedUp && worktree.summary == "Clean worktree: its 3 unpushed commits stay in the main repository on codex/fix", "a clean worktree on a branch loses nothing when its folder goes")
+        var dirtyWorktree = worktree; dirtyWorktree.changes = 2
+        check(!dirtyWorktree.backedUp && dirtyWorktree.summary.hasPrefix("Not backed up"), "a worktree with uncommitted changes is not backed up")
+        var detached = worktree; detached.branch = nil
+        check(!detached.backedUp, "a detached worktree with unpushed commits is not backed up")
+        var ahead = clean; ahead.unpushed = 2; ahead.stashes = 1
+        check(!ahead.backedUp && ahead.summary == "Not backed up: 2 commits not pushed, 1 stash", "unpushed commits and stashes are named")
+        var local = clean; local.hasRemote = false
+        check(!local.backedUp && local.summary.hasPrefix("Not backed up: no remote"), "a checkout with no remote is only on this Mac")
+        var unknownStatus = clean; unknownStatus.changes = nil
+        check(!unknownStatus.backedUp && unknownStatus.summary.hasPrefix("Backup unknown"), "a git timeout is never read as backed up")
+        func place(_ name: String, _ backup: RepoBackup?, daysAgo: Double) -> ElsewhereItem {
+            var e = ElsewhereItem(path: "/fixture/GitHub/" + name, name: name, bytes: 10 * gib, note: nil); e.backup = backup; e.modified = now.addingTimeInterval(-daysAgo * 86400); e.scannedInside = 2 * gib; return e
+        }
+        func used(_ backup: RepoBackup, daysAgo: Double) -> RepoBackup { var b = backup; b.lastActivity = now.addingTimeInterval(-daysAgo * 86400); return b }
+        var shared = used(clean, daysAgo: 90); shared.worktrees = 2
+        var touched = place("touched", used(clean, daysAgo: 90), daysAgo: 0); touched.modified = now
+        let idle = idleBackedUp([place("old", used(clean, daysAgo: 60), daysAgo: 60), place("recent", used(clean, daysAgo: 3), daysAgo: 3), place("private", used(privateInputs, daysAgo: 90), daysAgo: 90),
+                                 place("plain", nil, daysAgo: 90), place("shared", shared, daysAgo: 90), touched], now: now)
+        check(idle.map(\.name) == ["old", "touched"] && idle.first?.totalBytes == 12 * gib,
+              "only backed-up projects idle for a month are offered, with their build folders; file dates in .git don't count as use")
+        check(!shared.removable && shared.line.hasSuffix("2 worktrees use it"), "a repository other worktrees use is never offered for the Trash")
+        check(elsewhereAbout("/Users/x/.ollama", home: "/Users/x") != nil && elsewhereAbout("/Users/x/Library/Android", home: "/Users/x") != nil && elsewhereAbout("/Users/x/.gemini", home: "/Users/x") != nil,
+              "known AI and Android folders are explained")
+        check(elsewhereAbout("/Users/x/GoldenPadBackups", home: "/Users/x")?.contains("Backups") == true && elsewhereAbout("/Users/x/zzz", home: "/Users/x") == nil, "backup folders are recognized by name; unknown ones get no made-up text")
+        // 0.16: Codex scratch, Ollama and Android emulators are scanned.
+        check(Coverage.entries.contains { $0.relativePath == ".codex/scratch" && $0.kind == .children } && Coverage.entries.contains { $0.relativePath == ".ollama/models" } && Coverage.entries.contains { $0.relativePath == ".android/avd" },
+              "coverage includes Codex scratch, Ollama models and Android emulators")
+        let scratch = Classifier.profile(path: "/Users/x/.codex/scratch/padforge-mac-home", home: "/Users/x", readMetadata: false)
+        let scratchBackup = Classifier.profile(path: "/Users/x/.codex/scratch/iphone-kartpad-backup-20260929", home: "/Users/x", readMetadata: false)
+        check(scratch.category == .workspace && scratch.associatedApp == "Codex scratch" && scratchBackup.category == .backup, "scratch folders are named for the task; backups in scratch are backups")
+        check(Classifier.profile(path: "/Users/x/.ollama/models", home: "/Users/x", readMetadata: false).name == "Ollama models"
+              && Classifier.profile(path: "/Users/x/.android/avd/KartPad_API_36_ARM64.avd", home: "/Users/x", readMetadata: false).name == "KartPad API 36 ARM64 emulator", "Ollama models and emulators get plain names")
+        var scratchItem = item("/Users/x/.codex/scratch/kp061", .workspace, 63 * gib); scratchItem.profile = scratch; scratchItem.latestModifiedAt = now.addingTimeInterval(-20 * 86400)
+        let scratchAdvice = advice(for: scratchItem, policy: LocationPolicy(), devices: [:], now: now)
+        check(scratchAdvice.verdict == .check && scratchAdvice.short == "Left by a Codex task" && scratchAdvice.reason.contains("Codex task"), "scratch is your call, said plainly")
+        check(locationHint("/Users/x/.codex/scratch/kp061") == "Codex scratch", "scratch folders say where they live")
+        var bee = item("/Users/x/.diffusionbee", .model, 70 * gib); bee.profile = Classifier.profile(path: "/Users/x/.diffusionbee", home: "/Users/x", readMetadata: false); bee.latestModifiedAt = now.addingTimeInterval(-40 * 86400)
+        bee.contents = FolderContents(children: [ChildSummary(name: "images", directory: true, identity: "1", bytes: 60 * gib, files: 10, modifiedAt: now.addingTimeInterval(-40 * 86400))],
+                                      fileTypes: [], listedChildren: 1, retainedLimit: 512, omittedEntries: 0)
+        var hub = bee; hub.profile = Classifier.profile(path: "/Users/x/.cache/huggingface", home: "/Users/x", readMetadata: false)
+        check(advice(for: bee, policy: LocationPolicy(), devices: [:], now: now).staleItems.isEmpty && !advice(for: hub, policy: LocationPolicy(), devices: [:], now: now).staleItems.isEmpty,
+              "pictures made in DiffusionBee are never listed as old items; old downloaded models still are")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

@@ -35,6 +35,19 @@ struct Classifier {
             assign(.debugSymbols, url.lastPathComponent, "Xcode", "Debugging support for the device and OS version named by this directory.", "Old crash reports may need these symbols. A newer folder does not prove this version is unused.")
         } else if containsPath(home + "/.codex/backups", path) {
             assign(.backup, url.lastPathComponent + " recovery backup", "Codex workspace", "Recovery copy associated with Codex. Its contents and creation process have not been independently verified.", "Preserve unless another complete recovery copy has been verified. Uncommitted source and device saves may be unique.")
+        } else if containsPath(home + "/.codex/scratch", path) && path != home + "/.codex/scratch" {
+            if url.lastPathComponent.lowercased().contains("backup") {
+                assign(.backup, url.lastPathComponent, "Codex scratch", "A backup a Codex task saved, such as app data copied off a device.", "It may be the only copy. Check you have these files elsewhere first.")
+            } else {
+                assign(.workspace, url.lastPathComponent, "Codex scratch", "Left behind by a Codex task: builds, downloads, logs or test copies.", "Codex doesn't clean these up. Look for files you made by hand before removing it.")
+            }
+        } else if containsPath(home + "/.ollama/models", path) {
+            assign(.model, "Ollama models", "Ollama", "Language models downloaded with Ollama.", "Removing a model means downloading it again to use it.")
+        } else if containsPath(home + "/.diffusionbee", path) {
+            assign(.model, "DiffusionBee models & images", "DiffusionBee", "Image models downloaded by DiffusionBee, and the pictures it made.", "Models can be downloaded again; pictures you made may be your only copy.")
+        } else if containsPath(home + "/.android/avd", path) && path != home + "/.android/avd" {
+            let device = url.lastPathComponent.replacingOccurrences(of: ".avd", with: "").replacingOccurrences(of: "_", with: " ")
+            assign(.virtualMachine, device + " emulator", "Android Emulator", "A virtual Android device: its system disk, installed apps, data and snapshots.", "Removing it deletes the apps and data inside. Delete it in Android Studio's Device Manager.")
         } else if containsPath(home + "/.codex/sessions", path) {
             assign(.history, "Codex conversation history", "Codex", "Persistent conversation records; not a disposable compilation cache.", "Removing these records loses conversation history.")
         } else if path.contains("/.cache/huggingface") || path.contains("/.cache/lm-studio") {

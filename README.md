@@ -29,7 +29,7 @@
   <a href="#build-from-source">Build it</a>
 </p>
 
-![Context Cleaner's Overview: 185 GiB free of 3.63 TiB, a chart showing 66 GiB less free space this week, "You can get back about 614 GiB" split into safe, old items and rebuildable, where the week's space went, and a Start here list](docs/images/overview-dark.png)
+![Context Cleaner's Overview: 110 GiB free of 3.63 TiB, a chart of used space climbing toward Full with 141 GiB more used this week, "You can get back about 496 GiB" split into safe, old items and rebuildable, where the week's space went led by Codex scratch, and a Start here list](docs/images/overview-dark.png)
 
 > [!IMPORTANT]
 > **Context Cleaner never deletes, moves or empties anything.** It measures folders, explains them, and tells you how to remove them yourself: in Finder, or with a command it copies for you to run. There is no clean button, on purpose.
@@ -58,11 +58,20 @@ Context Cleaner answers those questions for the places where this data piles up,
 | **Evidence** | Newest file change, read-only git status, whether git ignores the folder, open files, and Xcode's own simulator data |
 | **Inside folders** | Dated experiment builds and old downloads inside folders you still use, listed with dates and sizes |
 | **History** | Disk space every hour while open, folder sizes at every scan, and what grew in between |
-| **Coverage** | About 30 known places across AI tools, developer tools, virtual machines, games and Downloads, plus folders you add |
+| **Coverage** | 33 known places across AI tools, developer tools, virtual machines, games and Downloads, plus folders you add |
+| **Everything else** | A read-only look at the rest of your home folder, with known folders explained and git projects marked backed up or not |
 | **Deletes** | Nothing, ever. You remove things, and space comes back when you empty the Trash |
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
 ## What's new
+
+**0.16 finds the space that was hiding in "Everything else":**
+
+- **Codex scratch is scanned.** On the Mac this was built on, `~/.codex/scratch` held 274 GiB that no view showed: fresh-clone test homes, device backups and build outputs from finished tasks. Each task folder now gets its own row, size, last use and answer.
+- **Ollama models, DiffusionBee and Android emulators are scanned too**, each with how to remove them properly (`ollama list` and `ollama rm`, DiffusionBee's settings, Android Studio's Device Manager).
+- **Is this project backed up?** Open any folder in Everything else. Git projects and Codex worktrees say whether every commit is pushed, nothing is uncommitted or stashed, and which ignored files, such as `ref/` or `.env`, git would not keep. Projects that are fully backed up and unused for a month are added up, with a Move-to-Trash command to copy. A repository that other worktrees use is never offered.
+- **Known folders are explained**, such as Ollama, Gemini and Antigravity, the Android SDK, Rust toolchains, conda and backups.
+- **Charts read one way.** Everything is space used: the line climbs toward a dashed Full line, and bars go up on days that used space and down on days that freed it. The headline, axis, hover and caption agree, and days before tracking began aren't drawn.
 
 **0.15 makes it easier to know where you are and what everything means:**
 
@@ -72,7 +81,7 @@ Context Cleaner answers those questions for the places where this data piles up,
 - **Biggest first** is the default order in Folders.
 - **One vocabulary.** **Ignore** is your choice, so the folder is never suggested. **Leave it** is the app's answer for app libraries you manage inside their own apps.
 - **How fast it's growing.** Where the space went shows each place's change and its rate per day.
-- **A free-space chart** that falls toward "Full" as your disk fills, and a shorter Overview.
+- **A shorter Overview**, and a chart you can click and drag.
 - **Everything else, explained.** Click it to see what it is, and **Look Inside** sizes the rest of your home folder, Library and Applications. It's read-only and saves nothing.
 
 **0.14 is a speed release.** Nothing it shows changed, only how fast it gets there:
@@ -137,6 +146,10 @@ A few rules keep the answers honest:
 
 <sub><b>Where the space went</b> and <b>Start here.</b> Click a place to see which folders grew. The Old items tab lists the folders holding the most untouched builds.</sub>
 
+![Everything else with ~/.codex and its worktrees open. Each worktree says whether it is backed up: pushed and clean in green, or what isn't, such as 1 file not committed or ignored files git doesn't keep, in orange](docs/images/everything-else.png)
+
+<sub><b>Everything else.</b> Open any row to go a level deeper. Known folders say what they are, and each project or Codex worktree says whether it's backed up.</sub>
+
 <table>
   <tr>
     <td width="50%"><img src="docs/images/folders-git.png" alt="Folders view with a Codex worktree build folder selected. The card reads Rebuildable, shows git evidence, and lists 19 old experiment folders such as evening-20260921 at 33 GiB"><br><sub><b>Folders.</b> Biggest unused first. Each card shows the answer, git evidence, old items with dates, and how to remove it.</sub></td>
@@ -160,9 +173,9 @@ Context Cleaner reads the places where apps are known to pile up data, plus any 
 
 | Group | Places |
 |---|---|
-| **AI tools** | Codex worktrees, recovery copies, tasks, conversations and outputs; Claude; Hugging Face; LM Studio |
+| **AI tools** | Codex worktrees, scratch, recovery copies, tasks, conversations and outputs; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
 | **Developer tools** | Build folders in `~/GitHub`; Xcode DerivedData and device support; simulators; iPhone install caches; npm, npx, pip, uv, Yarn, Gradle, Homebrew and Playwright caches |
-| **Virtual machines** | Parallels, Docker Desktop's disk, UTM |
+| **Virtual machines** | Parallels, Docker Desktop's disk, UTM, Android Emulator devices |
 | **Games and emulators** | Steam, CrossOver, OpenEmu |
 | **Downloads** | Your Downloads folder |
 
@@ -170,11 +183,12 @@ It never looks at system files, other users' folders, Photos, Mail, Messages or 
 
 ## Reading the Overview
 
-![The free-space chart: 66 GiB less free space over 7 days, with used space in blue and free space as a green band under the capacity line](docs/images/overview-chart.png)
+![The space-used chart: 141 GiB more space used over 7 days, a blue line climbing toward a dashed Full line, with 110 GiB free now](docs/images/overview-chart.png)
 
-- **The chart.** Blue is used space; the green band above it is free space, up to the dashed capacity line. The headline is the change in free space for the range you pick. Point at the chart for a reading, click a day to look closer, or drag across a span. **Change per day** switches to bars: blue used more space, green freed it.
+- **The chart.** Everything is space used. The blue line climbs toward the dashed **Full** line as your disk fills, and the headline is how much more (or less) is used over the range you pick. Point at the chart for a reading, click a day to look closer, or drag across a span. **Change per day** switches to bars: up and blue used space, down and green freed it.
 - **You can get back.** Safe folders, old items inside folders and rebuildable output added together, each byte counted once. The bar below splits your whole disk by answer; click a color to list those folders.
-- **Where the space went.** The chart's range split by place. New folders count in full, and "Outside scanned folders" is everything the app doesn't cover.
+- **Where the space went.** The chart's range split by place. New folders count in full, and "Everything else" is what the app doesn't scan.
+- **Everything else.** Click it, then **Look Inside** to size the rest of your home folder, Library and Applications. Open any row to go a level deeper. Known folders say what they are, and git projects say whether they're backed up.
 - **Start here.** The biggest folders for each answer, with the Trash reminder underneath.
 
 Readings come from every scan and from an hourly check while the app is open. Gaps mean the app wasn't running; nothing is filled in.
@@ -197,6 +211,10 @@ No. It has no delete, clean, Trash, uninstall or reset button. It shows you wher
 ### Why is "safe to remove" so much smaller than what I can get back?
 
 Because most big folders on a working Mac are in use. "Safe" means nothing is lost at all. The big wins are usually **old items** inside your build folders and **rebuildable** output from projects you're still working on, which only cost a rebuild. The headline adds all three.
+
+### How does it know a project is backed up?
+
+It asks git, read-only and without going online. A project counts as backed up when it has a remote, every commit on its branches is on that remote as of your last fetch, and nothing is uncommitted or stashed. A Codex worktree only needs to be clean on a branch, because its commits stay in the main repository when the folder goes. Files git ignores, such as `ref/` game data or `.env`, are never backed up by git, so they're named. Build folders and caches aren't.
 
 ### What does "Your call" mean?
 
@@ -244,13 +262,13 @@ The script refuses to overwrite an existing destination. It writes the app, a DM
 bash test-preserving.sh /absolute/path/to/new-test-output
 ```
 
-Six suites (255 checks) cover preservation, folder contents, scan limits, planning, discovery and model state, and the Overview's numbers. They run on fixtures only, and every fixture and log is kept.
+Six suites (289 checks) cover preservation, folder contents, scan limits, planning, discovery and model state, and the Overview's numbers. They run on fixtures only, and every fixture and log is kept.
 
 ## Documentation
 
 - [Design and copy rules](docs/DESIGN.md)
 - [Validation records](docs/validation), one per release, with evidence and limits
-- [Goal loops](docs) behind each release, such as [0.13](docs/GOAL_LOOP_0.13.md) and [0.12](docs/GOAL_LOOP_0.12.md)
+- [Goal loops](docs) behind each release, such as [0.16](docs/GOAL_LOOP_0.16.md) and [0.13](docs/GOAL_LOOP_0.13.md)
 
 ## Getting help
 

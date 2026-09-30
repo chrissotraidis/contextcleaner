@@ -242,56 +242,88 @@ struct FolderRow: Identifiable {
         return max(0, used - (r.safe.bytes + r.inside.bytes + r.rebuild.bytes + r.check.bytes + r.keep.bytes + kept.keptBytes + kept.offBytes))
     }
 
-    /// One place outside the scanned folders, measured once on request. Never saved, never part of any answer.
-    struct ElsewhereItem: Identifiable { var id: String { path }; let path: String; let name: String; let bytes: Int64?; let note: String? }
     @Published var showingElsewhere = false
     @Published private(set) var elsewhere: [ElsewhereItem] = []
     @Published private(set) var elsewhereDate: Date?
     @Published private(set) var lookingElsewhere = false
+    /// What's inside each row you opened, and the rows still being sized.
+    @Published private(set) var elsewhereChildren: [String: [ElsewhereItem]] = [:]
+    @Published private(set) var elsewhereOpening: Set<String> = []
     private var elsewhereCancellation = Cancellation()
     /// Sizes the top level of your home folder, your Library and Applications, leaving out every folder
     /// Context Cleaner already scans or you turned off, so nothing is counted twice. Reads metadata only.
     func lookElsewhere() {
         guard !lookingElsewhere else { return }
-        lookingElsewhere = true; elsewhere = []
-        elsewhereCancellation = Cancellation(); let token = elsewhereCancellation
-        let home = home
-        var prefs = preferences
-        let known = latest.filter { $0.state == .measured }.map(\.profile.path) + preferences.locations.filter { $0.value.excluded }.map(\.key)
-        for path in known { var policy = prefs.policy(path); policy.excluded = true; prefs.locations[normalized(path)] = policy }
-        let skipped: [String: String] = [home + "/Library/CloudStorage": "Cloud storage isn't read, so nothing is downloaded.", home + "/Library/Mobile Documents": "iCloud Drive isn't read, so nothing is downloaded."]
+        lookingElsewhere = true; elsewhere = []; elsewhereChildren = [:]; elsewhereOpening = []
+        elsewhereCancellation = Cancellation()
+        let home = home, job = elsewhereJob()
         DispatchQueue.global(qos: .userInitiated).async {
-            func children(_ folder: String) -> [String] {
-                ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).sorted().map { folder + "/" + $0 }
-            }
             var targets = ["/Applications"]
-            for path in children(home) where path != home + "/Library" { targets.append(path) }
-            targets += children(home + "/Library")
+            for path in folderEntries(home) where path != home + "/Library" { targets.append(path) }
+            targets += folderEntries(home + "/Library")
+            let found = job(targets, true)
+            DispatchQueue.main.async { self.elsewhere = found; self.elsewhereDate = Date(); self.lookingElsewhere = false }
+        }
+    }
+    /// Sizes what's inside one row, the same way. Kept until Look Again.
+    func openElsewhere(_ path: String) {
+        guard elsewhereChildren[path] == nil, !elsewhereOpening.contains(path) else { return }
+        elsewhereOpening.insert(path)
+        let job = elsewhereJob()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let found = job(folderEntries(path), false)
+            DispatchQueue.main.async { self.elsewhereChildren[path] = found; self.elsewhereOpening.remove(path) }
+        }
+    }
+    /// Measures places outside the scanned folders: size, newest change, what it is, and for git checkouts
+    /// whether they're backed up. Scanned folders inside are left out of the size and noted apart.
+    private func elsewhereJob() -> ([String], Bool) -> [ElsewhereItem] {
+        let home = home, token = elsewhereCancellation
+        var prefs = preferences
+        // Folders you've since removed would otherwise still count as "scanned separately".
+        let gone = gone
+        let measured = latest.filter { $0.state == .measured && !gone.contains($0.profile.path) }
+        let known = measured.map(\.profile.path) + preferences.locations.filter { $0.value.excluded }.map(\.key)
+        for path in known { var policy = prefs.policy(path); policy.excluded = true; prefs.locations[normalized(path)] = policy }
+        // Outermost scanned folders only, so nested ones count once.
+        var outer: [FolderMeasurement] = []
+        for item in measured.sorted(by: { $0.profile.path.count < $1.profile.path.count })
+        where !outer.contains(where: { containsPath($0.profile.path, item.profile.path) }) { outer.append(item) }
+        let skipped: [String: String] = [home + "/Library/CloudStorage": "Cloud storage isn't read, so nothing is downloaded.", home + "/Library/Mobile Documents": "iCloud Drive isn't read, so nothing is downloaded."]
+        return { targets, topLevel in
             var results = [ElsewhereItem?](repeating: nil, count: targets.count)
             results.withUnsafeMutableBufferPointer { slots in
                 let base = slots.baseAddress!
                 DispatchQueue.concurrentPerform(iterations: targets.count) { index in
                     let path = targets[index]
-                    let name = abbreviatedPath(path)
+                    let name = topLevel ? abbreviatedPath(path) : URL(fileURLWithPath: path).lastPathComponent
                     if let note = skipped[path] { base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: note); return }
                     guard !prefs.excluded(path), !token.stopped else { return }
                     var st = stat()
                     guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return }
+                    let inside = outer.filter { $0.profile.path.hasPrefix(path + "/") }
                     let profile = FolderProfile(path: path, name: name, category: .unknown, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: [])
                     let m = TreeMeasure.measure(profile, preferences: prefs, cancellation: token, activity: [], activityAvailable: false, limits: ScanLimits(seconds: 180, entries: 5_000_000))
+                    var item: ElsewhereItem
                     switch m.state {
                     case .measured:
-                        // A folder that holds scanned folders is counted without them: "the rest of ~/GitHub".
-                        let holdsScanned = known.contains { $0.hasPrefix(path + "/") }
-                        if (m.allocatedBytes ?? 0) > 0 { base[index] = ElsewhereItem(path: path, name: holdsScanned ? name + " (the rest of it)" : name, bytes: m.allocatedBytes, note: holdsScanned ? "Not counting the folders inside it that Context Cleaner already scans." : nil) }
-                    case .inaccessible: base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: "macOS didn't allow reading it. Full Disk Access lets Context Cleaner size it.")
-                    case .limited: base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed.")
-                    default: break
+                        guard (m.allocatedBytes ?? 0) > 0 else { return }
+                        item = ElsewhereItem(path: path, name: topLevel && !inside.isEmpty ? name + " (the rest of it)" : name, bytes: m.allocatedBytes, note: nil)
+                    case .inaccessible: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "macOS didn't allow reading it. Full Disk Access lets Context Cleaner size it.")
+                    case .limited: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed.")
+                    default: return
                     }
+                    item.isFolder = (st.st_mode & S_IFMT) == S_IFDIR
+                    item.about = elsewhereAbout(path, home: home)
+                    item.scannedInside = inside.reduce(0) { $0 + ($1.allocatedBytes ?? 0) }
+                    item.modified = ([m.latestModifiedAt] + inside.map(\.latestModifiedAt)).compactMap { $0 }.max()
+                    item.scannedModified = inside.compactMap(\.latestModifiedAt).max()
+                    var git = stat()
+                    if item.isFolder, !topLevel, lstat(path + "/.git", &git) == 0 { item.backup = readRepoBackup(path) }
+                    base[index] = item
                 }
             }
-            let found = results.compactMap { $0 }.sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
-            DispatchQueue.main.async { self.elsewhere = found; self.elsewhereDate = Date(); self.lookingElsewhere = false }
+            return results.compactMap { $0 }.sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
         }
     }
     func stopLookingElsewhere() { elsewhereCancellation.cancel() }
@@ -997,4 +1029,9 @@ struct FolderRow: Identifiable {
         do { try writeNew(Data(text.utf8), to: url); reportPreview = nil }
         catch { self.error = "The cleanup list was not saved because a file already exists there. Choose a new name. \(error.localizedDescription)" }
     }
+}
+
+/// Every entry in a folder, sorted. Metadata only.
+func folderEntries(_ folder: String) -> [String] {
+    ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).sorted().map { folder + "/" + $0 }
 }

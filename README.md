@@ -62,7 +62,17 @@ Context Cleaner answers those questions for the places where this data piles up,
 | **Deletes** | Nothing, ever. You remove things, and space comes back when you empty the Trash |
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
-## What's new in 0.13
+## What's new
+
+**0.14 is a speed release.** Nothing it shows changed, only how fast it gets there:
+
+- **Scans use about 40% less CPU** and finish about 25–35% sooner on big build folders. Each directory is read in batches with one system call instead of one call per file, with identical results.
+- **Launch reads your saved history in parallel**: about 0.2 s instead of 0.5 s for 21 scans.
+- **The interface does half the work per scan update**, and the Folders table no longer re-sorts on every click.
+
+See the [0.14 validation record](docs/validation/Final%20validation%200.14.0.md) for before and after measurements.
+
+**0.13** made the Overview calmer and clearer:
 
 - **One color system.** Green is safe or freed, soft green is old items, cyan is rebuildable, orange is your call, gray is keep, purple is ignored, blue is used space and growth, and red means a scan couldn't read something. Each color means the same thing everywhere.
 - **Where the space went is clickable** and follows the chart: pick 24 hours, 7 days or 30 days, click a day, or drag across a span.

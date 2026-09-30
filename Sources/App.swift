@@ -266,7 +266,7 @@ struct MainView: View {
         return row.measurement.state == .pending ? "—" : "Not recorded"
     }
     var folderTable: some View {
-        Table(model.rows.sorted(using: sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
+        Table(model.sortedRows(sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
@@ -318,7 +318,7 @@ struct MainView: View {
     }
     /// Folders a scan couldn't read, each with its reason and one fix.
     var issuesTable: some View {
-        Table(model.rows.sorted(using: sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
+        Table(model.sortedRows(sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)

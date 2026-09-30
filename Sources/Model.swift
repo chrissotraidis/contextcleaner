@@ -21,14 +21,15 @@ struct FolderRow: Identifiable {
     var unusedKey: Double { advice.lastUsed?.timeIntervalSince1970 ?? .greatestFiniteMagnitude }
     /// Days since last use, when known.
     var idleDays: Double? { advice.lastUsed.map { max(0, Date().timeIntervalSince($0) / 86400) } }
+    func idleScore(now: Date) -> Double {
+        guard bytes > 0 else { return 0 }
+        let idle = advice.lastUsed.map { min(max(0, now.timeIntervalSince($0) / 86400), 90) / 90 } ?? 0.35
+        return Double(bytes) * idle * (advice.verdict == .keep ? 0.25 : 1)
+    }
     /// Default order: big folders you haven't used in a while come first. Size is weighted by idle time
     /// (full weight after 90 days); recently used folders sink, unknown use counts a third, and folders
     /// an app manages (Keep) count a quarter.
-    var idleScore: Double {
-        guard bytes > 0 else { return 0 }
-        let idle = idleDays.map { min($0, 90) / 90 } ?? 0.35
-        return Double(bytes) * idle * (advice.verdict == .keep ? 0.25 : 1)
-    }
+    var idleScore: Double { idleScore(now: Date()) }
     var growing: Bool { (change.delta ?? 0) > 0 && (change.delta ?? 0) >= (policy.growthThresholdBytes ?? 0) && !policy.expected }
     /// One plain word, shown only when it tells you something. Empty for an ordinary scanned folder.
     var status: String {
@@ -126,13 +127,12 @@ struct FolderRow: Identifiable {
         }
     }
     /// Advice is read by rows, tiles and the Overview many times per update. It depends only on the folder's own
-    /// measurement, its settings and discovery facts, so it survives scan progress and is keyed per measurement.
-    private var adviceCache: (key: String, value: [String: Advice]) = ("", [:])
+    /// measurement, its settings and discovery facts, so it survives scan progress and is kept per folder.
+    private struct AdviceEntry { let observedAt: Date; let bytes: Int64?; let state: MeasurementState; let advice: Advice }
+    private var adviceCache: (preferences: Int, discovery: Int, value: [String: AdviceEntry]) = (-1, -1, [:])
     func adviceFor(_ m: FolderMeasurement) -> Advice {
-        let key = "\(preferencesVersion)|\(discoveryVersion)"
-        if adviceCache.key != key { adviceCache = (key, [:]) }
-        let itemKey = m.profile.path + "|\(m.state.rawValue)|\(m.observedAt.timeIntervalSinceReferenceDate)|\(m.allocatedBytes ?? -1)"
-        if let cached = adviceCache.value[itemKey] { return cached }
+        if adviceCache.preferences != preferencesVersion || adviceCache.discovery != discoveryVersion { adviceCache = (preferencesVersion, discoveryVersion, [:]) }
+        if let cached = adviceCache.value[m.profile.path], cached.observedAt == m.observedAt, cached.bytes == m.allocatedBytes, cached.state == m.state { return cached.advice }
         var value = advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices, project: project(for: m.profile.path))
         // Until git activity has been read, a project folder can't be called safe: it may be work in progress.
         if !projectsRead, value.verdict == .safe, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData") {
@@ -141,7 +141,7 @@ struct FolderRow: Identifiable {
             held.short = "Checking git…"
             value = held
         }
-        adviceCache.value[itemKey] = value
+        adviceCache.value[m.profile.path] = AdviceEntry(observedAt: m.observedAt, bytes: m.allocatedBytes, state: m.state, advice: value)
         return value
     }
     /// Git activity for the projects that scanned folders belong to, keyed by project root. Read-only.
@@ -205,7 +205,7 @@ struct FolderRow: Identifiable {
     func foldersThatGrew(from: Date, to: Date, limit: Int = 5) -> [FolderGrowth] {
         refreshDerived()
         let profiles = Dictionary(latest.map { ($0.profile.path, $0.profile) }, uniquingKeysWith: { a, _ in a })
-        return folderGrowth(history: derived.history, profile: { self.preferences.excluded($0) ? nil : profiles[$0] }, from: from, to: to, limit: limit)
+        return folderGrowth(history: derived.history, profile: { self.isExcluded($0) ? nil : profiles[$0] }, from: from, to: to, limit: limit)
     }
     func sparkline(_ path: String) -> [Double] { sparklineValues(history(path)) }
     /// A friendly name for any known folder, falling back to its last path component.
@@ -213,6 +213,23 @@ struct FolderRow: Identifiable {
         latest.first { $0.profile.path == path }?.profile.displayName
             ?? discovery.profiles.first { $0.path == path }?.displayName
             ?? URL(fileURLWithPath: path).lastPathComponent
+    }
+    /// Turned-off folders, normalized once per settings change.
+    private var excludedRoots: (version: Int, roots: [String]) = (-1, [])
+    /// Whether a folder is turned off, or inside one that is. Same answer as Preferences.excluded, without
+    /// normalizing every saved setting on every call.
+    func isExcluded(_ path: String) -> Bool {
+        if excludedRoots.version != preferencesVersion {
+            excludedRoots = (preferencesVersion, preferences.locations.filter { $0.value.excluded }.map { normalized($0.key) })
+        }
+        guard !excludedRoots.roots.isEmpty else { return false }
+        let target = normalized(path), bytes = target.utf8
+        for root in excludedRoots.roots {
+            if root == target || root == "/" { return true }
+            let prefix = root.utf8
+            if bytes.count > prefix.count, bytes.starts(with: prefix), bytes[bytes.index(bytes.startIndex, offsetBy: prefix.count)] == 0x2F { return true }
+        }
+        return false
     }
     /// Shows the Folders list, optionally narrowed to one type or answer.
     func showFolders(_ category: FolderCategory? = nil, filter: LocationFilter = .all) {
@@ -312,8 +329,7 @@ struct FolderRow: Identifiable {
         let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
         if overviewCache.key == key && Date() < overviewCache.validUntil { return overviewCache.value }
         let current = latest.map { withSimulatorFacts($0, devices: simDevices) }
-        let excludedPaths = preferences.locations.filter { $0.value.excluded }.map { normalized($0.key) }
-        func excluded(_ path: String) -> Bool { excludedPaths.contains { containsPath($0, path) } }
+        func excluded(_ path: String) -> Bool { isExcluded(path) }
         let measured = current.filter { $0.state == .measured && !excluded($0.profile.path) && !gone.contains($0.profile.path) }
         let groups = overviewGroups(measured, preferences: Preferences())
         let now = Date()
@@ -341,6 +357,22 @@ struct FolderRow: Identifiable {
         let result = computeRows()
         rowsCache = (key, nextReviewDeadline, result)
         return result
+    }
+    /// The table's rows in the chosen order, sorted once per change of rows or order rather than on every redraw.
+    private var sortedCache: (key: String, order: [KeyPathComparator<FolderRow>], rows: [FolderRow]) = ("", [], [])
+    func sortedRows(_ order: [KeyPathComparator<FolderRow>]) -> [FolderRow] {
+        let current = rows
+        let key = rowsCache.key + "|\(rowsCache.validUntil.timeIntervalSinceReferenceDate)"
+        if sortedCache.key == key && sortedCache.order == order { return sortedCache.rows }
+        let value: [FolderRow]
+        if order.count == 1, let first = order.first, first.keyPath == \FolderRow.idleScore {
+            // The default order: score each row once instead of on every comparison.
+            let now = Date()
+            let scored = current.map { ($0, $0.idleScore(now: now)) }
+            value = scored.sorted { first.order == .reverse ? $0.1 > $1.1 : $0.1 < $1.1 }.map(\.0)
+        } else { value = current.sorted(using: order) }
+        sortedCache = (key, order, value)
+        return value
     }
     private func computeRows() -> [FolderRow] {
         return baseMeasures().map { FolderRow(measurement: $0, policy: preferences.policy($0.profile.path), change: growthSummary($0.profile.path), advice: adviceFor($0), gone: gone.contains($0.profile.path)) }.filter { row in
@@ -378,7 +410,7 @@ struct FolderRow: Identifiable {
         let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
         if verdictCache.key == key { return verdictCache.value }
         var groups: [Verdict: [FolderMeasurement]] = [:]
-        for item in baseMeasures() where item.state == .measured && !preferences.excluded(item.profile.path) && !preferences.policy(item.profile.path).isKept && !gone.contains(item.profile.path) {
+        for item in baseMeasures() where item.state == .measured && !isExcluded(item.profile.path) && !preferences.policy(item.profile.path).isKept && !gone.contains(item.profile.path) {
             groups[adviceFor(item).verdict, default: []].append(item)
         }
         let value = groups.mapValues { $0.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) } }
@@ -399,7 +431,7 @@ struct FolderRow: Identifiable {
     private func include(_ row: FolderRow, _ p: FolderProfile) -> Bool {
         // Folders that are gone leave every list. Kept and turned-off folders live in their own view.
         if row.gone { return false }
-        let off = preferences.excluded(p.path), kept = row.policy.isKept
+        let off = isExcluded(p.path), kept = row.policy.isKept
         switch section {
         case .kept: return off || kept
         case .locations:
@@ -465,7 +497,7 @@ struct FolderRow: Identifiable {
         if reclaimCache.key == key { return reclaimCache.value }
         var value = Reclaim()
         // Count each byte once: only the outermost scanned folder counts, whatever its answer.
-        let all = Verdict.allCases.flatMap { v in (verdictGroups[v] ?? []).map { ($0, v) } }.sorted { $0.0.profile.path.count < $1.0.profile.path.count }
+        let all = Verdict.allCases.flatMap { v in (verdictGroups[v] ?? []).map { ($0, v) } }.sorted { $0.0.profile.path.utf8.count < $1.0.profile.path.utf8.count }
         var accepted: Set<String> = []
         for (m, verdict) in all {
             let path = normalized(m.profile.path)
@@ -505,14 +537,14 @@ struct FolderRow: Identifiable {
         refreshDerived()
         let readings = usage
         guard let first = readings.first(where: { $0.date >= start && $0.date <= end }), let last = readings.last(where: { $0.date <= end && $0.date >= start }), first.date < last.date else { wentCache = (key, nil); return nil }
-        let current = derived.saved.values.filter { !preferences.excluded($0.profile.path) && !gone.contains($0.profile.path) }
+        let current = derived.saved.values.filter { !isExcluded($0.profile.path) && !gone.contains($0.profile.path) }
         let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, to: last.date, home: home)
         let value = SpaceWent(from: first.date, diskChange: last.used - first.used, places: places)
         wentCache = (key, value)
         return value
     }
     func groupSize(_ group: CoverageGroup) -> Int64 {
-        Coverage.entries.filter { $0.group == group && !preferences.excluded($0.path(home: home)) }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) }
+        Coverage.entries.filter { $0.group == group && !isExcluded($0.path(home: home)) }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) }
     }
     /// A span of time since last use, with the scanned space in it by answer.
     struct IdleBucket: Identifiable { let id: Int; let title: String; var bytes: [Verdict: Int64] = [:]; var total: Int64 { bytes.values.reduce(0, +) } }
@@ -543,7 +575,7 @@ struct FolderRow: Identifiable {
         if keptCache.key == key { return keptCache.value }
         var summary = KeptSummary()
         for item in baseMeasures() where !gone.contains(item.profile.path) && item.allocatedBytes != nil {
-            if preferences.excluded(item.profile.path) { summary.off.append(item) }
+            if isExcluded(item.profile.path) { summary.off.append(item) }
             else if preferences.policy(item.profile.path).isKept { summary.kept.append(item) }
         }
         // Turned-off folders keep their last scanned size; count it even though the state isn't "measured".

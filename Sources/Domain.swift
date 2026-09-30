@@ -228,7 +228,7 @@ func growth(_ path: String, records: [ScanRecord]) -> GrowthSummary {
 }
 func uniqueAllocatedTotal(_ measurements: [FolderMeasurement]) -> Int64 {
     var accepted: Set<String> = []
-    return measurements.filter { $0.state == .measured }.sorted { $0.profile.path.count < $1.profile.path.count }.reduce(0) { sum, item in
+    return measurements.filter { $0.state == .measured }.sorted { $0.profile.path.utf8.count < $1.profile.path.utf8.count }.reduce(0) { sum, item in
         let path = normalized(item.profile.path)
         guard !hasAncestor(in: accepted, path) else { return sum }
         accepted.insert(path)
@@ -243,7 +243,7 @@ func scanDelta(_ record: ScanRecord, previous: ScanRecord?) -> (grew: [ScanChang
     let before = Dictionary(previous.measurements.filter { $0.state == .measured }.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
     var grew: [ScanChange] = [], shrank: [ScanChange] = [], comparable = 0
     var accepted: [String] = []
-    for item in record.measurements.sorted(by: { $0.profile.path.count < $1.profile.path.count }) where item.state == .measured {
+    for item in record.measurements.sorted(by: { $0.profile.path.utf8.count < $1.profile.path.utf8.count }) where item.state == .measured {
         guard let old = before[item.profile.path], old.scopeID == item.scopeID, let a = old.allocatedBytes, let b = item.allocatedBytes else { continue }
         // A comparable parent already includes its children in both snapshots.
         guard !accepted.contains(where: { containsPath($0, item.profile.path) }) else { continue }

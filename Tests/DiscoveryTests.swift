@@ -179,6 +179,12 @@ import Foundation
         verdictModel.policy(buildProfile.path) { $0.isKept = false }
         verdictModel.section = .locations
         check(verdictModel.rows.map(\.id) == [buildProfile.path], "stopping keeping brings the suggestion back")
+        verdictModel.locationFilter = .all
+        let byScore = [KeyPathComparator(\FolderRow.idleScore, order: .reverse)], byName = [KeyPathComparator(\FolderRow.name)]
+        check(verdictModel.sortedRows(byScore).map(\.id) == verdictModel.rows.sorted(using: byScore).map(\.id)
+              && verdictModel.sortedRows(byName).map(\.id) == verdictModel.rows.sorted(using: byName).map(\.id)
+              && verdictModel.sortedRows(byScore).map(\.id) == verdictModel.rows.sorted(using: byScore).map(\.id),
+              "the cached table order matches a fresh sort, for the default order and after switching orders")
         let legacyPolicy = try? JSONDecoder().decode(LocationPolicy.self, from: Data(#"{"watched":false,"recurring":false,"expected":false,"excluded":false,"tags":[],"note":""}"#.utf8))
         check(legacyPolicy?.isKept == false, "preferences saved before Keep existed still load")
         // Gone folders are not problems to fix.

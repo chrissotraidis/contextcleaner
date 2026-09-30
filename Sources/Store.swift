@@ -40,14 +40,24 @@ final class AppendStore {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
     }
+    /// Decodes every file in parallel, one decoder per file. Unreadable files are reported and left untouched.
+    private func decodeAll<T: Decodable>(_ directory: String, as type: T.Type, label: String) -> [T] {
+        let urls = files(directory)
+        var results = [T?](repeating: nil, count: urls.count)
+        results.withUnsafeMutableBufferPointer { slots in
+            let base = slots.baseAddress!
+            DispatchQueue.concurrentPerform(iterations: urls.count) { index in
+                base[index] = try? JSONDecoder().decode(T.self, from: Data(contentsOf: urls[index]))
+            }
+        }
+        for (index, value) in results.enumerated() where value == nil { warnings.append("Unreadable \(label) preserved: \(urls[index].lastPathComponent)") }
+        return results.compactMap { $0 }
+    }
     private func files(_ directory: String) -> [URL] {
         ((try? FileManager.default.contentsOfDirectory(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "json" }
     }
     func records() -> [ScanRecord] {
-        files("scans").compactMap { url in
-            do { return try JSONDecoder().decode(ScanRecord.self, from: Data(contentsOf: url)) }
-            catch { warnings.append("Unreadable scan preserved: \(url.lastPathComponent)"); return nil }
-        }.sorted { $0.finishedAt < $1.finishedAt }
+        decodeAll("scans", as: ScanRecord.self, label: "scan").sorted { $0.finishedAt < $1.finishedAt }
     }
     func append(_ record: ScanRecord) throws {
         guard record.id.range(of: "^[a-zA-Z0-9-]+$", options: .regularExpression) != nil else { throw StoreError.invalid("record ID") }
@@ -58,20 +68,14 @@ final class AppendStore {
         try writeNew(encoder.encode(event), to: root.appendingPathComponent("discoveries/\(event.id).json"))
     }
     func learnedDiscovery() -> Discovery? {
-        let events = files("discoveries").compactMap { url -> DiscoveryEvent? in
-            do { return try JSONDecoder().decode(DiscoveryEvent.self, from: Data(contentsOf: url)) }
-            catch { warnings.append("Unreadable discovery preserved: \(url.lastPathComponent)"); return nil }
-        }.sorted { $0.date < $1.date }
+        let events = decodeAll("discoveries", as: DiscoveryEvent.self, label: "discovery").sorted { $0.date < $1.date }
         guard let last = events.last else { return nil }
         var profiles: [String: FolderProfile] = [:]
         for event in events { for profile in event.value.profiles { profiles[profile.path] = profile } }
         return Discovery(profiles: profiles.values.sorted { $0.path < $1.path }, notes: last.value.notes)
     }
     func preferences() -> Preferences {
-        files("preferences").compactMap { url -> PreferencesEvent? in
-            do { return try JSONDecoder().decode(PreferencesEvent.self, from: Data(contentsOf: url)) }
-            catch { warnings.append("Unreadable preference event preserved: \(url.lastPathComponent)"); return nil }
-        }.max { a,b in a.date == b.date ? a.id < b.id : a.date < b.date }?.value ?? Preferences()
+        decodeAll("preferences", as: PreferencesEvent.self, label: "preference event").max { a,b in a.date == b.date ? a.id < b.id : a.date < b.date }?.value ?? Preferences()
     }
     func save(_ preferences: Preferences) throws {
         let event = PreferencesEvent(date: Date(), id: UUID().uuidString, value: preferences)
@@ -83,10 +87,7 @@ final class AppendStore {
         try writeNew(encoder.encode(reading), to: root.appendingPathComponent("capacity/\(stamp)-\(UUID().uuidString).json"))
     }
     func capacityReadings() -> [CapacityReading] {
-        files("capacity").compactMap { url -> CapacityReading? in
-            do { return try JSONDecoder().decode(CapacityReading.self, from: Data(contentsOf: url)) }
-            catch { warnings.append("Unreadable capacity reading preserved: \(url.lastPathComponent)"); return nil }
-        }.sorted { $0.date < $1.date }
+        decodeAll("capacity", as: CapacityReading.self, label: "capacity reading").sorted { $0.date < $1.date }
     }
     func importLegacy(_ source: URL, home: String) throws -> Int {
         let data = try Data(contentsOf: source), sourceDigest = digest(data)

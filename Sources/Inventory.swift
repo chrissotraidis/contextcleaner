@@ -129,6 +129,92 @@ final class DirectoryCursor {
         }
     }
 }
+/// Reads a directory's entries in batches with getattrlistbulk: name, type, device, change date, file ID,
+/// link count and sizes arrive together, so no per-entry lstat is needed. Metadata only; no file is opened.
+/// A top-level child's totals while a folder is walked; turned into a ChildSummary at the end.
+final class ChildBox {
+    let name: String, directory: Bool, identity: String
+    var bytes: Int64 = 0, files = 0, latest = Int.min
+    init(name: String, directory: Bool, identity: String) { self.name = name; self.directory = directory; self.identity = identity }
+    var summary: ChildSummary {
+        ChildSummary(name: name, directory: directory, identity: identity, bytes: bytes, files: files, modifiedAt: latest == Int.min ? nil : Date(timeIntervalSince1970: Double(latest)))
+    }
+}
+final class BulkCursor {
+    struct Entry {
+        let name: String
+        let isDirectory: Bool, isRegular: Bool, isLink: Bool, isMountPoint: Bool
+        let device: Int32
+        let modifiedSeconds: Int
+        let fileID: UInt64
+        let linkCount: UInt32
+        let allocated: Int64
+        let logical: Int64
+    }
+    let path: String
+    var top: String?
+    /// Running totals for the top-level child this directory sits under, when that child is kept in the summary.
+    var box: ChildBox?
+    private let fd: Int32
+    private let buffer: UnsafeMutableRawPointer
+    private let capacity = 64 * 1024
+    private var cursor: UnsafeMutableRawPointer
+    private var remaining = 0
+    private var finished = false
+    private static let request: attrlist = {
+        var a = attrlist()
+        a.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
+        a.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME) | attrgroup_t(ATTR_CMN_DEVID)
+            | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_FILEID)
+        a.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS) | attrgroup_t(ATTR_DIR_ALLOCSIZE) | attrgroup_t(ATTR_DIR_DATALENGTH)
+        a.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT) | attrgroup_t(ATTR_FILE_ALLOCSIZE) | attrgroup_t(ATTR_FILE_DATALENGTH)
+        return a
+    }()
+    init(_ path: String, top: String?, box: ChildBox? = nil) throws {
+        self.path = path; self.top = top; self.box = box
+        let fd = retryingInterrupted { Darwin.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        self.fd = fd
+        buffer = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 16)
+        cursor = buffer
+    }
+    deinit { Darwin.close(fd); buffer.deallocate() }
+    func next() throws -> Entry? {
+        if remaining == 0 {
+            guard !finished else { return nil }
+            var request = Self.request
+            let count = retryingInterrupted { getattrlistbulk(fd, &request, buffer, capacity, 0) }
+            if count < 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            if count == 0 { finished = true; return nil }
+            remaining = Int(count); cursor = buffer
+        }
+        remaining -= 1
+        let start = cursor
+        cursor += Int(start.loadUnaligned(as: UInt32.self))
+        var p = start + 4
+        let returned = p.loadUnaligned(as: attribute_set_t.self); p += MemoryLayout<attribute_set_t>.size
+        let nameOffset = Int(p.loadUnaligned(as: Int32.self)), nameLength = Int(p.loadUnaligned(fromByteOffset: 4, as: UInt32.self))
+        let nameBytes = UnsafeRawBufferPointer(start: p + nameOffset, count: max(0, nameLength - 1))
+        let name = String(decoding: nameBytes, as: UTF8.self); p += 8
+        let device = p.loadUnaligned(as: Int32.self); p += 4
+        let type = p.loadUnaligned(as: UInt32.self); p += 4
+        let modified = p.loadUnaligned(as: timespec.self); p += MemoryLayout<timespec>.size
+        let fileID = p.loadUnaligned(as: UInt64.self); p += 8
+        var linkCount: UInt32 = 1, allocated: Int64 = 0, logical: Int64 = 0, mountPoint = false
+        let isDirectory = type == UInt32(VDIR.rawValue), isRegular = type == UInt32(VREG.rawValue)
+        if isDirectory {
+            if returned.dirattr & attrgroup_t(ATTR_DIR_MOUNTSTATUS) != 0 { mountPoint = p.loadUnaligned(as: UInt32.self) & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0; p += 4 }
+            if returned.dirattr & attrgroup_t(ATTR_DIR_ALLOCSIZE) != 0 { allocated = p.loadUnaligned(as: Int64.self); p += 8 }
+            if returned.dirattr & attrgroup_t(ATTR_DIR_DATALENGTH) != 0 { logical = p.loadUnaligned(as: Int64.self); p += 8 }
+        } else {
+            if returned.fileattr & attrgroup_t(ATTR_FILE_LINKCOUNT) != 0 { linkCount = p.loadUnaligned(as: UInt32.self); p += 4 }
+            if returned.fileattr & attrgroup_t(ATTR_FILE_ALLOCSIZE) != 0 { allocated = p.loadUnaligned(as: Int64.self); p += 8 }
+            if returned.fileattr & attrgroup_t(ATTR_FILE_DATALENGTH) != 0 { logical = p.loadUnaligned(as: Int64.self); p += 8 }
+        }
+        return Entry(name: name, isDirectory: isDirectory, isRegular: isRegular, isLink: type == UInt32(VLNK.rawValue), isMountPoint: mountPoint,
+                     device: device, modifiedSeconds: Int(modified.tv_sec), fileID: fileID, linkCount: linkCount, allocated: allocated, logical: logical)
+    }
+}
 struct DirectoryListing {
     var names: [String]
     var complete: Bool
@@ -173,8 +259,9 @@ struct TreeMeasure {
         var rootStat = stat()
         guard retryingInterrupted({ lstat(profile.path, &rootStat) }) == 0 else { return result(errno == ENOENT ? .missing : .inaccessible, diagnostic: String(cString: strerror(errno))) }
         guard MetadataReader.hasNoSymlinkComponents(profile.path) else { return result(.excluded, diagnostic: "Symbolic links, including parent path components, are not traversed.") }
-        var stack: [DirectoryCursor] = [], nextPath: String? = profile.path, nextName = Substring((profile.path as NSString).lastPathComponent), nextTop: String?
-        var bytes: Int64 = 0, logical: Int64 = 0, files = 0, entries = 0, latestSeconds: Int = Int.min
+        // The folder itself counts like any entry; everything inside is read in batches.
+        var bytes: Int64 = Int64(rootStat.st_blocks) * 512, logical: Int64 = Int64(rootStat.st_size), files = 0, entries = 1
+        var latestSeconds: Int = rootStat.st_mtimespec.tv_sec
         // Turned-off folders inside this one, prepared once. Child paths are built from directory names,
         // so a plain prefix test matches containsPath without normalizing every entry.
         let root = normalized(profile.path)
@@ -185,75 +272,75 @@ struct TreeMeasure {
             for (index, excluded) in excludedInside.enumerated() where path == excluded || path.hasPrefix(excludedPrefixes[index]) { return true }
             return false
         }
-        var childMap: [String: ChildSummary] = [:], typeMap: [String: FileTypeSummary] = [:]
+        var childMap: [String: ChildBox] = [:], typeMap: [String: FileTypeSummary] = [:]
         var retainedNames: Set<String> = [], listedChildren = 0
         struct FileIdentity: Hashable { let device: Int32; let inode: UInt64 }
         var seen: Set<FileIdentity> = [], failures: [String] = [], omitted = 0
         func incomplete(_ reason: String) -> FolderMeasurement {
             result(.limited, diagnostic: "\(reason) after \(entries.formatted()) entries. Partial sizes are withheld. Measure a smaller child folder or run a manual scan with its larger allowance.")
         }
-        while nextPath != nil || !stack.isEmpty {
+        // One open directory per level of depth, so a folder with millions of names never builds a huge list.
+        var stack: [BulkCursor] = []
+        if (rootStat.st_mode & S_IFMT) == S_IFDIR {
+            do { stack.append(try BulkCursor(profile.path, top: nil)) }
+            catch { failures.append(profile.path + ": " + error.localizedDescription) }
+        } else { files = 1 }
+        while let cursor = stack.last {
             if cancellation.stopped { return result(.cancelled, diagnostic: "Cancelled; no partial total presented as complete.") }
             if ProcessInfo.processInfo.systemUptime - started >= limits.seconds { return incomplete("Time allowance reached") }
-            // Read the next entry only when needed; a directory with millions of names
-            // never creates a million-element URL stack.
-            if nextPath == nil, let cursor = stack.last {
-                do {
-                    if let name = try cursor.next() {
-                        let child = cursor.path == "/" ? "/" + name : cursor.path + "/" + name
-                        if isExcluded(child) { omitted += 1; entries += 1; if entries >= limits.entries { return incomplete("Entry allowance reached") }; continue }
-                        if cursor.path == profile.path {
-                            listedChildren += 1
-                            if retainedNames.count < 512 { retainedNames.insert(name) }
-                            else if let largest = retainedNames.max(), name < largest {
-                                retainedNames.remove(largest); childMap.removeValue(forKey: largest); retainedNames.insert(name)
-                            }
-                        }
-                        nextPath = child
-                        nextName = Substring(name)
-                        nextTop = cursor.top ?? (cursor.path == profile.path ? name : nil)
-                    } else { stack.removeLast(); continue }
-                } catch { if failures.count < 3 { failures.append(cursor.path + ": " + error.localizedDescription) }; stack.removeLast(); continue }
+            let entry: BulkCursor.Entry
+            do {
+                guard let next = try cursor.next() else { stack.removeLast(); continue }
+                entry = next
+            } catch { if failures.count < 3 { failures.append(cursor.path + ": " + error.localizedDescription) }; stack.removeLast(); continue }
+            let name = entry.name
+            let atRoot = cursor.top == nil
+            // Full paths are only needed to open a folder or to test exclusions.
+            let child = entry.isDirectory || !excludedInside.isEmpty ? (cursor.path == "/" ? "/" + name : cursor.path + "/" + name) : ""
+            if !excludedInside.isEmpty && isExcluded(child) { omitted += 1; entries += 1; if entries >= limits.entries { return incomplete("Entry allowance reached") }; continue }
+            if atRoot {
+                listedChildren += 1
+                if retainedNames.count < 512 { retainedNames.insert(name) }
+                else if let largest = retainedNames.max(), name < largest {
+                    retainedNames.remove(largest); childMap.removeValue(forKey: largest); retainedNames.insert(name)
+                }
             }
-            guard let path = nextPath else { continue }; nextPath = nil
             if entries >= limits.entries { return incomplete("Entry allowance reached") }
             entries += 1
-            var st = stat()
-            guard retryingInterrupted({ lstat(path, &st) }) == 0 else { if failures.count < 3 { failures.append(path + ": " + String(cString: strerror(errno))) }; continue }
-            if (st.st_mode & S_IFMT) == S_IFLNK || st.st_dev != rootStat.st_dev { omitted += 1; continue }
-            if st.st_nlink > 1 && (st.st_mode & S_IFMT) == S_IFREG {
-                if !seen.insert(FileIdentity(device: st.st_dev, inode: st.st_ino)).inserted { continue }
+            if entry.isLink || entry.isMountPoint || entry.device != rootStat.st_dev { omitted += 1; continue }
+            if entry.isRegular && entry.linkCount > 1 {
+                if !seen.insert(FileIdentity(device: entry.device, inode: entry.fileID)).inserted { continue }
             }
-            let allocated = Int64(st.st_blocks) * 512, isDirectory = (st.st_mode & S_IFMT) == S_IFDIR
-            let modifiedSeconds = st.st_mtimespec.tv_sec
-            let top = nextTop
-            if let top, retainedNames.contains(top) {
-                var child = childMap[top] ?? ChildSummary(name: top, directory: isDirectory, identity: "\(st.st_dev):\(st.st_ino)")
-                child.bytes += allocated
-                if !isDirectory { child.files += 1 }
-                if child.modifiedAt.map({ Double(modifiedSeconds) > $0.timeIntervalSince1970 }) ?? true { child.modifiedAt = Date(timeIntervalSince1970: Double(modifiedSeconds)) }
-                childMap[top] = child
+            let top = cursor.top ?? name
+            var box = cursor.box
+            if atRoot && retainedNames.contains(name) {
+                box = childMap[name] ?? ChildBox(name: name, directory: entry.isDirectory, identity: "\(entry.device):\(entry.fileID)")
+                childMap[name] = box
             }
-            if !isDirectory {
-                let name = nextName
+            if let box {
+                box.bytes += entry.allocated
+                if !entry.isDirectory { box.files += 1 }
+                if entry.modifiedSeconds > box.latest { box.latest = entry.modifiedSeconds }
+            }
+            if !entry.isDirectory {
                 let dot = name.lastIndex(of: ".")
                 let ext = dot.map { name[name.index(after: $0)...] } ?? ""
-                var type = ext.isEmpty || dot == name.startIndex ? "No extension" : "." + String(ext.prefix(32)).lowercased()
+                var type = ext.isEmpty || dot == name.startIndex ? "No extension" : "." + (ext.utf8.contains { $0 >= 65 && $0 <= 90 } ? String(ext.prefix(32)).lowercased() : String(ext.prefix(32)))
                 if typeMap[type] == nil && typeMap.count >= 63 { type = "Other extensions" }
                 var summary = typeMap[type] ?? FileTypeSummary(kind: type)
-                summary.files += 1; summary.bytes += allocated; typeMap[type] = summary
+                summary.files += 1; summary.bytes += entry.allocated; typeMap[type] = summary
             }
-            bytes += allocated; logical += Int64(st.st_size)
-            if modifiedSeconds > latestSeconds { latestSeconds = modifiedSeconds }
-            if isDirectory {
+            bytes += entry.allocated; logical += entry.logical
+            if entry.modifiedSeconds > latestSeconds { latestSeconds = entry.modifiedSeconds }
+            if entry.isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
-                do { let cursor = try DirectoryCursor(path); cursor.top = top; stack.append(cursor) }
-                catch { if failures.count < 3 { failures.append(path + ": " + error.localizedDescription) } }
+                do { stack.append(try BulkCursor(child, top: top, box: box)) }
+                catch { if failures.count < 3 { failures.append(child + ": " + error.localizedDescription) } }
             } else { files += 1 }
             if entries % 4000 == 0 { Thread.sleep(forTimeInterval: 0.002) }
         }
         if !failures.isEmpty { return result(.inaccessible, diagnostic: "Incomplete measurement; partial sizes withheld. " + failures.joined(separator: "\n")) }
-        contents = FolderContents(children: childMap.values.sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }, fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted)
+        contents = FolderContents(children: childMap.values.map(\.summary).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }, fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted)
         let latest = latestSeconds == Int.min ? nil : Date(timeIntervalSince1970: Double(latestSeconds))
         return result(.measured, bytes, logical, files, latest, diagnostic: omitted > 0 ? "\(omitted) excluded paths, symbolic links or other-volume entries were skipped. Size describes only included contents." : nil)
     }

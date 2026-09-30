@@ -24,7 +24,7 @@ struct StorageGroup: Identifiable {
 // not a live whole-volume accounting and not a promise of reclaimable space.
 func overviewGroups(_ measurements: [FolderMeasurement], preferences: Preferences) -> [StorageGroup] {
     var accepted: Set<String> = [], totals: [FolderCategory: (Int64, Int)] = [:]
-    for item in measurements.sorted(by: { $0.profile.path.count == $1.profile.path.count ? $0.profile.path < $1.profile.path : $0.profile.path.count < $1.profile.path.count }) {
+    for item in measurements.sorted(by: { $0.profile.path.utf8.count == $1.profile.path.utf8.count ? $0.profile.path < $1.profile.path : $0.profile.path.utf8.count < $1.profile.path.utf8.count }) {
         let path = normalized(item.profile.path)
         guard item.state == .measured, let bytes = item.allocatedBytes, !preferences.excluded(item.profile.path),
               !hasAncestor(in: accepted, path) else { continue }
@@ -184,7 +184,7 @@ func folderGrowth(history: [String: [HistoryPoint]], profile: (String) -> Folder
         found.append(FolderGrowth(path: path, name: p.displayName, category: p.category, delta: b - a))
     }
     var accepted: [FolderGrowth] = []
-    for item in found.sorted(by: { $0.path.count == $1.path.count ? $0.path < $1.path : $0.path.count < $1.path.count }) where !accepted.contains(where: { containsPath($0.path, item.path) }) {
+    for item in found.sorted(by: { $0.path.utf8.count == $1.path.utf8.count ? $0.path < $1.path : $0.path.utf8.count < $1.path.utf8.count }) where !accepted.contains(where: { containsPath($0.path, item.path) }) {
         accepted.append(item)
     }
     return Array(accepted.sorted { $0.delta == $1.delta ? $0.path < $1.path : $0.delta > $1.delta }.prefix(limit))
@@ -766,7 +766,7 @@ struct SpaceChange: Identifiable, Equatable {
 /// or was created after from (its whole size). Folders first scanned later but older than from are unknown and skipped.
 /// Nested folders count once, through their outermost scanned folder.
 func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement], created: [String: Date], from: Date, to: Date? = nil, home: String) -> [SpaceChange] {
-    let measured = latest.filter { $0.state == .measured && $0.allocatedBytes != nil }.sorted { $0.profile.path.count < $1.profile.path.count }
+    let measured = latest.filter { $0.state == .measured && $0.allocatedBytes != nil }.sorted { $0.profile.path.utf8.count < $1.profile.path.utf8.count }
     var accepted: Set<String> = []
     var groups: [String: SpaceChange] = [:]
     for item in measured {

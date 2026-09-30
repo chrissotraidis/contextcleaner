@@ -465,7 +465,7 @@ struct MainView: View {
                 .help(policy.isKept ? "Stop ignoring: suggest it again when it looks safe to remove" : "Ignore this folder: it's still scanned but never suggested, and it moves to Ignored")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
-        (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.path.contains("/.codex/scratch/") ? "Scratch space a Codex task used for builds, test copies and downloads. Codex doesn't remove it when the task ends." : item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         let simulatorRoot = path.hasSuffix("/CoreSimulator/Devices")
         if model.gone.contains(path) {
             Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)
@@ -713,6 +713,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
             if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled).lineLimit(3) }
+            if let watch = model.trashWatch { TrashWatchLine(model: model, watch: watch) }
             HStack(spacing: 6) {
                 Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking watched and growing folders daily while open." : "Checking watched and growing folders weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
@@ -847,5 +848,32 @@ struct ReportPreview: View {
                 Button("Save…") { model.saveReport(text) }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
             }
         }.padding(20).frame(width: 720, height: 560)
+    }
+}
+
+/// After you copy a Move-to-Trash command: what's still waiting, and what has left its place.
+struct TrashWatchLine: View {
+    @ObservedObject var model: CleanerModel
+    let watch: CleanerModel.TrashWatch
+    var body: some View {
+        let total = watch.paths.count
+        HStack(spacing: 8) {
+            Image(systemName: watch.done ? "checkmark.circle.fill" : "doc.on.clipboard").foregroundStyle(watch.done ? Color.stable : Color.accentColor)
+            Group {
+                if watch.done {
+                    Text("Moved to the Trash: \(total == 1 ? "the folder" : "all \(total)"), \(byteLabel(watch.movedBytes)). Empty the Trash to get the space back.")
+                } else if watch.moved.isEmpty {
+                    Text("Copied. Paste it in Terminal and press Return to move \(total == 1 ? "1 folder" : "\(total) folders") (\(byteLabel(watch.bytes))) to the Trash.")
+                } else {
+                    Text("\(watch.moved.count) of \(total) moved to the Trash (\(byteLabel(watch.movedBytes))). Waiting for the rest.")
+                }
+            }.font(.callout).lineLimit(2)
+            Spacer()
+            if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")) }.controlSize(.small) }
+            Button { model.dismissTrashWatch() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Dismiss").accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background((watch.done ? Color.stable : Color.accentColor).opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+        .help(watch.paths.map { (watch.moved.contains($0) ? "✓ " : "· ") + abbreviatedPath($0) }.joined(separator: "\n"))
     }
 }

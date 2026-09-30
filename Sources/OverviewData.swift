@@ -212,6 +212,7 @@ func scanOutcome(_ record: ScanRecord, grew: Int) -> String {
     let target = record.requestedCount ?? record.measurements.count
     if !record.complete && record.wasStopped { return "Stopped after \(measured) of \(target) \(target == 1 ? "folder" : "folders")" }
     if measured == 0 && issues > 0 { return issues == 1 ? "1 folder couldn't be read" : "\(issues) folders couldn't be read" }
+    if measured == 0 && gone > 0 { return gone == 1 ? "That folder is gone now" : "\(gone) folders are gone now" }
     var parts = [measured == 1 ? "Scanned 1 folder" : "Scanned \(measured) folders"]
     if grew > 0 { parts.append("\(grew) grew") }
     if issues > 0 { parts.append("\(issues) couldn't be read") }
@@ -299,8 +300,10 @@ private func prettyRuntime(_ value: String) -> String {
 /// Short, human age: "today", "yesterday", "3 days ago", "5 weeks ago", "4 months ago".
 func ageText(_ date: Date?, now: Date = Date()) -> String {
     guard let date else { return "unknown" }
-    let days = Int(max(0, now.timeIntervalSince(date)) / 86400)
-    if days == 0 { return "today" }
+    let seconds = max(0, now.timeIntervalSince(date))
+    let days = Int(seconds / 86400)
+    // Hours matter when folders fill in a day: "20 hours ago" is quiet, "today" hides it.
+    if days == 0 { let hours = Int(seconds / 3600); return hours == 0 ? "in the last hour" : hours == 1 ? "an hour ago" : "\(hours) hours ago" }
     if days == 1 { return "yesterday" }
     if days < 14 { return "\(days) days ago" }
     if days < 60 { return "\(days / 7) weeks ago" }
@@ -333,15 +336,19 @@ struct StaleItem: Equatable, Identifiable {
     let bytes: Int64
     let modifiedAt: Date?
 }
-/// A command that moves items to the Trash (reversible; nothing is erased). Context Cleaner only copies it.
 /// A Terminal command that moves items to the Trash through Finder, for the user to run themselves.
-/// Finder renames an item if the Trash already holds one with its name, and Put Back works afterwards.
-/// Each path is escaped for AppleScript, then the whole script for the shell. Context Cleaner never runs it.
+/// Each item is moved on its own, so one that's already gone doesn't stop the rest, and it prints
+/// how many it moved. Finder renames an item if the Trash already holds one with its name, and Put Back works.
+/// Paths are escaped for AppleScript, then each line for the shell. Context Cleaner never runs it.
 func trashCommand(_ paths: [String]) -> String {
     func appleScriptString(_ text: String) -> String { "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
-    let items = paths.map { "POSIX file " + appleScriptString($0) + " as alias" }.joined(separator: ", ")
-    let script = "tell application \"Finder\" to delete {" + items + "}"
-    return "osascript -e '" + script.replacingOccurrences(of: "'", with: "'\\''") + "' >/dev/null"
+    let list = "{" + paths.map(appleScriptString).joined(separator: ", ") + "}"
+    let total = paths.count == 1 ? "1 item" : "\(paths.count) items"
+    let lines = ["set moved to 0", "repeat with p in " + list, "try",
+                 "tell application \"Finder\" to delete (POSIX file (contents of p) as alias)",
+                 "set moved to moved + 1", "end try", "end repeat",
+                 "return \"Moved \" & moved & \" of \(total) to the Trash. Empty the Trash to get the space back.\""]
+    return "osascript " + lines.map { "-e '" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
 }
 /// Readable names for processes that hold files open.
 func friendlyApp(_ command: String) -> String {
@@ -755,6 +762,82 @@ func readProjectActivity(_ root: String) -> ProjectActivity {
     let uncommitted = gitOutput(root, ["status", "--porcelain", "--untracked-files=no"]).map { $0.isEmpty ? 0 : min(999, $0.split(separator: "\n").count) }
     return ProjectActivity(root: root, isWorktree: isWorktree, mainRepository: mainRepository, registered: registered, branch: branch,
                            defaultBranch: defaultBranch.map { $0.hasPrefix("origin/") ? String($0.dropFirst(7)) : $0 }, lastCommit: lastCommit, merged: merged, uncommitted: uncommitted)
+}
+
+// MARK: - Free up space
+
+/// One thing you could move to the Trash now: its size, what removing it costs, and why it's listed.
+struct Suggestion: Identifiable, Equatable {
+    var id: String { path }
+    let path: String
+    let name: String
+    let place: String?
+    let bytes: Int64
+    /// What removing it costs, in the app's own answers: safe, rebuildable, or your call.
+    let cost: Verdict
+    /// Why it's listed, in a few words: "Codex scratch · untouched 20 hours".
+    let why: String
+    /// The folder to show when you open it: itself, or the folder an old item sits in.
+    var owner: String? = nil
+}
+/// "20 hours", "3 days", "2 weeks": how long something has sat untouched.
+func quietText(_ seconds: TimeInterval) -> String {
+    let hours = Int(seconds / 3600), days = Int(seconds / 86400)
+    if hours < 1 { return "under an hour" }
+    if hours < 48 { return hours == 1 ? "1 hour" : "\(hours) hours" }
+    if days < 14 { return "\(days) days" }
+    if days < 60 { return "\(days / 7) weeks" }
+    return "\(days / 30) months"
+}
+/// The folders worth moving to the Trash now, biggest first. A folder is listed when its answer is safe,
+/// or when nothing has changed in it for the quiet time and no app has it open: rebuildable output, Codex scratch,
+/// scratch work folders, recovery copies and emulators. Inside folders still in use, their untouched items are listed
+/// instead. Nested folders count once. Kept, ignored and removed folders never appear.
+func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Advice, gone: Set<String>, quiet: TimeInterval, now: Date = Date(), minimum: Int64 = 256 * 1_048_576) -> [Suggestion] {
+    var found: [Suggestion] = []
+    let sorted = items.filter { $0.state == .measured && !gone.contains($0.profile.path) }.sorted { $0.profile.path.count < $1.profile.path.count }
+    var taken: Set<String> = []
+    for m in sorted {
+        let path = m.profile.path
+        guard !hasAncestor(in: taken, path), m.processes.isEmpty, let bytes = m.allocatedBytes, bytes >= minimum else { continue }
+        let a = advice(m)
+        guard a.verdict != .keep else { continue }
+        let idle = m.latestModifiedAt.map { now.timeIntervalSince($0) }
+        let untouched = idle.map { "untouched " + quietText($0) }
+        let isQuiet = (idle ?? 0) >= quiet
+        let scratch = path.contains("/.codex/scratch/")
+        let rebuildable = m.profile.category.reproducible || m.profile.category == .debugSymbols || isProjectBuildOutput(path)
+        func add(_ cost: Verdict, _ label: String, age: Bool = true) {
+            found.append(Suggestion(path: path, name: m.profile.displayName, place: locationHint(path), bytes: bytes, cost: cost, why: ([label] + [age ? untouched : nil].compactMap { $0 }).joined(separator: " · ")))
+            taken.insert(path)
+        }
+        // Safe answers already say how long it's been unused.
+        if a.verdict == .safe { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: false); continue }
+        if isQuiet {
+            if rebuildable {
+                let kind: String
+                switch m.profile.category {
+                case .packageCache: kind = "Download cache"
+                case .installCache: kind = "Install cache"
+                case .debugSymbols: kind = "Debug files"
+                default: kind = "Build output"
+                }
+                add(.rebuild, kind); continue
+            }
+            if scratch { add(.check, m.profile.category == .backup ? "Backup in Codex scratch" : "Left by a Codex task"); continue }
+            if path.hasSuffix("/work") { add(.check, "Scratch work folder"); continue }
+            if m.profile.category == .virtualMachine && m.profile.associatedApp == "Android Emulator" { add(.check, "Android emulator"); continue }
+            if m.profile.category == .backup && (idle ?? 0) >= max(quiet, 3 * 86400) { add(.check, "Recovery copy"); continue }
+        }
+        // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments or scratch.
+        guard rebuildable || isProjectOutput(path) || scratch else { continue }
+        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum) {
+            let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
+            found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: rebuildable ? .rebuild : .check,
+                                    why: ([rebuildable ? "Old build inside" : "Old item inside"] + [age].compactMap { $0 }).joined(separator: " · "), owner: path))
+        }
+    }
+    return found.sorted { $0.bytes > $1.bytes }
 }
 
 // MARK: - Everything else

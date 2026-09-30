@@ -440,6 +440,11 @@ struct FolderRow: Identifiable {
         for record in records { for item in record.measurements { saved[item.profile.path] = item.profile } }
         discovery = Discovery(profiles: saved.values.sorted { $0.path < $1.path }, notes: ["Showing saved locations. Discovery runs only when requested. Coverage is recognized development/cache locations and your selected roots, not the whole disk."])
         recordCapacityIfDue()
+        NotificationCenter.default.addObserver(forName: .copyTrash, object: nil, queue: .main) { [weak self] note in
+            guard let paths = note.userInfo?["paths"] as? [String] else { return }
+            let bytes = note.userInfo?["bytes"] as? Int64
+            MainActor.assumeIsolated { self?.copyTrash(paths, bytes: bytes) }
+        }
         loadSimDevices()
         refreshGone()
         refreshProjects()
@@ -681,6 +686,72 @@ struct FolderRow: Identifiable {
         reclaimCache = (key, value)
         return value
     }
+    // MARK: Free up space
+
+    /// How long a folder must sit untouched before it's suggested. Saved between launches.
+    @Published var quietHours: Int = UserDefaults.standard.object(forKey: "quietHours") as? Int ?? 24 {
+        didSet { UserDefaults.standard.set(quietHours, forKey: "quietHours"); selectedSuggestions = [] }
+    }
+    /// Suggestions you ticked, by path.
+    @Published var selectedSuggestions: Set<String> = []
+    private var suggestionCache: (key: String, value: [Suggestion]) = ("", [])
+    /// What to move to the Trash now, biggest first. Rebuilt when scans, settings or the quiet time change,
+    /// and at least every ten minutes as folders age.
+    var suggestionList: [Suggestion] {
+        let bucket = Int(Date().timeIntervalSince1970 / 600)
+        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)|\(quietHours)|\(bucket)"
+        if suggestionCache.key == key { return suggestionCache.value }
+        let items = baseMeasures().filter { !isExcluded($0.profile.path) }
+        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600)
+        suggestionCache = (key, value)
+        return value
+    }
+
+    // MARK: Trash commands you copied
+
+    /// Folders in a Trash command you copied, watched until they leave their place. Metadata only.
+    struct TrashWatch: Equatable {
+        var paths: [String]
+        var bytes: Int64
+        var moved: Set<String> = []
+        var started = Date()
+        var movedBytes: Int64 = 0
+        var done: Bool { moved.count == paths.count }
+    }
+    @Published private(set) var trashWatch: TrashWatch?
+    private var trashTimer: Timer?
+    /// Copies a Move-to-Trash command and watches its folders, so you can see it worked.
+    func copyTrash(_ paths: [String], bytes: Int64? = nil) {
+        guard !paths.isEmpty else { return }
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(paths), forType: .string)
+        let sizes = Dictionary(latest.map { ($0.profile.path, $0.allocatedBytes ?? 0) }, uniquingKeysWith: { a, _ in a })
+        trashWatch = TrashWatch(paths: paths, bytes: bytes ?? paths.reduce(0) { $0 + (sizes[$1] ?? 0) })
+        trashSizes = sizes
+        trashTimer?.invalidate()
+        trashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.checkTrashWatch() } }
+    }
+    private var trashSizes: [String: Int64] = [:]
+    private func checkTrashWatch() {
+        guard var watch = trashWatch else { trashTimer?.invalidate(); return }
+        // Stop watching after half an hour; the result stays on screen until dismissed.
+        if Date().timeIntervalSince(watch.started) > 1800 { trashTimer?.invalidate(); return }
+        let pending = watch.paths.filter { !watch.moved.contains($0) }
+        DispatchQueue.global(qos: .utility).async {
+            let gone = missingPaths(pending)
+            DispatchQueue.main.async {
+                guard !gone.isEmpty, self.trashWatch?.started == watch.started else { return }
+                watch.moved.formUnion(gone)
+                watch.movedBytes = watch.moved.reduce(0) { $0 + (self.trashSizes[$1] ?? 0) }
+                if watch.movedBytes == 0 && watch.done { watch.movedBytes = watch.bytes }
+                self.trashWatch = watch
+                self.selectedSuggestions.subtract(gone)
+                self.refreshGone(); self.refreshTrash()
+                if watch.done { self.trashTimer?.invalidate() }
+            }
+        }
+    }
+    func dismissTrashWatch() { trashTimer?.invalidate(); trashWatch = nil }
+
     /// Folders holding old items, biggest amount first.
     private var insideListCache: (key: String, value: [FolderMeasurement]) = ("", [])
     var insideFolders: [FolderMeasurement] {

@@ -140,7 +140,7 @@ import Foundation
         let npm = advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 10), policy: LocationPolicy(), devices: [:], now: now)
         check(npm.verdict == .safe && npm.command == "npm cache clean --force" && npm.short == "Unused for 10 days", "an idle package cache is safe and offers the tool's own clean command")
         let freshCache = advice(for: folder("/fixture/.gradle/caches", .packageCache, lastChanged: 0.2), policy: LocationPolicy(), devices: [:], now: now)
-        check(freshCache.verdict == .rebuild && freshCache.short == "Used today" && freshCache.reason.contains("next run is slower"), "a cache a tool used today is rebuildable, never safe")
+        check(freshCache.verdict == .rebuild && freshCache.short == "Used 4 hours ago" && freshCache.reason.contains("next run is slower"), "a cache a tool used today is rebuildable, never safe")
         var derived = folder("/fixture/Library/Developer/Xcode/DerivedData", .buildOutput, lastChanged: 0.1)
         derived.contents = FolderContents(children: [
             ChildSummary(name: "OldGame-abc", directory: true, identity: "1", bytes: 3 * gib, files: 10, modifiedAt: now.addingTimeInterval(-60 * 86400)),
@@ -150,8 +150,8 @@ import Foundation
         let derivedAdvice = advice(for: derived, policy: LocationPolicy(), devices: [:], now: now)
         check(derivedAdvice.verdict == .rebuild && derivedAdvice.staleItems.map(\.name) == ["OldGame-abc"] && derivedAdvice.staleBytes == 3 * gib && derivedAdvice.staleDays == 30 && derivedAdvice.short == "3 GiB old inside",
               "a busy cache points at the old items inside it, ignoring tiny ones")
-        check(trashCommand(["/a/it's \"here\"", "/b\\c"]) == #"osascript -e 'tell application "Finder" to delete {POSIX file "/a/it'\''s \"here\"" as alias, POSIX file "/b\\c" as alias}' >/dev/null"#,
-              "the Trash command asks Finder, escaping each path for AppleScript and the whole script for the shell")
+        check(trashCommand(["/a/it's \"here\"", "/b\\c"]) == #"osascript -e 'set moved to 0' -e 'repeat with p in {"/a/it'\''s \"here\"", "/b\\c"}' -e 'try' -e 'tell application "Finder" to delete (POSIX file (contents of p) as alias)' -e 'set moved to moved + 1' -e 'end try' -e 'end repeat' -e 'return "Moved " & moved & " of 2 items to the Trash. Empty the Trash to get the space back."'"#,
+              "the Trash command asks Finder item by item, skips any already gone, says how many it moved, and escapes paths for AppleScript and the shell")
         let dex = Classifier.profile(path: "/Users/x/GitHub/kr/android/app/build/intermediates/project_dex_archive", home: "/Users/x", readMetadata: false)
         let parent = Classifier.profile(path: "/Users/x/GitHub/kr/android/app/build/intermediates", home: "/Users/x", readMetadata: false)
         check(dex.displayName == "kr · project_dex_archive in Android build intermediates" && parent.displayName == "kr · Android build intermediates" && dex.project == "kr",
@@ -192,7 +192,7 @@ import Foundation
         let unchanged = withSimulatorFacts(plain, devices: sims, now: now)
         check(unchanged.allocatedBytes == plain.allocatedBytes && unchanged.scopeID == plain.scopeID && unchanged.observedAt == plain.observedAt, "other folders keep their scanned size")
         check(withSimulatorFacts(pendingDevice, devices: [:], now: now).state == .pending, "without Xcode's list, a device row stays unscanned")
-        check(ageText(now.addingTimeInterval(-3600), now: now) == "today" && ageText(now.addingTimeInterval(-86400 * 1.5), now: now) == "yesterday" && ageText(now.addingTimeInterval(-86400 * 20), now: now) == "2 weeks ago" && ageText(nil, now: now) == "unknown", "ages read like a person would say them")
+        check(ageText(now.addingTimeInterval(-3600 * 20.5), now: now) == "20 hours ago" && ageText(now.addingTimeInterval(-600), now: now) == "in the last hour" && ageText(now.addingTimeInterval(-86400 * 1.5), now: now) == "yesterday" && ageText(now.addingTimeInterval(-86400 * 20), now: now) == "2 weeks ago" && ageText(nil, now: now) == "unknown", "ages read like a person would say them")
         check(missingPaths(["/fixture-definitely-missing/x", "/"]) == ["/fixture-definitely-missing/x"], "missing folders are found by metadata only")
         check(fileOnlyPaths(["/etc/hosts", "/", "/fixture-definitely-missing/x"]) == ["/etc/hosts"], "files such as device_set.plist are told apart from folders by metadata only")
         let tricky = ["/", "/a", "/a/", "/a//b", "/a/./b", "/a/../b", "/a/.", "/a/..", "/a/...", "/a/.hidden", "/a/b..c", "/Users/x/Library/Application Support/Café"]
@@ -284,6 +284,34 @@ import Foundation
         var hub = bee; hub.profile = Classifier.profile(path: "/Users/x/.cache/huggingface", home: "/Users/x", readMetadata: false)
         check(advice(for: bee, policy: LocationPolicy(), devices: [:], now: now).staleItems.isEmpty && !advice(for: hub, policy: LocationPolicy(), devices: [:], now: now).staleItems.isEmpty,
               "pictures made in DiffusionBee are never listed as old items; old downloaded models still are")
+        // 0.17: one ranked list of what to move to the Trash.
+        check(quietText(20 * 3600) == "20 hours" && quietText(3 * 86400) == "3 days" && quietText(20 * 86400) == "2 weeks" && quietText(600) == "under an hour", "quiet times read in hours first, then days")
+        var goneRecord = record("gone", []); goneRecord.measurements = [item("/fixture/x", .workspace, nil, .missing)]
+        check(scanOutcome(goneRecord, grew: 0) == "That folder is gone now", "rescanning a removed folder says it's gone, not \"Scanned 0 folders\"")
+        func aged(_ path: String, _ category: FolderCategory, hours: Double, gib size: Int64 = 10) -> FolderMeasurement {
+            var m = item(path, category, size * gib); m.latestModifiedAt = now.addingTimeInterval(-hours * 3600)
+            m.profile = Classifier.profile(path: path, home: "/Users/x", readMetadata: false); m.profile.category = category; return m
+        }
+        let quietScratch = aged("/Users/x/.codex/scratch/padforge-mac-home", .workspace, hours: 30, gib: 64)
+        let busyScratch = aged("/Users/x/.codex/scratch/kp061", .workspace, hours: 5, gib: 62)
+        var openScratch = aged("/Users/x/.codex/scratch/live", .workspace, hours: 40); openScratch.processes = [ProcessEvidence(pid: 1, command: "zsh", access: "cwd", path: "/Users/x/.codex/scratch/live")]
+        let nested = aged("/Users/x/.codex/scratch/padforge-mac-home/games", .workspace, hours: 30, gib: 60)
+        let oldBuild = aged("/Users/x/GitHub/kr/build", .workspace, hours: 50, gib: 20)
+        let idleCache = aged("/Users/x/.npm/_cacache", .packageCache, hours: 24 * 10, gib: 1)
+        let keptOne = aged("/Users/x/.codex/scratch/keepme", .workspace, hours: 90)
+        let removed = aged("/Users/x/.codex/scratch/removed", .workspace, hours: 90)
+        var busyWork = aged("/Users/x/.codex/worktrees/kp/work", .workspace, hours: 2, gib: 70)
+        busyWork.contents = FolderContents(children: [ChildSummary(name: "old-run", directory: true, identity: "1", bytes: 30 * gib, files: 9, modifiedAt: now.addingTimeInterval(-40 * 3600)),
+                                                      ChildSummary(name: "today-run", directory: true, identity: "2", bytes: 30 * gib, files: 9, modifiedAt: now.addingTimeInterval(-3600))],
+                                           fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        let pool = [quietScratch, busyScratch, openScratch, nested, oldBuild, idleCache, keptOne, removed, busyWork]
+        func adviseFor(_ m: FolderMeasurement) -> Advice { advice(for: m, policy: m.profile.path.hasSuffix("keepme") ? LocationPolicy(kept: true) : LocationPolicy(), devices: [:], now: now) }
+        let dayList = suggestions(pool, advice: adviseFor, gone: [removed.profile.path], quiet: 24 * 3600, now: now)
+        check(dayList.map(\.name) == ["padforge-mac-home", "old-run", "kr · build", "npm download cache"],
+              "a day's quiet lists quiet scratch, old runs inside a busy folder, idle builds and safe caches, biggest first; busy, open, kept, removed and nested folders stay out")
+        check(dayList[0].cost == .check && dayList[0].why == "Left by a Codex task · untouched 30 hours" && dayList[1].owner == busyWork.profile.path && dayList[2].cost == .rebuild && dayList[3].cost == .safe,
+              "each suggestion says what removing it costs and why, and old items open the folder they sit in")
+        check(suggestions(pool, advice: adviseFor, gone: [], quiet: 3 * 86400, now: now).map(\.name).contains("padforge-mac-home") == false, "a longer quiet time leaves out folders touched more recently")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

@@ -182,7 +182,7 @@ struct VerdictCard: View {
             Text(advice.howTo).font(.callout).fixedSize(horizontal: false, vertical: true)
             if let trashPath, advice.verdict != .keep {
                 Button(copiedFolder ? "Copied" : "Copy Move-to-Trash Command", systemImage: "doc.on.clipboard") {
-                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand([trashPath]), forType: .string); copiedFolder = true
+                    requestTrashCopy([trashPath]); copiedFolder = true
                 }.controlSize(.small)
                     .help("Copies a Terminal command that asks Finder to move this whole folder to the Trash. Put Back works, and Finder renames it if the Trash already has one with its name. Context Cleaner never runs it.")
             }
@@ -218,11 +218,19 @@ struct VerdictCard: View {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(items.map { URL(fileURLWithPath: $0.path) }) }
                     .controlSize(.small).help("Selects these items in Finder. Press ⌘⌫ there to move them to the Trash yourself.")
                 Button(copiedTrash ? "Copied" : "Copy Move-to-Trash Command") {
-                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(items.map(\.path)), forType: .string); copiedTrash = true
+                    requestTrashCopy(items.map(\.path), bytes: advice.staleBytes); copiedTrash = true
                 }.controlSize(.small).help("Copies a Terminal command that asks Finder to move these items to the Trash. Put Back works, and same-named items don't collide. Context Cleaner never runs it.")
             }
         }
     }
+}
+
+/// Asks the app to copy a Move-to-Trash command and watch its folders until they're gone.
+extension Notification.Name { static let copyTrash = Notification.Name("ContextCleaner.copyTrash") }
+func requestTrashCopy(_ paths: [String], bytes: Int64? = nil) {
+    var info: [String: Any] = ["paths": paths]
+    if let bytes { info["bytes"] = bytes }
+    NotificationCenter.default.post(name: .copyTrash, object: nil, userInfo: info)
 }
 
 extension Color {

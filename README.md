@@ -65,6 +65,14 @@ Context Cleaner answers those questions for the places where this data piles up,
 
 ## What's new
 
+**0.17 tells you what to remove right now:**
+
+- **Free up space**, right under the chart: one list, biggest first, of everything safe plus everything nothing has touched or opened for the time you pick (12 hours, 1 day, 3 days or a week). That covers idle build output, Codex scratch, scratch work folders, recovery copies, Android emulators, and old runs inside folders you're still using. Each row says what removing it costs and how long it has sat untouched.
+- **Tick rows and copy one command** for all of them, with a running total.
+- **The Trash command reports back.** It moves each item on its own, skips any that are already gone, and prints "Moved 3 of 3 items to the Trash". Context Cleaner watches those folders and confirms when each one has left, then reminds you to empty the Trash.
+- **Hours, not "today".** A folder untouched for 20 hours says so, instead of looking busy.
+- **Scratch folders say what they are**, and rescanning a folder you removed says it's gone.
+
 **0.16 finds the space that was hiding in "Everything else":**
 
 - **Codex scratch is scanned.** On the Mac this was built on, `~/.codex/scratch` held 274 GiB that no view showed: fresh-clone test homes, device backups and build outputs from finished tasks. Each task folder now gets its own row, size, last use and answer.
@@ -189,7 +197,7 @@ It never looks at system files, other users' folders, Photos, Mail, Messages or 
 - **You can get back.** Safe folders, old items inside folders and rebuildable output added together, each byte counted once. The bar below splits your whole disk by answer; click a color to list those folders.
 - **Where the space went.** The chart's range split by place. New folders count in full, and "Everything else" is what the app doesn't scan.
 - **Everything else.** Click it, then **Look Inside** to size the rest of your home folder, Library and Applications. Open any row to go a level deeper. Known folders say what they are, and git projects say whether they're backed up.
-- **Start here.** The biggest folders for each answer, with the Trash reminder underneath.
+- **Free up space.** What to move to the Trash now, biggest first, with what each costs. Pick how long something must sit untouched, tick rows, and copy one command.
 
 Readings come from every scan and from an hourly check while the app is open. Gaps mean the app wasn't running; nothing is filled in.
 
@@ -200,7 +208,7 @@ Readings come from every scan and from an hourly check while the app is open. Ga
 3. Choose **Scan Folders…** (⌘R), check the list, and choose **Start Full Scan**. A first scan takes a few minutes, and you can stop at any time.
 4. macOS may ask whether Context Cleaner can read other apps' data (such as iPhone install caches) or your Documents folder. The scan waits for your answer. Either way, it only reads sizes and dates.
 5. Optional: turn on **Full Disk Access** from **Settings › Scanning**. It stops those questions and lets the app show how much your Trash holds.
-6. Start with **You can get back** on the Overview, or the **Old items** tab under **Start here**.
+6. Start with **Free up space** on the Overview. Tick what you want gone, copy the command, and paste it in Terminal.
 
 ## Frequently asked questions
 
@@ -262,13 +270,13 @@ The script refuses to overwrite an existing destination. It writes the app, a DM
 bash test-preserving.sh /absolute/path/to/new-test-output
 ```
 
-Six suites (289 checks) cover preservation, folder contents, scan limits, planning, discovery and model state, and the Overview's numbers. They run on fixtures only, and every fixture and log is kept.
+Six suites (294 checks) cover preservation, folder contents, scan limits, planning, discovery and model state, and the Overview's numbers. They run on fixtures only, and every fixture and log is kept.
 
 ## Documentation
 
 - [Design and copy rules](docs/DESIGN.md)
 - [Validation records](docs/validation), one per release, with evidence and limits
-- [Goal loops](docs) behind each release, such as [0.16](docs/GOAL_LOOP_0.16.md) and [0.13](docs/GOAL_LOOP_0.13.md)
+- [Goal loops](docs) behind each release, such as [0.17](docs/GOAL_LOOP_0.17.md) and [0.16](docs/GOAL_LOOP_0.16.md)
 
 ## Getting help
 

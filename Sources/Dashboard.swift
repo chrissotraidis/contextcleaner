@@ -420,12 +420,13 @@ struct Dashboard: View {
                         Divider()
                         UsageChart(model: model, chartHeight: chartHeight)
                     }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
+                    // What to remove comes first; where it went and the whole-disk map explain it.
                     // Each panel owns its hover and selection, so pointing at one never redraws the others.
-                    DiskMap(model: model)
                     HStack(alignment: .top, spacing: 16) {
+                        StartPanel(model: model).frame(maxWidth: .infinity).layoutPriority(1)
                         WentPanel(model: model).frame(maxWidth: .infinity)
-                        StartPanel(model: model).frame(maxWidth: .infinity)
                     }
+                    DiskMap(model: model)
                 }.padding(.horizontal, 22).padding(.bottom, 16)
             }.scrollBounceBehavior(.basedOnSize)
         }
@@ -656,41 +657,41 @@ struct WentPanel: View {
     }
 }
 /// The biggest things to remove, one answer at a time.
+/// What to move to the Trash now: one list, biggest first, each with what removing it costs.
 struct StartPanel: View {
     @ObservedObject var model: CleanerModel
-    @State private var tier = 0
+    @State private var showAll = false
     var body: some View {
-        let r = model.reclaim
+        let list = model.suggestionList
+        let total = list.reduce(Int64(0)) { $0 + $1.bytes }
+        let chosen = list.filter { model.selectedSuggestions.contains($0.path) }
+        let chosenBytes = chosen.reduce(Int64(0)) { $0 + $1.bytes }
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label { Text("Start here").foregroundStyle(.primary) } icon: { Image(systemName: "checklist").foregroundStyle(Color.accentColor) }.font(.headline)
+            HStack(spacing: 8) {
+                Label { Text("Free up space").foregroundStyle(.primary) } icon: { Image(systemName: "checklist").foregroundStyle(Color.accentColor) }.font(.headline).fixedSize()
                 Spacer()
-                Picker("Show", selection: $tier) {
-                    Text("Safe").tag(0); Text("Old items").tag(1); Text("Rebuildable").tag(2); Text("Your call").tag(3)
+                Text("Untouched for").font(.caption).foregroundStyle(.secondary).fixedSize()
+                Picker("Untouched for", selection: $model.quietHours) {
+                    Text("12 hours").tag(12); Text("1 day").tag(24); Text("3 days").tag(72); Text("1 week").tag(168)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
             }
-            switch tier {
-            case 1:
-                note("Untouched for a week or more, inside folders you still use. \(byteLabel(r.inside.bytes)) in all.")
-                ForEach(model.insideFolders.prefix(5)) { item in
-                    let a = model.adviceFor(item)
-                    row(item, detail: "\(a.staleItems.count) old \(a.staleItems.count == 1 ? "item" : "items")", bytes: a.staleBytes, tint: .insideTint)
-                }
-                more(r.inside.folders, filter: .inside)
-            case 2:
-                note("In use, but rebuilt if removed. \(byteLabel(r.rebuild.bytes)) in all.")
-                ForEach((model.verdictGroups[.rebuild] ?? []).prefix(5)) { item in row(item, detail: model.adviceFor(item).short, bytes: item.allocatedBytes ?? 0, tint: Verdict.rebuild.tint) }
-                more(r.rebuild.count, filter: .rebuild)
-            case 3:
-                note("May be the only copy. Open one to see what to check.")
-                ForEach((model.verdictGroups[.check] ?? []).prefix(5)) { item in row(item, detail: model.adviceFor(item).short, bytes: item.allocatedBytes ?? 0, tint: Verdict.check.tint) }
-                more(r.check.count, filter: .check)
-            default:
-                note("Nothing is lost. \(byteLabel(r.safe.bytes)) in all.")
-                ForEach(model.overview.safe.prefix(5)) { item in row(item, detail: model.adviceFor(item).short, bytes: item.allocatedBytes ?? 0, tint: Verdict.safe.tint) }
-                more(r.safe.count, filter: .safe)
+            Text(list.isEmpty ? "Nothing has sat untouched that long. Try a shorter time."
+                 : "\(byteLabel(total)) in \(list.count) \(list.count == 1 ? "folder" : "folders") nothing has touched or opened for that long, plus anything safe. Biggest first.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 2) { ForEach(list.prefix(showAll ? 80 : 8)) { row($0) } }
+            if list.count > 8 {
+                Button(showAll ? "Show the top 8" : list.count > 80 ? "Show the top 80" : "Show all \(list.count)") { withAnimation(.snappy(duration: 0.2)) { showAll.toggle() } }.buttonStyle(.link).font(.callout)
             }
             Divider()
+            HStack(spacing: 8) {
+                Text(chosen.isEmpty ? "Tick what you want gone, then copy one command for all of it." : "\(chosen.count) ticked · \(byteLabel(chosenBytes))")
+                    .font(.callout).foregroundStyle(chosen.isEmpty ? .secondary : .primary).monospacedDigit()
+                Spacer(minLength: 6)
+                if !chosen.isEmpty { Button("Clear") { model.selectedSuggestions = [] }.controlSize(.small) }
+                Button("Copy Move-to-Trash Command", systemImage: "doc.on.clipboard") { model.copyTrash(chosen.map(\.path), bytes: chosenBytes) }
+                    .buttonStyle(.borderedProminent).controlSize(.small).disabled(chosen.isEmpty)
+                    .help("Copies one Terminal command that asks Finder to move the ticked folders to the Trash. Paste it in Terminal; it says how many it moved, and Context Cleaner confirms each one is gone. It never runs the command itself.")
+            }
             HStack(spacing: 6) {
                 Image(systemName: "trash").foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(model.trashBytes.map { "The Trash holds \(byteLabel($0)). Space comes back when you empty it." } ?? "Space comes back when you empty the Trash.")
@@ -700,24 +701,26 @@ struct StartPanel: View {
             }.font(.caption).foregroundStyle(.secondary)
         }.padding(16).frame(maxWidth: .infinity, alignment: .topLeading).background(.background.secondary)
     }
-    private func note(_ text: String) -> some View { Text(text).font(.caption).foregroundStyle(.secondary) }
-    private func row(_ item: FolderMeasurement, detail: String, bytes: Int64, tint: Color) -> some View {
-        Button { model.open(item.profile.path) } label: {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 2).fill(tint).frame(width: 4, height: 30).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(item.profile.displayName).font(.callout).lineLimit(1)
-                    Text([locationHint(item.profile.path), detail].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                Text(byteLabel(bytes)).font(.callout).monospacedDigit()
-            }.padding(.vertical, 2).contentShape(Rectangle())
-        }.buttonStyle(.plain).help(model.adviceFor(item).reason)
-            .contextMenu { LocationActions(model: model, path: item.profile.path) }
-    }
-    @ViewBuilder private func more(_ count: Int, filter: LocationFilter) -> some View {
-        if count == 0 { Text("Nothing here right now.").font(.callout).foregroundStyle(.secondary) }
-        else if count > 5 { Button("See all \(count) in Folders") { model.showFolders(filter: filter) }.buttonStyle(.link).font(.callout) }
+    private func row(_ s: Suggestion) -> some View {
+        let ticked = Binding(get: { model.selectedSuggestions.contains(s.path) },
+                             set: { on in if on { model.selectedSuggestions.insert(s.path) } else { model.selectedSuggestions.remove(s.path) } })
+        return HStack(spacing: 10) {
+            Toggle(s.name, isOn: ticked).toggleStyle(.checkbox).labelsHidden()
+            RoundedRectangle(cornerRadius: 2).fill(s.cost.tint).frame(width: 4, height: 30).accessibilityHidden(true)
+            Button { model.open(s.owner ?? s.path) } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(s.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                        // Cost and quiet time first; the location is the part that can be cut off.
+                        (Text(s.cost.title).foregroundColor(s.cost.tint) + Text(" · " + ([s.why, s.place].compactMap { $0 }.joined(separator: " · "))).foregroundColor(.secondary))
+                            .font(.caption).lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Text(byteLabel(s.bytes)).font(.callout).monospacedDigit()
+                }.contentShape(Rectangle())
+            }.buttonStyle(.plain).help(s.path)
+        }.padding(.vertical, 2)
+            .contextMenu { LocationActions(model: model, path: s.owner ?? s.path) }
     }
 }
 extension View {
@@ -851,7 +854,7 @@ private struct ElsewhereRow: View {
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     Button(copied ? "Copied" : "Copy Move-to-Trash Command") {
-                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(idle.map(\.path)), forType: .string); copied = true
+                        model.copyTrash(idle.map(\.path), bytes: bytes); copied = true
                     }.controlSize(.small).help("Copies a Terminal command that moves these projects to the Trash through Finder. Context Cleaner doesn't run it.")
                 }.padding(8).background(Color.stable.opacity(0.08), in: RoundedRectangle(cornerRadius: 6)).padding(.leading, indent)
             }

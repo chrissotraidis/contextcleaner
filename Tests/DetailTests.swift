@@ -101,6 +101,25 @@ import Foundation
         check(main.worktrees == 1 && !main.removable && main.lastActivity != nil, "the repository knows a worktree uses it, so it's never offered for the Trash")
         try writeNew(payload, to: tree.appendingPathComponent("draft.txt"))
         check(!readRepoBackup(tree.path).backedUp, "a worktree with a new file is not backed up")
+        // The recheck before a Trash command is copied: gone, open, changed since the scan, or ready.
+        let quiet = base.appendingPathComponent("recheck/quiet"), busy = base.appendingPathComponent("recheck/busy"), held = base.appendingPathComponent("recheck/held")
+        for folder in [quiet, busy, held] { try fm.createDirectory(at: folder, withIntermediateDirectories: true); try writeNew(payload, to: folder.appendingPathComponent("a.bin")) }
+        let later = Date().addingTimeInterval(120), earlier = Date().addingTimeInterval(-3600)
+        let open = [ProcessEvidence(pid: 9, command: "java", access: "r", path: held.path + "/a.bin"), ProcessEvidence(pid: 8, command: "mdworker_shared", access: "r", path: quiet.path + "/a.bin")]
+        let checked = recheck([(quiet.path, later), (busy.path, earlier), (held.path, later), (base.appendingPathComponent("recheck/gone").path, later)], open: open)
+        check(checked.ready == [quiet.path] && checked.leftOut[busy.path] == .changed && checked.leftOut[held.path] == .open && checked.leftOut[base.appendingPathComponent("recheck/gone").path] == .gone,
+              "a Trash command leaves out folders changed since the scan, open in an app or already gone; Spotlight reading a file isn't use")
+        check(recheck([(quiet.path, Date().addingTimeInterval(-600))], open: []).leftOut[quiet.path] == .changed, "a folder with files newer than the scan reads as changed")
+        // Cleanups are kept as new files; the newest state of each wins.
+        let history = try AppendStore(root: base.appendingPathComponent("store"))
+        var cleanup = Cleanup(id: "c1", copiedAt: earlier, updatedAt: earlier, items: [.init(path: "/x", bytes: 5, status: .waiting), .init(path: "/y", bytes: 7, status: .leftOut, note: LeftOut.changed.rawValue)])
+        try history.append(cleanup)
+        cleanup.items[0].status = .moved; cleanup.updatedAt = Date()
+        try history.append(cleanup)
+        let saved = history.cleanups()
+        let files = try fm.contentsOfDirectory(atPath: base.appendingPathComponent("store/cleanups").path)
+        check(saved.count == 1 && saved[0].count(.moved) == 1 && saved[0].bytes(.moved) == 5 && saved[0].count(.leftOut) == 1 && files.count == 2,
+              "History keeps every state of a cleanup as its own file and shows the newest")
         print("SUCCESS: \(count) detail checks; all fixtures preserved at \(base.path)")
     }
 }

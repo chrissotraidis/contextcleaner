@@ -29,7 +29,7 @@
   <a href="#build-from-source">Build it</a>
 </p>
 
-![Context Cleaner Overview: 60 GiB free of 3.63 TiB, a chart of used space climbing toward Full, and Free up space listing idle build folders, a recovery copy and Codex scratch biggest first, each with what removing it costs and how long it has been untouched](docs/images/overview-dark.png)
+![Context Cleaner Overview: 193 GiB free of 3.63 TiB and about 66 GiB to get back, then Free up space with 88 items untouched for 12 hours, filters for Safe, Rebuildable and Might hold work, Select All and Copy Move-to-Trash Command above the list, and a device backup marked so Select All skips it](docs/images/overview-dark.png)
 
 > [!IMPORTANT]
 > **Context Cleaner never deletes, moves or empties anything.** It measures folders, explains them, and tells you how to remove them yourself: in Finder, or with a command it copies for you to run. There is no clean button, on purpose.
@@ -54,16 +54,26 @@ Context Cleaner answers those questions for the places where this data piles up,
 
 | | What to expect |
 |---|---|
-| **Answers** | Safe to remove, Rebuildable, Your call or Leave it, ranked by what removing costs |
+| **Answers** | Safe to remove, Rebuildable, Might hold work or Leave it, ranked by what removing costs |
 | **Evidence** | Newest file change, read-only git status, whether git ignores the folder, open files, and Xcode's own simulator data |
 | **Inside folders** | Dated experiment builds and old downloads inside folders you still use, listed with dates and sizes |
-| **History** | Disk space every hour while open, folder sizes at every scan, and what grew in between |
+| **History** | Every cleanup you did (what was moved, what wasn't), disk space every hour while open, and folder sizes at every scan |
 | **Coverage** | 33 known places across AI tools, developer tools, virtual machines, games and Downloads, plus folders you add |
 | **Everything else** | A read-only look at the rest of your home folder, with known folders explained and git projects marked backed up or not |
 | **Deletes** | Nothing, ever. You remove things, and space comes back when you empty the Trash |
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
 ## What's new
+
+**0.18 is built around Free up space, and makes the Trash command dependable for any number of folders:**
+
+- **Free up space comes first.** The Overview opens with free space and "You can get back", then the list. Select All and Copy sit above the list, so they're in reach however long it is, and the list scrolls inside its panel.
+- **Select All, by answer.** Filter the list to Safe, Rebuildable or Might hold work, each with its count and size, and tick everything shown in one click. Select All never ticks backups, saves, recovery copies or private copies; tick those yourself.
+- **Backups are never called rebuildable.** A folder named like a backup, save, recovery copy or private copy is "Might hold work", even inside a `build` or `generated` folder. On the Mac this was built on, that caught dated iPad backups that 0.17 listed as an old build.
+- **Checked again before copying.** When you click Copy, each item is rechecked: still there, no app has a file open in it, and nothing in it changed since the scan. Anything that fails is left out, and you're told why. The button shows what happened: Checking, Copied 82 of 84, or Nothing copied.
+- **A Trash command that works for 1 item or 400.** It moves each item with macOS's own `trash` tool, which is instant and never shows a dialog, and falls back to Finder for a read-only folder, saying first that macOS may ask for your password. It prints a line per item (Moved, Already gone, or NOT moved with the reason) and counts them at the end. An item only counts as moved once it's gone. An Android emulator goes with its `.ini` file.
+- **History shows your cleanups.** Scan History is now **History**, with **Cleanups** first: every command you copied, what was moved, what's still in place, and what was left out and why.
+- **Clearer answers.** "Your call" is now **Might hold work**. Every list and tile says what the answers mean: Safe is not needed again, Rebuildable is recreated by the next build, Might hold work may be the only copy, so look first.
 
 **0.17 tells you what to remove right now:**
 
@@ -119,7 +129,7 @@ flowchart LR
     C --> D{"What does<br/>removing cost?"}
     D -->|nothing| E["Safe to remove"]
     D -->|a rebuild| F["Rebuildable"]
-    D -->|maybe your only copy| G["Your call"]
+    D -->|maybe your only copy| G["Might hold work"]
     D -->|breaks the app| H["Leave it"]
     E & F & G --> I["You remove it<br/>in Finder or Terminal"]
 ```
@@ -133,9 +143,9 @@ flowchart LR
 
 | Answer | What removing it costs | Examples |
 |---|---|---|
-| 🟢 **Safe to remove** | Nothing | Idle package caches, Xcode DerivedData, iPhone install caches, build output from finished projects |
+| 🟢 **Safe to remove** | Nothing: you won't need it again | Idle package caches, Xcode DerivedData, iPhone install caches, build output from finished projects |
 | 🔵 **Rebuildable** | Waiting for the next build or download | Build output and caches you used this week |
-| 🟠 **Your call** | It may be the only copy of something | Recovery copies, scratch `work` folders, virtual machines, folders git tracks |
+| 🟠 **Might hold work** | It may be the only copy of something | Recovery copies, backups, scratch `work` folders, virtual machines, folders git tracks |
 | ⚪ **Leave it** | Breaks the app | Chat history, app libraries |
 
 **Old items inside** are counted on their own. Codex worktrees and project `build`, `generated` and `work` folders keep one subfolder per build or experiment. When one of those folders is still in use, every subfolder untouched for 7 days or more is listed with its date and size (30 days for caches). On the Mac this was built on, that found 205 GiB, including a single 33 GiB experiment build from ten days earlier.
@@ -143,7 +153,8 @@ flowchart LR
 A few rules keep the answers honest:
 
 - **Recent use beats "rebuildable".** A cache used this week is never called safe.
-- **Git decides what's build output.** A `build` folder that git tracks may hold source, so it's your call.
+- **Git decides what's build output.** A `build` folder that git tracks may hold source, so it might hold work.
+- **Backups are never build output.** Anything named like a backup, save, recovery copy or private copy might hold work, wherever it sits.
 - **Finished worktrees say so.** A worktree that's merged, clean and quiet for two weeks offers `git worktree remove`, which git refuses if anything is uncommitted.
 - **Simulators are listed by name**, such as "iPhone 17 Pro · iOS 26.5", with size and last use from Xcode.
 - **Your choice wins.** Right-click any folder to **Ignore This Folder** (still scanned, never suggested) or **Stop Scanning This Folder**. Both move it to **Ignored**.
@@ -224,9 +235,17 @@ Because most big folders on a working Mac are in use. "Safe" means nothing is lo
 
 It asks git, read-only and without going online. A project counts as backed up when it has a remote, every commit on its branches is on that remote as of your last fetch, and nothing is uncommitted or stashed. A Codex worktree only needs to be clean on a branch, because its commits stay in the main repository when the folder goes. Files git ignores, such as `ref/` game data or `.env`, are never backed up by git, so they're named. Build folders and caches aren't.
 
-### What does "Your call" mean?
+### What's the difference between Safe and Rebuildable?
 
-The folder may hold the only copy of something: a Codex recovery copy made before a risky change, a scratch `work` folder with hand-made files, a virtual machine, or a `build` folder git tracks. Each card says what to check first.
+Neither loses anything. **Safe** means you won't need it again: its project is finished, or it has sat unused for weeks. **Rebuildable** means you're still using it, so the next build or download recreates it and you wait for that.
+
+### What does "Might hold work" mean?
+
+The folder may hold the only copy of something: a Codex recovery copy made before a risky change, a backup of a device, a scratch `work` folder with hand-made files, a virtual machine, or a `build` folder git tracks. Each card says what to check first. Select All never ticks backups.
+
+### What does the Move-to-Trash command do?
+
+It moves each item to the Trash, one at a time, and prints what happened to each: `Moved`, `Already gone`, or `NOT moved` with the reason. It uses macOS's `trash` tool, and Finder for anything that tool refuses. Before copying it, Context Cleaner rechecks every item and leaves out anything that's open in an app or changed since the scan. It watches the items until they're gone and records the cleanup in History. **Put Back** works in the Trash, and nothing is deleted until you empty it.
 
 ### Why does removing a folder free less than its size?
 

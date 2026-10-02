@@ -14,6 +14,7 @@ struct MainView: View {
     @State var showingAccessHelp = false
     @State var showInside = false
     @State var showDetails = false
+    @State var historyTab = 0
     let timer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
     var busy: Bool { model.running || model.inspecting || model.discovering }
     var body: some View {
@@ -34,7 +35,7 @@ struct MainView: View {
                 header
                 scanBanner
                 if model.section == .overview { Dashboard(model: model) }
-                else if model.section == .history { scanHistory }
+                else if model.section == .history { history }
                 else {
                     // A fixed proportional split never reports a width larger than the window,
                     // so the header, table and inspector stay inside the visible area at any size.
@@ -178,13 +179,13 @@ struct MainView: View {
                     VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "not counting ignored", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
                     ForEach(Verdict.allCases) { verdict in
                         let total = model.verdictTotal(verdict)
-                        VerdictTile(title: verdict.shortTitle, value: byteLabel(total.bytes), detail: "\(total.count) \(total.count == 1 ? "folder" : "folders")", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
+                        VerdictTile(title: verdict.shortTitle, value: byteLabel(total.bytes), detail: "\(total.count) · \(verdict.hint)", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
                             .help(verdict.title + ": " + verdict.meaning)
                     }
                 }
                 HStack(spacing: 12) {
                     let hidden = model.gone.isEmpty || model.locationFilter == .excluded ? "" : " · \(model.gone.count) \(model.gone.count == 1 ? "folder" : "folders") no longer on disk \(model.gone.count == 1 ? "is" : "are") hidden"
-                    Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     orderMenu
                     Menu {
@@ -638,6 +639,79 @@ struct MainView: View {
             }
         }
     }
+    /// What you cleaned up, and what each scan found.
+    var history: some View {
+        VStack(spacing: 0) {
+            Picker("History", selection: $historyTab) { Text("Cleanups").tag(0); Text("Scans").tag(1) }
+                .pickerStyle(.segmented).labelsHidden().fixedSize().padding(.vertical, 8)
+            if historyTab == 0 { cleanupHistory } else { scanHistory }
+        }
+    }
+    private func dayTitle(_ day: Date) -> String {
+        let calendar = Calendar.current
+        return calendar.isDateInToday(day) ? "Today" : calendar.isDateInYesterday(day) ? "Yesterday" : day.formatted(.dateTime.weekday(.wide).month(.wide).day())
+    }
+    /// Every Move-to-Trash command you copied, newest first: what was moved, what wasn't, and what was left out and why.
+    var cleanupHistory: some View {
+        let list = model.cleanups
+        let calendar = Calendar.current
+        let days = Dictionary(grouping: list, by: { calendar.startOfDay(for: $0.copiedAt) }).sorted { $0.key > $1.key }
+        let week = list.filter { Date().timeIntervalSince($0.copiedAt) < 7 * 86400 }
+        return List {
+            if !week.isEmpty {
+                let moved = week.reduce(0) { $0 + $1.count(.moved) }, bytes = week.reduce(Int64(0)) { $0 + $1.bytes(.moved) }
+                Label("In the last 7 days you moved \(moved) \(moved == 1 ? "item" : "items") to the Trash: \(byteLabel(bytes)).", systemImage: "trash")
+                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+            }
+            ForEach(days, id: \.key) { day, items in
+                Section(dayTitle(day)) { ForEach(items) { cleanupRow($0) } }
+            }
+        }.overlay { if list.isEmpty { ContentUnavailableView("No cleanups yet", systemImage: "trash", description: Text("When you copy a Move-to-Trash command, it shows up here: what was moved, what wasn't, and anything left out.")) } }
+    }
+    func cleanupRow(_ cleanup: Cleanup) -> some View {
+        let inCommand = cleanup.items.count - cleanup.count(.leftOut)
+        let moved = cleanup.count(.moved)
+        let open = Date().timeIntervalSince(cleanup.copiedAt) < 1800
+        let headline = inCommand == 0 ? "Nothing copied" : moved == inCommand ? "Moved \(moved == 1 ? "1 item" : "all \(moved)") to the Trash" : "Moved \(moved) of \(inCommand) to the Trash"
+        var notes: [String] = []
+        if moved < inCommand { notes.append(open ? "\(inCommand - moved) waiting for the command" : "\(inCommand - moved) still in place") }
+        if cleanup.count(.leftOut) > 0 { notes.append("\(cleanup.count(.leftOut)) left out when rechecked") }
+        return DisclosureGroup {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(cleanup.items, id: \.path) { item in
+                    let status = cleanupStatus(item, open: open)
+                    HStack(spacing: 8) {
+                        Image(systemName: status.symbol).foregroundStyle(status.tint).frame(width: 16).accessibilityHidden(true)
+                        Text(model.displayName(item.path)).lineLimit(1).truncationMode(.middle)
+                        if let hint = locationHint(item.path) { Text(hint).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
+                        Spacer(minLength: 8)
+                        Text(status.text).font(.caption).foregroundStyle(.secondary)
+                        Text(byteLabel(item.bytes)).monospacedDigit().frame(minWidth: 80, alignment: .trailing)
+                    }.font(.callout).frame(maxWidth: 820, alignment: .leading).help(item.path)
+                }
+            }.padding(.vertical, 6).padding(.leading, 26)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: inCommand > 0 && moved == inCommand ? "checkmark.circle" : moved > 0 ? "circle.lefthalf.filled" : "circle.dashed")
+                    .foregroundStyle(inCommand > 0 && moved == inCommand ? Color.stable : Color.secondary).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(headline).font(.headline)
+                    if !notes.isEmpty { Text(notes.joined(separator: " · ")).font(.callout).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                if moved > 0 { Text(byteLabel(cleanup.bytes(.moved))).font(.callout).monospacedDigit().foregroundStyle(Color.stable) }
+                Text(cleanup.copiedAt.formatted(date: .omitted, time: .shortened)).font(.callout).foregroundStyle(.secondary).monospacedDigit().frame(minWidth: 72, alignment: .trailing)
+            }.padding(.vertical, 4)
+        }
+    }
+    private func cleanupStatus(_ item: Cleanup.Item, open: Bool) -> (text: String, symbol: String, tint: Color) {
+        switch item.status {
+        case .moved: return ("Moved to the Trash", "checkmark.circle.fill", .stable)
+        case .notMoved: return ("Still in place", "circle", .caution)
+        case .leftOut: return ("Left out: " + (item.note ?? "rechecked").lowercased(), "minus.circle", .secondary)
+        case .waiting: return open ? ("Waiting for the command", "clock", .secondary) : ("Not confirmed", "questionmark.circle", .secondary)
+        }
+    }
     /// Saved scans grouped by day, newest first. Each row names what was scanned and the result.
     var scanHistory: some View {
         let records = model.records.sorted { $0.finishedAt > $1.finishedAt }
@@ -713,7 +787,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
             if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled).lineLimit(3) }
-            if let watch = model.trashWatch { TrashWatchLine(model: model, watch: watch) }
+            if let watch = model.trashWatch, !model.trashWatchHidden, model.section != .overview { TrashWatchLine(model: model, watch: watch) }
             HStack(spacing: 6) {
                 Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking watched and growing folders daily while open." : "Checking watched and growing folders weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
@@ -856,24 +930,37 @@ struct TrashWatchLine: View {
     @ObservedObject var model: CleanerModel
     let watch: CleanerModel.TrashWatch
     var body: some View {
-        let total = watch.paths.count
         HStack(spacing: 8) {
-            Image(systemName: watch.done ? "checkmark.circle.fill" : "doc.on.clipboard").foregroundStyle(watch.done ? Color.stable : Color.accentColor)
-            Group {
-                if watch.done {
-                    Text("Moved to the Trash: \(total == 1 ? "the folder" : "all \(total)"), \(byteLabel(watch.movedBytes)). Empty the Trash to get the space back.")
-                } else if watch.moved.isEmpty {
-                    Text("Copied. Paste it in Terminal and press Return to move \(total == 1 ? "1 folder" : "\(total) folders") (\(byteLabel(watch.bytes))) to the Trash.")
-                } else {
-                    Text("\(watch.moved.count) of \(total) moved to the Trash (\(byteLabel(watch.movedBytes))). Waiting for the rest.")
-                }
-            }.font(.callout).lineLimit(2)
+            Image(systemName: symbol).foregroundStyle(tint)
+            Text(message).font(.callout).lineLimit(2)
             Spacer()
             if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")) }.controlSize(.small) }
             Button { model.dismissTrashWatch() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Dismiss").accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .background((watch.done ? Color.stable : Color.accentColor).opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
-        .help(watch.paths.map { (watch.moved.contains($0) ? "✓ " : "· ") + abbreviatedPath($0) }.joined(separator: "\n"))
+        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+        .help(itemList)
+    }
+    private var symbol: String { watch.done ? "checkmark.circle.fill" : watch.paths.isEmpty ? "exclamationmark.circle" : "doc.on.clipboard" }
+    private var tint: Color { watch.done ? Color.stable : watch.paths.isEmpty ? Color.caution : Color.accentColor }
+    private var message: String {
+        let total = watch.paths.count
+        let left = watch.leftOut.isEmpty ? "" : " " + leftOutText
+        if total == 0 { return "Nothing copied. " + leftOutText + " Scan again, then try once more." }
+        let moved = "\(watch.moved.count) of \(total) moved to the Trash (\(byteLabel(watch.movedBytes)))."
+        if watch.done { return "Moved to the Trash: \(total == 1 ? "the item" : "all \(total)"), \(byteLabel(watch.movedBytes)). Empty the Trash to get the space back." + left }
+        if watch.moved.isEmpty { return "Copied a command for \(total == 1 ? "1 item" : "\(total) items") (\(byteLabel(watch.bytes))). Paste it in Terminal and press Return; it prints a line for each." + left }
+        return moved + (watch.expired ? " The rest are still in place; History lists them." : " Waiting for the rest.")
+    }
+    private var itemList: String {
+        let copied = watch.paths.map { (watch.moved.contains($0) ? "✓ " : "· ") + abbreviatedPath($0) }
+        let left = watch.leftOut.map { "✕ " + abbreviatedPath($0.key) + " (" + $0.value.rawValue.lowercased() + ")" }
+        return (copied + left).joined(separator: "\n")
+    }
+    /// "Left out 2: 1 changed since the scan, 1 open in an app."
+    private var leftOutText: String {
+        let groups = Dictionary(grouping: watch.leftOut.values, by: { $0 })
+        let parts = [LeftOut.changed, .open, .gone].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
+        return "Left out \(watch.leftOut.count): " + parts.joined(separator: ", ") + "."
     }
 }

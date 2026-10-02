@@ -4,7 +4,7 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "Scan History"
+    case overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -23,7 +23,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
         case .kept: return "Folders you keep out of suggestions, or don't scan at all. Context Cleaner leaves them alone."
         case .needsAttention: return "Folders a scan couldn't read, with a fix for each."
-        case .history: return "What each scan found: which folders grew, which shrank, and what couldn't be read."
+        case .history: return "What you moved to the Trash, and what each scan found."
         }
     }
     /// Sidebar icons use a status hue only where the destination is itself a status.
@@ -31,14 +31,14 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Your call", keep = "Leave it", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
+    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Might hold work", keep = "Leave it", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Biggest first. Each row says what removing it costs."
-        case .safe: return "Nothing is lost. Tools recreate these if they're needed."
-        case .rebuild: return "Still in use, but rebuilt or re-downloaded if you remove them. You'll wait for the next build."
-        case .check: return "May hold the only copy of something. Each card says what to look at."
+        case .all: return "Safe: not needed again. Rebuildable: the next build recreates it. Might hold work: look first."
+        case .safe: return "Not needed again: the project is finished or it's sat unused for weeks. Nothing is lost."
+        case .rebuild: return "Still in use, but the next build or download recreates it. Nothing is lost; you wait for that build."
+        case .check: return "May hold something that exists only here, such as uncommitted work, a backup or test results. Look first."
         case .keep: return "App libraries and history. Manage these inside their own apps."
         case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
         case .growing: return "Grew between two scans and not marked as expected."
@@ -108,12 +108,22 @@ extension Verdict {
     }
     /// What the answer means, in a few words.
     /// The answer in one or two words, for tight spaces.
+    /// The answer on a Folders tile, where the hint underneath says what it means.
     var shortTitle: String { self == .safe ? "Safe" : title }
+    /// The difference between the answers, in three words or so, for tiles and legends.
+    var hint: String {
+        switch self {
+        case .safe: return "not needed again"
+        case .rebuild: return "rebuilds itself"
+        case .check: return "look first"
+        case .keep: return "its app manages it"
+        }
+    }
     var meaning: String {
         switch self {
-        case .safe: return "nothing is lost"
-        case .rebuild: return "costs a rebuild"
-        case .check: return "may be the only copy"
+        case .safe: return "not needed again"
+        case .rebuild: return "recreated by the next build"
+        case .check: return "may be the only copy; look first"
         case .keep: return "manage in their apps"
         }
     }
@@ -131,9 +141,13 @@ struct VerdictTile: View {
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 3) {
-                Label(title, systemImage: symbol).font(.callout.weight(.semibold)).foregroundStyle(tint).lineLimit(1)
+                // The whole answer, even on a narrow tile: the icon goes first, then the text shrinks a little.
+                ViewThatFits(in: .horizontal) {
+                    Label(title, systemImage: symbol)
+                    Text(title).lineLimit(1).minimumScaleFactor(0.8)
+                }.font(.callout.weight(.semibold)).foregroundStyle(tint)
                 Text(value).font(.title2.weight(.semibold)).monospacedDigit().foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.7)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2, reservesSpace: true).fixedSize(horizontal: false, vertical: true)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -165,8 +179,6 @@ struct VerdictCard: View {
     /// The folder, when moving it to the Trash yourself is a sensible option.
     var trashPath: String? = nil
     @State private var copied = false
-    @State private var copiedTrash = false
-    @State private var copiedFolder = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(advice.verdict.title, systemImage: advice.verdict.symbol).font(.headline).foregroundStyle(advice.verdict.tint)
@@ -181,10 +193,7 @@ struct VerdictCard: View {
             Text("How to remove it yourself").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Text(advice.howTo).font(.callout).fixedSize(horizontal: false, vertical: true)
             if let trashPath, advice.verdict != .keep {
-                Button(copiedFolder ? "Copied" : "Copy Move-to-Trash Command", systemImage: "doc.on.clipboard") {
-                    requestTrashCopy([trashPath]); copiedFolder = true
-                }.controlSize(.small)
-                    .help("Copies a Terminal command that asks Finder to move this whole folder to the Trash. Put Back works, and Finder renames it if the Trash already has one with its name. Context Cleaner never runs it.")
+                TrashCopyButton(paths: [trashPath])
             }
             if let command = advice.command {
                 HStack(spacing: 8) {
@@ -197,7 +206,7 @@ struct VerdictCard: View {
             }
         }.padding(14).frame(maxWidth: .infinity, alignment: .leading)
             .background(advice.verdict.tint.opacity(0.09), in: RoundedRectangle(cornerRadius: 8))
-            .onChange(of: advice) { _, _ in copied = false; copiedTrash = false; copiedFolder = false }
+            .onChange(of: advice) { _, _ in copied = false }
     }
     /// The old items inside a busy folder: the part you can remove without disturbing current work.
     private var staleSection: some View {
@@ -217,18 +226,50 @@ struct VerdictCard: View {
             HStack(spacing: 8) {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(items.map { URL(fileURLWithPath: $0.path) }) }
                     .controlSize(.small).help("Selects these items in Finder. Press ⌘⌫ there to move them to the Trash yourself.")
-                Button(copiedTrash ? "Copied" : "Copy Move-to-Trash Command") {
-                    requestTrashCopy(items.map(\.path), bytes: advice.staleBytes); copiedTrash = true
-                }.controlSize(.small).help("Copies a Terminal command that asks Finder to move these items to the Trash. Put Back works, and same-named items don't collide. Context Cleaner never runs it.")
+                TrashCopyButton(paths: items.map(\.path), bytes: advice.staleBytes)
             }
         }
     }
 }
 
+/// What happened to the last Trash command you asked for, for every Copy button to show.
+@MainActor final class TrashCopyState: ObservableObject {
+    static let shared = TrashCopyState()
+    @Published private(set) var paths: [String] = []
+    @Published private(set) var checking = false
+    @Published private(set) var copied = 0
+    @Published private(set) var leftOut = 0
+    func start(_ paths: [String]) { self.paths = paths; checking = true; copied = 0; leftOut = 0 }
+    func finish(_ paths: [String], copied: Int, leftOut: Int) { self.paths = paths; checking = false; self.copied = copied; self.leftOut = leftOut }
+}
+/// The one Copy Move-to-Trash button. It rechecks the folders first, then says what it copied, or why it copied nothing.
+struct TrashCopyButton: View {
+    let paths: [String]
+    var bytes: Int64? = nil
+    /// Sizes for items outside the scanned folders, which the app doesn't otherwise know.
+    var sizes: [String: Int64] = [:]
+    var prominent = false
+    @ObservedObject private var state = TrashCopyState.shared
+    var body: some View {
+        let mine = !paths.isEmpty && state.paths == paths
+        let title: String = {
+            guard mine else { return paths.count > 1 ? "Copy Move-to-Trash Command (\(paths.count))" : "Copy Move-to-Trash Command" }
+            if state.checking { return "Checking \(paths.count == 1 ? "the folder" : "\(paths.count) items")…" }
+            if state.copied == 0 { return "Nothing copied" }
+            return paths.count == 1 ? "Copied" : "Copied \(state.copied) of \(paths.count)"
+        }()
+        let symbol = mine && !state.checking ? (state.copied > 0 ? "checkmark.circle.fill" : "exclamationmark.circle") : "doc.on.clipboard"
+        let button = Button { requestTrashCopy(paths, bytes: bytes, sizes: sizes) } label: { Label(title, systemImage: symbol).monospacedDigit() }
+            .controlSize(.small).disabled(paths.isEmpty || state.checking)
+            .help("Checks each item is still there, not open in an app and unchanged since the scan, then copies one Terminal command that moves them to the Trash and prints a line for each. Put Back works. Context Cleaner never runs it.")
+        if prominent { button.buttonStyle(.borderedProminent) } else { button }
+    }
+}
+
 /// Asks the app to copy a Move-to-Trash command and watch its folders until they're gone.
 extension Notification.Name { static let copyTrash = Notification.Name("ContextCleaner.copyTrash") }
-func requestTrashCopy(_ paths: [String], bytes: Int64? = nil) {
-    var info: [String: Any] = ["paths": paths]
+func requestTrashCopy(_ paths: [String], bytes: Int64? = nil, sizes: [String: Int64] = [:]) {
+    var info: [String: Any] = ["paths": paths, "sizes": sizes]
     if let bytes { info["bytes"] = bytes }
     NotificationCenter.default.post(name: .copyTrash, object: nil, userInfo: info)
 }

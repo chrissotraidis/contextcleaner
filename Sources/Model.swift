@@ -431,6 +431,7 @@ struct FolderRow: Identifiable {
             if FileManager.default.fileExists(atPath: legacy.path) { _ = try storage.importLegacy(legacy, home: home) }
             records = droppingOldContents(storage.records()); preferences = storage.preferences()
             capacity = storage.capacityReadings()
+            cleanups = storage.cleanups()
             discovery = storage.learnedDiscovery() ?? Discovery(profiles: [], notes: [])
             store = storage
             error = storage.warnings.isEmpty ? nil : storage.warnings.joined(separator: "\n")
@@ -443,7 +444,8 @@ struct FolderRow: Identifiable {
         NotificationCenter.default.addObserver(forName: .copyTrash, object: nil, queue: .main) { [weak self] note in
             guard let paths = note.userInfo?["paths"] as? [String] else { return }
             let bytes = note.userInfo?["bytes"] as? Int64
-            MainActor.assumeIsolated { self?.copyTrash(paths, bytes: bytes) }
+            let sizes = note.userInfo?["sizes"] as? [String: Int64] ?? [:]
+            MainActor.assumeIsolated { self?.copyTrash(paths, bytes: bytes, sizes: sizes) }
         }
         loadSimDevices()
         refreshGone()
@@ -709,48 +711,101 @@ struct FolderRow: Identifiable {
 
     // MARK: Trash commands you copied
 
-    /// Folders in a Trash command you copied, watched until they leave their place. Metadata only.
+    /// A Trash command you copied: the folders in it, watched until they leave their place, and any left out. Metadata only.
     struct TrashWatch: Equatable {
+        var id = UUID().uuidString
         var paths: [String]
         var bytes: Int64
+        var leftOut: [String: LeftOut] = [:]
         var moved: Set<String> = []
         var started = Date()
         var movedBytes: Int64 = 0
-        var done: Bool { moved.count == paths.count }
+        var done: Bool { !paths.isEmpty && moved.count == paths.count }
+        var expired: Bool { Date().timeIntervalSince(started) > 1800 }
     }
     @Published private(set) var trashWatch: TrashWatch?
+    /// The footer line was closed; the folders are still watched until they go or half an hour passes.
+    @Published private(set) var trashWatchHidden = false
+    /// Every Trash command you copied, newest first, with what became of each item.
+    @Published private(set) var cleanups: [Cleanup] = []
     private var trashTimer: Timer?
-    /// Copies a Move-to-Trash command and watches its folders, so you can see it worked.
-    func copyTrash(_ paths: [String], bytes: Int64? = nil) {
-        guard !paths.isEmpty else { return }
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(paths), forType: .string)
-        let sizes = Dictionary(latest.map { ($0.profile.path, $0.allocatedBytes ?? 0) }, uniquingKeysWith: { a, _ in a })
-        trashWatch = TrashWatch(paths: paths, bytes: bytes ?? paths.reduce(0) { $0 + (sizes[$1] ?? 0) })
+    private var trashSizes: [String: Int64] = [:]
+    /// The newest change a scan saw in a folder, or in an item inside a scanned folder.
+    func seenDate(_ path: String) -> Date? {
+        if let m = latest.first(where: { $0.profile.path == path }) { return m.latestModifiedAt }
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path, name = URL(fileURLWithPath: path).lastPathComponent
+        return latest.first(where: { $0.profile.path == parent })?.contents?.children.first(where: { $0.name == name })?.modifiedAt
+    }
+    /// A folder's size from the last scan, or an item's size inside a scanned folder.
+    func knownBytes(_ path: String) -> Int64 {
+        if let m = latest.first(where: { $0.profile.path == path }) { return m.allocatedBytes ?? 0 }
+        if let s = suggestionList.first(where: { $0.path == path }) { return s.bytes }
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent().path, name = URL(fileURLWithPath: path).lastPathComponent
+        return latest.first(where: { $0.profile.path == parent })?.contents?.children.first(where: { $0.name == name })?.bytes ?? 0
+    }
+    /// Rechecks the folders, then copies one Move-to-Trash command for those that pass, and watches them so you can see it worked.
+    /// A folder is left out if it's gone, open in an app, or changed since the scan. Context Cleaner never runs the command.
+    func copyTrash(_ paths: [String], bytes: Int64? = nil, sizes known: [String: Int64] = [:]) {
+        let state = TrashCopyState.shared
+        guard !paths.isEmpty, !state.checking else { return }
+        var sizes: [String: Int64] = [:]
+        for path in paths { sizes[path] = known[path] ?? knownBytes(path) }
+        if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
+        let items = paths.map { (path: $0, seen: seenDate($0)) }
+        state.start(paths)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let snapshot = ActivitySnapshot.capture()
+            let result = recheck(items, open: snapshot.available ? snapshot.observations : nil)
+            DispatchQueue.main.async { self.finishCopy(paths, result, sizes: sizes) }
+        }
+    }
+    private func finishCopy(_ paths: [String], _ result: (ready: [String], leftOut: [String: LeftOut]), sizes: [String: Int64]) {
+        if !result.ready.isEmpty {
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(trashTargets(result.ready)), forType: .string)
+        }
+        TrashCopyState.shared.finish(paths, copied: result.ready.count, leftOut: result.leftOut.count)
         trashSizes = sizes
+        trashWatch = TrashWatch(paths: result.ready, bytes: result.ready.reduce(0) { $0 + (sizes[$1] ?? 0) }, leftOut: result.leftOut)
+        trashWatchHidden = false
+        selectedSuggestions.subtract(result.leftOut.keys)
+        if result.leftOut.values.contains(.gone) { refreshGone() }
+        saveCleanup()
         trashTimer?.invalidate()
+        guard !result.ready.isEmpty else { return }
         trashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.checkTrashWatch() } }
     }
-    private var trashSizes: [String: Int64] = [:]
     private func checkTrashWatch() {
-        guard var watch = trashWatch else { trashTimer?.invalidate(); return }
-        // Stop watching after half an hour; the result stays on screen until dismissed.
-        if Date().timeIntervalSince(watch.started) > 1800 { trashTimer?.invalidate(); return }
+        guard let watch = trashWatch else { trashTimer?.invalidate(); return }
+        // Stop watching after half an hour; whatever is still in place is recorded as not moved.
+        if watch.expired { trashTimer?.invalidate(); saveCleanup(); return }
         let pending = watch.paths.filter { !watch.moved.contains($0) }
         DispatchQueue.global(qos: .utility).async {
             let gone = missingPaths(pending)
             DispatchQueue.main.async {
-                guard !gone.isEmpty, self.trashWatch?.started == watch.started else { return }
-                watch.moved.formUnion(gone)
-                watch.movedBytes = watch.moved.reduce(0) { $0 + (self.trashSizes[$1] ?? 0) }
-                if watch.movedBytes == 0 && watch.done { watch.movedBytes = watch.bytes }
-                self.trashWatch = watch
+                guard !gone.isEmpty, var current = self.trashWatch, current.id == watch.id else { return }
+                current.moved.formUnion(gone)
+                current.movedBytes = current.moved.reduce(0) { $0 + (self.trashSizes[$1] ?? 0) }
+                self.trashWatch = current
                 self.selectedSuggestions.subtract(gone)
                 self.refreshGone(); self.refreshTrash()
-                if watch.done { self.trashTimer?.invalidate() }
+                if current.done { self.trashTimer?.invalidate() }
+                self.saveCleanup()
             }
         }
     }
-    func dismissTrashWatch() { trashTimer?.invalidate(); trashWatch = nil }
+    /// Hides the footer line. The folders are still watched, and the cleanup is still recorded in History.
+    func dismissTrashWatch() { trashWatchHidden = true }
+    /// Saves the current Trash command's state as a new file, and shows it in History.
+    private func saveCleanup() {
+        guard let watch = trashWatch else { return }
+        var items = watch.paths.map { path in
+            Cleanup.Item(path: path, bytes: trashSizes[path] ?? 0, status: watch.moved.contains(path) ? .moved : watch.expired ? .notMoved : .waiting)
+        }
+        items += watch.leftOut.sorted { $0.key < $1.key }.map { Cleanup.Item(path: $0.key, bytes: trashSizes[$0.key] ?? 0, status: .leftOut, note: $0.value.rawValue) }
+        let cleanup = Cleanup(id: watch.id, copiedAt: watch.started, updatedAt: Date(), items: items)
+        cleanups.removeAll { $0.id == cleanup.id }; cleanups.insert(cleanup, at: 0)
+        do { try store?.append(cleanup) } catch { self.error = "The cleanup couldn't be saved to History: \(error.localizedDescription)" }
+    }
 
     /// Folders holding old items, biggest amount first.
     private var insideListCache: (key: String, value: [FolderMeasurement]) = ("", [])
@@ -1081,7 +1136,7 @@ struct FolderRow: Identifiable {
             let a = adviceFor(m)
             text += "- [ ] " + line(m, a) + "\n  `\(m.profile.path)`\n"
         }
-        text += "\n## 4. Your call · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nMay hold the only copy of something. Look at each first. Biggest first.\n\n"
+        text += "\n## 4. Might hold work · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nMay hold the only copy of something. Look at each first. Biggest first.\n\n"
         for m in check.prefix(40) {
             let a = adviceFor(m)
             text += "- " + line(m, a) + "\n  \(a.reason)\n" + a.evidence.map { "  \($0)\n" }.joined() + "  `\(m.profile.path)`\n"

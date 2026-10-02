@@ -30,13 +30,24 @@ func writeNew(_ data: Data, to url: URL) throws {
 struct DiscoveryEvent: Codable { var date: Date; var id: String; var value: Discovery }
 struct PreferencesEvent: Codable { var date: Date; var id: String; var value: Preferences }
 struct MigrationReceipt: Codable { var digest: String; var importedAt: Date; var snapshotCount: Int }
+/// One Trash command you copied, and what became of each item in it. Saved as a new file each time it changes.
+struct Cleanup: Codable, Identifiable, Equatable {
+    enum Status: String, Codable { case waiting, moved, notMoved, leftOut }
+    struct Item: Codable, Equatable { var path: String; var bytes: Int64; var status: Status; var note: String? = nil }
+    var id: String
+    var copiedAt: Date
+    var updatedAt: Date
+    var items: [Item]
+    func bytes(_ status: Status) -> Int64 { items.filter { $0.status == status }.reduce(0) { $0 + $1.bytes } }
+    func count(_ status: Status) -> Int { items.filter { $0.status == status }.count }
+}
 final class AppendStore {
     let root: URL
     let encoder: JSONEncoder = { let e = JSONEncoder(); e.outputFormatting = [.sortedKeys]; return e }()
     private(set) var warnings: [String] = []
     init(root: URL) throws {
         self.root = root
-        for folder in ["scans", "preferences", "imports", "discoveries", "capacity"] {
+        for folder in ["scans", "preferences", "imports", "discoveries", "capacity", "cleanups"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
     }
@@ -88,6 +99,15 @@ final class AppendStore {
     }
     func capacityReadings() -> [CapacityReading] {
         decodeAll("capacity", as: CapacityReading.self, label: "capacity reading").sorted { $0.date < $1.date }
+    }
+    /// Appends the latest state of a cleanup. Earlier states stay on disk; the newest per cleanup wins when read.
+    func append(_ cleanup: Cleanup) throws {
+        let stamp = Int64(cleanup.updatedAt.timeIntervalSince1970 * 1000)
+        try writeNew(encoder.encode(cleanup), to: root.appendingPathComponent("cleanups/\(cleanup.id)-\(stamp)-\(UUID().uuidString).json"))
+    }
+    func cleanups() -> [Cleanup] {
+        let all = decodeAll("cleanups", as: Cleanup.self, label: "cleanup")
+        return Dictionary(grouping: all, by: \.id).values.compactMap { $0.max { $0.updatedAt < $1.updatedAt } }.sorted { $0.copiedAt > $1.copiedAt }
     }
     func importLegacy(_ source: URL, home: String) throws -> Int {
         let data = try Data(contentsOf: source), sourceDigest = digest(data)

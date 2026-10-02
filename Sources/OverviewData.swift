@@ -261,7 +261,7 @@ enum Verdict: Int, Comparable, CaseIterable, Identifiable {
         switch self {
         case .safe: return "Safe to remove"
         case .rebuild: return "Rebuildable"
-        case .check: return "Your call"
+        case .check: return "Might hold work"
         case .keep: return "Leave it"
         }
     }
@@ -336,19 +336,109 @@ struct StaleItem: Equatable, Identifiable {
     let bytes: Int64
     let modifiedAt: Date?
 }
-/// A Terminal command that moves items to the Trash through Finder, for the user to run themselves.
-/// Each item is moved on its own, so one that's already gone doesn't stop the rest, and it prints
-/// how many it moved. Finder renames an item if the Trash already holds one with its name, and Put Back works.
-/// Paths are escaped for AppleScript, then each line for the shell. Context Cleaner never runs it.
+/// A Terminal command that moves items to the Trash, for the user to run themselves. One line, any number of items.
+/// Each item is moved on its own and reported on its own line: moved, already gone, or not moved with the reason; the last lines count them.
+/// It uses macOS's own trash tool (macOS 15 and later), which is instant, never shows a dialog and keeps Put Back.
+/// If that tool refuses an item, such as a read-only folder, Finder moves it instead, with five minutes to answer;
+/// macOS may ask for your password first, so the command says so before it asks. An item counts as moved only once its
+/// path is gone: Finder can answer without error when you cancel its password prompt.
+/// Finder handles one item at a time, so it's the fallback: one stalled request makes it refuse every item after it.
+/// Paths are only quoted for the shell; Finder gets each as an argument. It runs in a subshell, so it leaves nothing set
+/// in your Terminal. Context Cleaner never runs it.
 func trashCommand(_ paths: [String]) -> String {
-    func appleScriptString(_ text: String) -> String { "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
-    let list = "{" + paths.map(appleScriptString).joined(separator: ", ") + "}"
+    func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     let total = paths.count == 1 ? "1 item" : "\(paths.count) items"
-    let lines = ["set moved to 0", "repeat with p in " + list, "try",
-                 "tell application \"Finder\" to delete (POSIX file (contents of p) as alias)",
-                 "set moved to moved + 1", "end try", "end repeat",
-                 "return \"Moved \" & moved & \" of \(total) to the Trash. Empty the Trash to get the space back.\""]
-    return "osascript " + lines.map { "-e '" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
+    let finder = "osascript -e 'on run a' -e 'with timeout of 300 seconds' -e 'tell application \"Finder\" to delete (POSIX file (item 1 of a) as alias)' -e 'end timeout' -e 'end run' \"$p\" 2>&1 >/dev/null"
+    let gone = "[ ! -e \"$p\" ] && [ ! -L \"$p\" ]"
+    return "( m=0; g=0; f=0; for p in " + paths.map(quoted).joined(separator: " ") + "; do "
+        + "if " + gone + "; then g=$((g+1)); echo \"Already gone: $p\"; "
+        + "elif [ -x /usr/bin/trash ] && /usr/bin/trash \"$p\" 2>/dev/null && " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
+        + "else echo \"Asking Finder to move $p (macOS may ask for your password)\"; "
+        + "e=$(" + finder + "); "
+        + "if " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
+        + "else f=$((f+1)); echo \"NOT moved: $p (${e:-still in place})\"; fi; fi; done; "
+        + "echo \"Moved $m of \(total) to the Trash.\"; "
+        + "[ $g -gt 0 ] && echo \"$g already gone.\"; [ $f -gt 0 ] && echo \"$f not moved; the lines above say why.\"; "
+        + "echo \"Empty the Trash to get the space back.\" )"
+}
+/// What a Trash command should move for these folders: each folder, plus an Android emulator's .ini file
+/// next to its .avd folder, so Android Studio isn't left with a device that points nowhere.
+func trashTargets(_ paths: [String], exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {
+    var out: [String] = []
+    for path in paths {
+        out.append(path)
+        if path.hasSuffix(".avd") {
+            let ini = String(path.dropLast(4)) + ".ini"
+            if exists(ini), !paths.contains(ini) { out.append(ini) }
+        }
+    }
+    return out
+}
+/// Names that suggest something you can't get back: backups, saves, recovery copies, private or signing material.
+/// Such folders are never called rebuildable, never counted as old builds, and Select All leaves them unticked.
+func looksIrreplaceable(_ name: String) -> Bool {
+    let n = name.lowercased()
+    return ["backup", "back-up", "recovery", "save", "private", "signing", "keychain", "secret", "credential", "provisioning"].contains { n.contains($0) }
+}
+/// Why a folder was left out of a Trash command when it was rechecked.
+enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone" }
+/// Re-reads folders just before a Trash command is copied. A folder is left out if it's gone, if an app has a file
+/// open in it, or if it or anything directly inside it changed after the scan saw it. Metadata only.
+func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, slack: TimeInterval = 60) -> (ready: [String], leftOut: [String: LeftOut]) {
+    // Spotlight and Finder open files briefly while indexing or showing a folder; that isn't use.
+    let passive: Set<String> = ["mds", "mds_stores", "mdworker", "mdworker_shared", "Finder", "QuickLookUIService", "fseventsd", "revisiond", "bird", "cloudd"]
+    let holders = (open ?? []).filter { !passive.contains($0.command) }
+    // Walk up from each open file once, rather than testing every file against every folder: tens of thousands of open files are normal.
+    let targets = Set(items.map(\.path))
+    var held: Set<String> = []
+    for holder in holders {
+        var path = holder.path
+        while !path.isEmpty {
+            if targets.contains(path) { held.insert(path) }
+            guard let slash = path.lastIndex(of: "/"), slash > path.startIndex else { break }
+            path = String(path[..<slash])
+        }
+    }
+    // Folders are read in parallel; reading metadata from disk is what takes the time.
+    var verdicts = [LeftOut?](repeating: nil, count: items.count)
+    verdicts.withUnsafeMutableBufferPointer { slots in
+        let base = slots.baseAddress!
+        DispatchQueue.concurrentPerform(iterations: items.count) { index in
+            let (path, seen) = items[index]
+            var st = stat()
+            if lstat(path, &st) != 0 { base[index] = .gone }
+            else if held.contains(path) { base[index] = .open }
+            else if let seen, newestChange(path, own: st) > seen.addingTimeInterval(slack) { base[index] = .changed }
+        }
+    }
+    var ready: [String] = [], leftOut: [String: LeftOut] = [:]
+    for (index, item) in items.enumerated() {
+        if let reason = verdicts[index] { leftOut[item.path] = reason } else { ready.append(item.path) }
+    }
+    return (ready, leftOut)
+}
+/// The newest change to a folder or anything directly inside it. Finder's .DS_Store doesn't count.
+/// A folder with more entries than the limit is judged by its own date, which moves whenever an entry is added or removed.
+func newestChange(_ path: String, own: stat, limit: Int = 2000) -> Date {
+    func date(_ s: stat) -> Date { Date(timeIntervalSince1970: Double(s.st_mtimespec.tv_sec)) }
+    guard (own.st_mode & S_IFMT) == S_IFDIR else { return date(own) }
+    guard let dir = opendir(path) else { return date(own) }
+    defer { closedir(dir) }
+    var newest = Date.distantPast, store: Date?
+    var count = 0
+    while let entry = readdir(dir) {
+        let name = withUnsafeBytes(of: entry.pointee.d_name) { String(decoding: $0.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self) }
+        if name == "." || name == ".." { continue }
+        count += 1
+        if count > limit { return date(own) }
+        var st = stat()
+        guard lstat(path + "/" + name, &st) == 0 else { continue }
+        if name == ".DS_Store" { store = date(st); continue }
+        newest = max(newest, date(st))
+    }
+    // The folder's own date moves when an entry is added or removed; ignore it when Finder's .DS_Store explains it.
+    if let store, store >= date(own).addingTimeInterval(-2) { return newest }
+    return max(newest, date(own))
 }
 /// Readable names for processes that hold files open.
 func friendlyApp(_ command: String) -> String {
@@ -363,10 +453,11 @@ func friendlyApp(_ command: String) -> String {
     return command
 }
 /// Items at the top level of a folder that haven't changed in 30+ days, biggest first. From the last scan's contents.
-func staleChildren(_ m: FolderMeasurement, now: Date, days: Double = 30, minimum: Int64 = 50 * 1_048_576) -> [StaleItem] {
+/// Backups and other irreplaceable-looking items are left out unless asked for: they aren't old builds.
+func staleChildren(_ m: FolderMeasurement, now: Date, days: Double = 30, minimum: Int64 = 50 * 1_048_576, backups: Bool = false) -> [StaleItem] {
     guard let children = m.contents?.children else { return [] }
     return children.filter { child in
-        guard child.bytes >= minimum, let modified = child.modifiedAt else { return false }
+        guard child.bytes >= minimum, let modified = child.modifiedAt, backups || !looksIrreplaceable(child.name) else { return false }
         return now.timeIntervalSince(modified) >= days * 86400
     }.sorted { $0.bytes > $1.bytes }.map { StaleItem(path: m.profile.path + "/" + $0.name, name: $0.name, bytes: $0.bytes, modifiedAt: $0.modifiedAt) }
 }
@@ -779,6 +870,10 @@ struct Suggestion: Identifiable, Equatable {
     let why: String
     /// The folder to show when you open it: itself, or the folder an old item sits in.
     var owner: String? = nil
+    /// The newest change the scan saw in it. A Trash command leaves it out if it has changed since.
+    var seen: Date? = nil
+    /// A backup, save or recovery copy: possibly the only copy. Select All never ticks it.
+    var backup = false
 }
 /// "20 hours", "3 days", "2 weeks": how long something has sat untouched.
 func quietText(_ seconds: TimeInterval) -> String {
@@ -807,13 +902,22 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         let isQuiet = (idle ?? 0) >= quiet
         let scratch = path.contains("/.codex/scratch/")
         let rebuildable = m.profile.category.reproducible || m.profile.category == .debugSymbols || isProjectBuildOutput(path)
-        func add(_ cost: Verdict, _ label: String, age: Bool = true) {
-            found.append(Suggestion(path: path, name: m.profile.displayName, place: locationHint(path), bytes: bytes, cost: cost, why: ([label] + [age ? untouched : nil].compactMap { $0 }).joined(separator: " · ")))
+        func add(_ cost: Verdict, _ label: String, age: Bool = true, backup: Bool = false) {
+            found.append(Suggestion(path: path, name: m.profile.displayName, place: locationHint(path), bytes: bytes, cost: cost, why: ([label] + [age ? untouched : nil].compactMap { $0 }).joined(separator: " · "),
+                                    seen: m.latestModifiedAt, backup: backup))
             taken.insert(path)
         }
+        let irreplaceable = looksIrreplaceable(URL(fileURLWithPath: path).lastPathComponent) || m.profile.category == .backup
         // Safe answers already say how long it's been unused.
-        if a.verdict == .safe { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: false); continue }
+        if a.verdict == .safe && !irreplaceable { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: false); continue }
         if isQuiet {
+            if irreplaceable {
+                // Backups, saves and recovery copies may be the only copy; recovery copies wait at least three days.
+                if m.profile.category != .backup || scratch || (idle ?? 0) >= max(quiet, 3 * 86400) {
+                    add(.check, scratch ? "Backup in Codex scratch" : m.profile.category == .backup ? "Recovery copy" : "Looks like a backup", backup: true)
+                }
+                continue
+            }
             if rebuildable {
                 let kind: String
                 switch m.profile.category {
@@ -827,14 +931,15 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
             if scratch { add(.check, m.profile.category == .backup ? "Backup in Codex scratch" : "Left by a Codex task"); continue }
             if path.hasSuffix("/work") { add(.check, "Scratch work folder"); continue }
             if m.profile.category == .virtualMachine && m.profile.associatedApp == "Android Emulator" { add(.check, "Android emulator"); continue }
-            if m.profile.category == .backup && (idle ?? 0) >= max(quiet, 3 * 86400) { add(.check, "Recovery copy"); continue }
         }
         // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments or scratch.
-        guard rebuildable || isProjectOutput(path) || scratch else { continue }
-        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum) {
+        guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch else { continue }
+        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum, backups: true) {
             let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
-            found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: rebuildable ? .rebuild : .check,
-                                    why: ([rebuildable ? "Old build inside" : "Old item inside"] + [age].compactMap { $0 }).joined(separator: " · "), owner: path))
+            let backup = looksIrreplaceable(child.name)
+            let label = backup ? "Looks like a backup" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
+            found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: rebuildable && !backup ? .rebuild : .check,
+                                    why: ([label] + [age].compactMap { $0 }).joined(separator: " · "), owner: path, seen: child.modifiedAt, backup: backup))
         }
     }
     return found.sorted { $0.bytes > $1.bytes }

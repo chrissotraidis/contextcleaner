@@ -150,8 +150,17 @@ import Foundation
         let derivedAdvice = advice(for: derived, policy: LocationPolicy(), devices: [:], now: now)
         check(derivedAdvice.verdict == .rebuild && derivedAdvice.staleItems.map(\.name) == ["OldGame-abc"] && derivedAdvice.staleBytes == 3 * gib && derivedAdvice.staleDays == 30 && derivedAdvice.short == "3 GiB old inside",
               "a busy cache points at the old items inside it, ignoring tiny ones")
-        check(trashCommand(["/a/it's \"here\"", "/b\\c"]) == #"osascript -e 'set moved to 0' -e 'repeat with p in {"/a/it'\''s \"here\"", "/b\\c"}' -e 'try' -e 'tell application "Finder" to delete (POSIX file (contents of p) as alias)' -e 'set moved to moved + 1' -e 'end try' -e 'end repeat' -e 'return "Moved " & moved & " of 2 items to the Trash. Empty the Trash to get the space back."'"#,
-              "the Trash command asks Finder item by item, skips any already gone, says how many it moved, and escapes paths for AppleScript and the shell")
+        let command = trashCommand(["/a/it's \"here\"", "/b\\c"])
+        check(command.hasPrefix("( ") && command.hasSuffix(" )") && !command.contains("\n") && command.contains(#"for p in '/a/it'\''s "here"' '/b\c'; do"#),
+              "the Trash command is one line in a subshell, with each path quoted once for the shell")
+        check(command.contains("/usr/bin/trash \"$p\"") && command.contains("with timeout of 300 seconds") && command.contains("(item 1 of a)") && command.contains("Already gone: ") && command.contains("NOT moved: ") && command.contains(" of 2 items to the Trash."),
+              "it uses macOS's trash tool, falls back to Finder with five minutes per item, prints a line per item, and counts them at the end")
+        let many = trashCommand((0..<400).map { "/fixture/item \($0)" })
+        check(many.contains("/fixture/item 399") && many.contains(" of 400 items"), "any number of items fits in one command")
+        check(trashTargets(["/a/.android/avd/K.avd", "/b/x"], exists: { $0 == "/a/.android/avd/K.ini" }) == ["/a/.android/avd/K.avd", "/a/.android/avd/K.ini", "/b/x"],
+              "an Android emulator goes with its .ini file, so Android Studio isn't left pointing at nothing")
+        check(looksIrreplaceable("device-backups") && looksIrreplaceable("iphone-ballpad-backup-20260929") && looksIrreplaceable("phone-test-private.SU67mk") && looksIrreplaceable("SaveData")
+              && !looksIrreplaceable("intermediates") && !looksIrreplaceable("kp071"), "backups, saves and private copies are recognized by name")
         let dex = Classifier.profile(path: "/Users/x/GitHub/kr/android/app/build/intermediates/project_dex_archive", home: "/Users/x", readMetadata: false)
         let parent = Classifier.profile(path: "/Users/x/GitHub/kr/android/app/build/intermediates", home: "/Users/x", readMetadata: false)
         check(dex.displayName == "kr · project_dex_archive in Android build intermediates" && parent.displayName == "kr · Android build intermediates" && dex.project == "kr",
@@ -312,6 +321,22 @@ import Foundation
         check(dayList[0].cost == .check && dayList[0].why == "Left by a Codex task · untouched 30 hours" && dayList[1].owner == busyWork.profile.path && dayList[2].cost == .rebuild && dayList[3].cost == .safe,
               "each suggestion says what removing it costs and why, and old items open the folder they sit in")
         check(suggestions(pool, advice: adviseFor, gone: [], quiet: 3 * 86400, now: now).map(\.name).contains("padforge-mac-home") == false, "a longer quiet time leaves out folders touched more recently")
+        // Backups are never called rebuildable, even inside build output, and are marked so Select All skips them.
+        var generated = aged("/Users/x/GitHub/pr/generated", .workspace, hours: 1, gib: 20)
+        generated.contents = FolderContents(children: [ChildSummary(name: "device-backups", directory: true, identity: "1", bytes: 6 * gib, files: 9, modifiedAt: now.addingTimeInterval(-50 * 3600)),
+                                                       ChildSummary(name: "toolchains", directory: true, identity: "2", bytes: 1 * gib, files: 9, modifiedAt: now.addingTimeInterval(-50 * 3600))],
+                                            fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        let phoneBackup = aged("/Users/x/.codex/scratch/iphone-ballpad-backup-20260929", .workspace, hours: 72, gib: 2)
+        let recovery = aged("/Users/x/.codex/backups/paperpad-20260920", .backup, hours: 30, gib: 2)
+        let backupList = suggestions([generated, phoneBackup, recovery], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now)
+        let deviceBackups = backupList.first { $0.name == "device-backups" }, toolchains = backupList.first { $0.name == "toolchains" }
+        check(deviceBackups?.cost == .check && deviceBackups?.backup == true && deviceBackups?.why.hasPrefix("Looks like a backup") == true && toolchains?.cost == .rebuild && toolchains?.backup == false,
+              "a backup inside build output is Might hold work and marked; the build next to it stays rebuildable")
+        check(backupList.first { $0.name.contains("iphone-ballpad-backup") }?.backup == true && !backupList.contains { $0.path == recovery.profile.path },
+              "a backup in scratch is marked, and a recovery copy waits three days before it's listed")
+        check(suggestions([recovery], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now.addingTimeInterval(3 * 86400)).first?.backup == true, "an old recovery copy is listed, marked as a backup")
+        check(staleChildren(generated, now: now, days: 1).map(\.name) == ["toolchains"], "a folder's old items never include its backups")
+        check(dayList.allSatisfy { $0.seen != nil }, "each suggestion keeps the newest change the scan saw, for the recheck before copying")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

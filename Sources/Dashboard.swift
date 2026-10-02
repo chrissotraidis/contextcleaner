@@ -408,25 +408,26 @@ struct Dashboard: View {
     @ObservedObject var model: CleanerModel
     var body: some View {
         GeometryReader { geometry in
-            // The chart grows into spare height on large windows; everything else keeps its size.
-            // A steady chart height keeps the whole Overview on screen in a normal window.
-            let chartHeight = min(190, max(120, geometry.size.height - 720))
+            // Free up space is where the work happens, so it comes first after the two headline numbers,
+            // and its list fills the first screen. The chart and where the space went explain it below.
+            let listHeight = min(640, max(260, geometry.size.height - 470))
+            let wide = geometry.size.width > 1180
+            let lower = wide ? AnyLayout(HStackLayout(alignment: .top, spacing: 16)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 14) {
                     // Freshness and counts first, so you know how current everything below is.
                     StatusLine(model: model)
-                    HStack(alignment: .top, spacing: 22) {
-                        CapacityRing(model: model).frame(width: 190)
-                        Divider()
-                        UsageChart(model: model, chartHeight: chartHeight)
-                    }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
-                    // What to remove comes first; where it went and the whole-disk map explain it.
-                    // Each panel owns its hover and selection, so pointing at one never redraws the others.
+                    // Free space now, and how much you can get back.
                     HStack(alignment: .top, spacing: 16) {
-                        StartPanel(model: model).frame(maxWidth: .infinity).layoutPriority(1)
-                        WentPanel(model: model).frame(maxWidth: .infinity)
+                        CapacityRing(model: model).padding(16).frame(width: 210).frame(maxHeight: .infinity, alignment: .topLeading).background(.background.secondary)
+                        DiskMap(model: model).frame(maxHeight: .infinity, alignment: .top).background(.background.secondary)
+                    }.fixedSize(horizontal: false, vertical: true)
+                    // Each panel owns its hover and selection, so pointing at one never redraws the others.
+                    StartPanel(model: model, listHeight: listHeight)
+                    lower {
+                        UsageChart(model: model, chartHeight: 150).padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
+                        WentPanel(model: model).frame(width: wide ? 520 : nil).frame(maxWidth: wide ? 520 : .infinity)
                     }
-                    DiskMap(model: model)
                 }.padding(.horizontal, 22).padding(.bottom, 16)
             }.scrollBounceBehavior(.basedOnSize)
         }
@@ -511,10 +512,10 @@ struct DiskMap: View {
             }
         } else {
             let r = model.reclaim
-            list.append(Segment(id: "safe", title: "Safe to remove", detail: "Nothing is lost", bytes: r.safe.bytes, color: Verdict.safe.tint, action: { model.showFolders(filter: .safe) }))
+            list.append(Segment(id: "safe", title: "Safe to remove", detail: "Not needed again; nothing is lost", bytes: r.safe.bytes, color: Verdict.safe.tint, action: { model.showFolders(filter: .safe) }))
             list.append(Segment(id: "inside", title: "Old items", detail: "Builds and downloads untouched for a week or more", bytes: r.inside.bytes, color: .insideTint, action: { model.showFolders(filter: .inside) }))
-            list.append(Segment(id: "rebuild", title: "Rebuildable", detail: "In use; costs a rebuild", bytes: r.rebuild.bytes, color: Verdict.rebuild.tint, action: { model.showFolders(filter: .rebuild) }))
-            list.append(Segment(id: "check", title: "Your call", detail: "May be the only copy", bytes: r.check.bytes, color: Verdict.check.tint, action: { model.showFolders(filter: .check) }))
+            list.append(Segment(id: "rebuild", title: "Rebuildable", detail: "In use; the next build recreates it", bytes: r.rebuild.bytes, color: Verdict.rebuild.tint, action: { model.showFolders(filter: .rebuild) }))
+            list.append(Segment(id: "check", title: "Might hold work", detail: "May be the only copy; look first", bytes: r.check.bytes, color: Verdict.check.tint, action: { model.showFolders(filter: .check) }))
             list.append(Segment(id: "keep", title: "Leave it", detail: "Manage inside their own apps", bytes: r.keep.bytes, color: Verdict.keep.tint, action: { model.showFolders(filter: .keep) }))
             tracked = r.safe.bytes + r.inside.bytes + r.rebuild.bytes + r.check.bytes + r.keep.bytes
             let kept = model.keptSummary
@@ -582,7 +583,7 @@ struct DiskMap: View {
                         .onHover { inside in hovered = inside ? part.id : (hovered == part.id ? nil : hovered) }
                 }
             }
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 /// Where used space went in the chart's range or selection. Select a place to see its folders.
@@ -656,42 +657,62 @@ struct WentPanel: View {
             .contentShape(Rectangle())
     }
 }
-/// The biggest things to remove, one answer at a time.
 /// What to move to the Trash now: one list, biggest first, each with what removing it costs.
+/// The controls sit above the list, so Select All and Copy are in reach however long the list is.
 struct StartPanel: View {
     @ObservedObject var model: CleanerModel
-    @State private var showAll = false
+    var listHeight: CGFloat = 420
+    @State private var filter: Verdict?
     var body: some View {
         let list = model.suggestionList
-        let total = list.reduce(Int64(0)) { $0 + $1.bytes }
+        let shown = filter.map { f in list.filter { $0.cost == f } } ?? list
         let chosen = list.filter { model.selectedSuggestions.contains($0.path) }
         let chosenBytes = chosen.reduce(Int64(0)) { $0 + $1.bytes }
+        let selectable = shown.filter { !$0.backup }
+        let allTicked = !selectable.isEmpty && selectable.allSatisfy { model.selectedSuggestions.contains($0.path) }
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Label { Text("Free up space").foregroundStyle(.primary) } icon: { Image(systemName: "checklist").foregroundStyle(Color.accentColor) }.font(.headline).fixedSize()
-                Spacer()
+                Label { Text("Free up space").foregroundStyle(.primary) } icon: { Image(systemName: "checklist").foregroundStyle(Color.accentColor) }.font(.title3.weight(.semibold)).fixedSize()
+                Text(list.isEmpty ? "Nothing has sat untouched that long. Try a shorter time."
+                     : "\(byteLabel(list.reduce(Int64(0)) { $0 + $1.bytes })) in \(list.count) \(list.count == 1 ? "item" : "items") untouched for \(quietPhrase) or longer")
+                    .font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                Spacer(minLength: 8)
                 Text("Untouched for").font(.caption).foregroundStyle(.secondary).fixedSize()
                 Picker("Untouched for", selection: $model.quietHours) {
                     Text("12 hours").tag(12); Text("1 day").tag(24); Text("3 days").tag(72); Text("1 week").tag(168)
-                }.pickerStyle(.segmented).labelsHidden().fixedSize().controlSize(.small)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize()
             }
-            Text(list.isEmpty ? "Nothing has sat untouched that long. Try a shorter time."
-                 : "\(byteLabel(total)) in \(list.count) \(list.count == 1 ? "folder" : "folders") nothing has touched or opened for that long, plus anything safe. Biggest first.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            VStack(spacing: 2) { ForEach(list.prefix(showAll ? 80 : 8)) { row($0) } }
-            if list.count > 8 {
-                Button(showAll ? "Show the top 8" : list.count > 80 ? "Show the top 80" : "Show all \(list.count)") { withAnimation(.snappy(duration: 0.2)) { showAll.toggle() } }.buttonStyle(.link).font(.callout)
+            // Filters by what removing costs, each with its count and size.
+            HStack(spacing: 6) {
+                chip(nil, title: "All", items: list)
+                ForEach([Verdict.safe, .rebuild, .check]) { v in chip(v, title: v.title, items: list.filter { $0.cost == v }) }
+                Spacer(minLength: 0)
             }
-            Divider()
-            HStack(spacing: 8) {
-                Text(chosen.isEmpty ? "Tick what you want gone, then copy one command for all of it." : "\(chosen.count) ticked · \(byteLabel(chosenBytes))")
-                    .font(.callout).foregroundStyle(chosen.isEmpty ? .secondary : .primary).monospacedDigit()
+            Text(filter.map { $0.filter.explanation } ?? "Safe: not needed again. Rebuildable: the next build or download recreates it. Might hold work: may be the only copy, so look first.")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            // Select, total, copy: above the list, always in reach.
+            HStack(spacing: 10) {
+                Toggle(isOn: Binding(get: { allTicked }, set: { on in
+                    if on { model.selectedSuggestions.formUnion(selectable.map(\.path)) } else { model.selectedSuggestions.subtract(shown.map(\.path)) }
+                })) {
+                    Text(selectable.isEmpty ? "Nothing to select" : "Select all \(selectable.count) shown").font(.callout)
+                }.toggleStyle(.checkbox).disabled(selectable.isEmpty)
+                    .help("Ticks every row shown except backups, which you tick yourself.")
+                if shown.contains(where: \.backup) {
+                    Text("skips \(shown.filter(\.backup).count) \(shown.filter(\.backup).count == 1 ? "backup" : "backups")").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 6)
-                if !chosen.isEmpty { Button("Clear") { model.selectedSuggestions = [] }.controlSize(.small) }
-                Button("Copy Move-to-Trash Command", systemImage: "doc.on.clipboard") { model.copyTrash(chosen.map(\.path), bytes: chosenBytes) }
-                    .buttonStyle(.borderedProminent).controlSize(.small).disabled(chosen.isEmpty)
-                    .help("Copies one Terminal command that asks Finder to move the ticked folders to the Trash. Paste it in Terminal; it says how many it moved, and Context Cleaner confirms each one is gone. It never runs the command itself.")
-            }
+                if !chosen.isEmpty {
+                    Text("\(chosen.count) ticked · \(byteLabel(chosenBytes))").font(.callout.weight(.semibold)).monospacedDigit()
+                    Button("Clear") { model.selectedSuggestions = [] }.controlSize(.small)
+                }
+                TrashCopyButton(paths: chosen.map(\.path), bytes: chosenBytes, prominent: true)
+            }.padding(.horizontal, 10).padding(.vertical, 7).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            if let watch = model.trashWatch, !model.trashWatchHidden { TrashWatchLine(model: model, watch: watch) }
+            ScrollView {
+                LazyVStack(spacing: 2) { ForEach(shown) { row($0) } }.padding(.trailing, 6)
+            }.frame(height: shown.isEmpty ? 40 : min(listHeight, CGFloat(shown.count) * 42 + 8))
+                .overlay { if shown.isEmpty && !list.isEmpty { Text("Nothing \(filter?.title.lowercased() ?? "") untouched that long.").font(.callout).foregroundStyle(.secondary) } }
             HStack(spacing: 6) {
                 Image(systemName: "trash").foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(model.trashBytes.map { "The Trash holds \(byteLabel($0)). Space comes back when you empty it." } ?? "Space comes back when you empty the Trash.")
@@ -700,6 +721,23 @@ struct StartPanel: View {
                     .help("Opens the Trash in Finder. Context Cleaner never empties it.")
             }.font(.caption).foregroundStyle(.secondary)
         }.padding(16).frame(maxWidth: .infinity, alignment: .topLeading).background(.background.secondary)
+    }
+    private var quietPhrase: String {
+        switch model.quietHours { case 12: return "12 hours"; case 24: return "a day"; case 72: return "3 days"; default: return "a week" }
+    }
+    private func chip(_ verdict: Verdict?, title: String, items: [Suggestion]) -> some View {
+        let on = filter == verdict
+        let tint = verdict?.tint ?? .accentColor
+        return Button { withAnimation(.snappy(duration: 0.15)) { filter = verdict } } label: {
+            HStack(spacing: 6) {
+                if let verdict { Circle().fill(verdict.tint).frame(width: 8, height: 8) }
+                Text(title).fontWeight(on ? .semibold : .regular)
+                Text("\(items.count) · \(byteLabel(items.reduce(Int64(0)) { $0 + $1.bytes }))").foregroundStyle(.secondary).monospacedDigit()
+            }.font(.callout).padding(.horizontal, 10).padding(.vertical, 5)
+                .background(on ? tint.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
+                .overlay(Capsule().strokeBorder(on ? tint.opacity(0.6) : .clear))
+                .contentShape(Capsule())
+        }.buttonStyle(.plain).help(verdict.map { $0.title + ": " + $0.filter.explanation } ?? "Everything in the list")
     }
     private func row(_ s: Suggestion) -> some View {
         let ticked = Binding(get: { model.selectedSuggestions.contains(s.path) },
@@ -710,7 +748,10 @@ struct StartPanel: View {
             Button { model.open(s.owner ?? s.path) } label: {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(s.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                        HStack(spacing: 5) {
+                            Text(s.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                            if s.backup { Image(systemName: "lock.shield").font(.caption).foregroundStyle(Verdict.check.tint).help("Looks like a backup or save. Select All leaves it unticked.") }
+                        }
                         // Cost and quiet time first; the location is the part that can be cut off.
                         (Text(s.cost.title).foregroundColor(s.cost.tint) + Text(" · " + ([s.why, s.place].compactMap { $0 }.joined(separator: " · "))).foregroundColor(.secondary))
                             .font(.caption).lineLimit(1)
@@ -718,8 +759,8 @@ struct StartPanel: View {
                     Spacer(minLength: 8)
                     Text(byteLabel(s.bytes)).font(.callout).monospacedDigit()
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).help(s.path)
-        }.padding(.vertical, 2)
+            }.buttonStyle(.plain).help(abbreviatedPath(s.path))
+        }.padding(.vertical, 2).frame(height: 40)
             .contextMenu { LocationActions(model: model, path: s.owner ?? s.path) }
     }
 }
@@ -794,7 +835,6 @@ private struct ElsewhereRow: View {
     let depth: Int
     let largest: Double
     @State private var open = false
-    @State private var copied = false
     private var openable: Bool { item.isFolder && item.bytes != nil }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -853,9 +893,7 @@ private struct ElsewhereRow: View {
                     Text("\(idle.count) \(idle.count == 1 ? "project is" : "projects are") backed up and unchanged for a month: \(byteLabel(bytes)) with build folders. Nothing in \(idle.count == 1 ? "it" : "them") exists only on this Mac.")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    Button(copied ? "Copied" : "Copy Move-to-Trash Command") {
-                        model.copyTrash(idle.map(\.path), bytes: bytes); copied = true
-                    }.controlSize(.small).help("Copies a Terminal command that moves these projects to the Trash through Finder. Context Cleaner doesn't run it.")
+                    TrashCopyButton(paths: idle.map(\.path), sizes: Dictionary(idle.map { ($0.path, $0.totalBytes) }, uniquingKeysWith: { a, _ in a }))
                 }.padding(8).background(Color.stable.opacity(0.08), in: RoundedRectangle(cornerRadius: 6)).padding(.leading, indent)
             }
             if children.isEmpty {

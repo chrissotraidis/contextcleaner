@@ -40,9 +40,23 @@ func containsPath(_ parent: String, _ path: String) -> Bool {
 }
 /// A path with the home folder shown as ~.
 func abbreviatedPath(_ path: String) -> String {
-    let home = NSHomeDirectory()
+    let home = homeDirectory
     return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
 }
+/// Your home folder. Only a demo build, compiled with -D DEMO for videos and screenshots, reads a stand-in home,
+/// data folder and disk size from CC_DEMO_HOME, CC_DEMO_DATA and CC_DEMO_DISK ("total,free" in bytes).
+let homeDirectory: String = {
+#if DEMO
+    if let demo = ProcessInfo.processInfo.environment["CC_DEMO_HOME"] { return demo }
+#endif
+    return NSHomeDirectory()
+}()
+let demoDataRoot: URL? = {
+#if DEMO
+    if let demo = ProcessInfo.processInfo.environment["CC_DEMO_DATA"] { return URL(fileURLWithPath: demo) }
+#endif
+    return nil
+}()
 func byteLabel(_ bytes: Int64) -> String {
     let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"]
     var amount = Double(bytes), index = 0

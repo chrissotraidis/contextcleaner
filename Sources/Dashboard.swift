@@ -717,7 +717,7 @@ struct StartPanel: View {
                 Image(systemName: "trash").foregroundStyle(.secondary).accessibilityHidden(true)
                 Text(model.trashBytes.map { "The Trash holds \(byteLabel($0)). Space comes back when you empty it." } ?? "Space comes back when you empty the Trash.")
                 Spacer()
-                Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")) }.buttonStyle(.link)
+                Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.buttonStyle(.link)
                     .help("Opens the Trash in Finder. Context Cleaner never empties it.")
             }.font(.caption).foregroundStyle(.secondary)
         }.padding(16).frame(maxWidth: .infinity, alignment: .topLeading).background(.background.secondary)

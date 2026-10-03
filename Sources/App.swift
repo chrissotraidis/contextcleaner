@@ -934,7 +934,7 @@ struct TrashWatchLine: View {
             Image(systemName: symbol).foregroundStyle(tint)
             Text(message).font(.callout).lineLimit(2)
             Spacer()
-            if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash")) }.controlSize(.small) }
+            if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.controlSize(.small) }
             Button { model.dismissTrashWatch() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Dismiss").accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)

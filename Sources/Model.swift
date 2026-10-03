@@ -422,7 +422,7 @@ struct FolderRow: Identifiable {
     let store: AppendStore?
     var cancellation = Cancellation()
     var inspectionCancellation = Cancellation()
-    init(home: String = NSHomeDirectory(), dataRoot: URL? = nil) {
+    init(home: String = homeDirectory, dataRoot: URL? = demoDataRoot) {
         self.home = home
         do {
             let root = dataRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Context Cleaner")
@@ -701,13 +701,16 @@ struct FolderRow: Identifiable {
     /// and at least every ten minutes as folders age.
     var suggestionList: [Suggestion] {
         let bucket = Int(Date().timeIntervalSince1970 / 600)
-        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)|\(quietHours)|\(bucket)"
+        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)|\(quietHours)|\(bucket)|\(trashedSinceScan.count)"
         if suggestionCache.key == key { return suggestionCache.value }
         let items = baseMeasures().filter { !isExcluded($0.profile.path) }
-        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600)
+        // Items you moved to the Trash leave the list at once, including old items inside folders, which no scan has seen go yet.
+        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600).filter { !trashedSinceScan.contains($0.path) }
         suggestionCache = (key, value)
         return value
     }
+    /// Paths a Trash command moved since the last scan. Cleared when a scan is saved.
+    @Published private(set) var trashedSinceScan: Set<String> = []
 
     // MARK: Trash commands you copied
 
@@ -767,7 +770,9 @@ struct FolderRow: Identifiable {
         trashSizes = sizes
         trashWatch = TrashWatch(paths: result.ready, bytes: result.ready.reduce(0) { $0 + (sizes[$1] ?? 0) }, leftOut: result.leftOut)
         trashWatchHidden = false
-        selectedSuggestions.subtract(result.leftOut.keys)
+        // Items left out stay ticked, so you can see which they were and the Copy button keeps saying what it copied.
+        let gone = result.leftOut.filter { $0.value == .gone }.map(\.key)
+        selectedSuggestions.subtract(gone)
         if result.leftOut.values.contains(.gone) { refreshGone() }
         saveCleanup()
         trashTimer?.invalidate()
@@ -784,6 +789,7 @@ struct FolderRow: Identifiable {
             DispatchQueue.main.async {
                 guard !gone.isEmpty, var current = self.trashWatch, current.id == watch.id else { return }
                 current.moved.formUnion(gone)
+                self.trashedSinceScan.formUnion(gone)
                 current.movedBytes = current.moved.reduce(0) { $0 + (self.trashSizes[$1] ?? 0) }
                 self.trashWatch = current
                 self.selectedSuggestions.subtract(gone)
@@ -1046,7 +1052,7 @@ struct FolderRow: Identifiable {
                 }
             }
             DispatchQueue.main.async {
-                self.records = droppingOldContents(self.records + [record]); self.refreshVolume(); self.refreshGone(); self.loadSimDevices(); self.refreshProjects()
+                self.records = droppingOldContents(self.records + [record]); self.trashedSinceScan = []; self.refreshVolume(); self.refreshGone(); self.loadSimDevices(); self.refreshProjects()
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
                 self.autoWatch(after: record)

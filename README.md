@@ -40,6 +40,11 @@
 
 **Questions or bugs?** Join the [Discord](https://discord.gg/xwHfUD2bxW) or [open an issue](https://github.com/chrissotraidis/contextcleaner/issues).
 
+<p align="center">
+  <a href="https://github.com/chrissotraidis/contextcleaner/releases/download/v0.18.1/Context-Cleaner-demo.mp4"><img src="docs/images/demo-video.png" alt="Context Cleaner demo video title card" width="640"></a><br>
+  <a href="https://github.com/chrissotraidis/contextcleaner/releases/download/v0.18.1/Context-Cleaner-demo.mp4"><b>▶ Watch the 55-second demo</b></a>: Free up space, Select All, the recheck before copying, and History, on made-up demo data.
+</p>
+
 ## What is Context Cleaner?
 
 Coding agents, Xcode, simulators and package managers write a lot to disk, and none of them clean up after themselves. On the Mac this was built on, free space fell by more than 180 GiB in three days. It went into Codex worktrees and recovery copies, dated experiment builds, Android and iPhone build output, install caches, simulators and a Windows VM. Deleting things by hand every day didn't keep up, and Finder's Large Files view couldn't say what wrote a folder, whether it was still in use, or whether it would come back.
@@ -64,6 +69,8 @@ Context Cleaner answers those questions for the places where this data piles up,
 | **Needs** | An Apple silicon Mac with macOS 14 or later |
 
 ## What's new
+
+**0.18.1** fixes two things found while recording the demo. Items you moved from inside a folder now leave Free up space at once, instead of waiting for the next scan. Items the recheck leaves out stay ticked, so the Copy button keeps saying what it copied ("Copied 20 of 21").
 
 **0.18 is built around Free up space, and makes the Trash command dependable for any number of folders:**
 

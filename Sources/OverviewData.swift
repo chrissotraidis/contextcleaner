@@ -8,7 +8,12 @@ struct VolumeSnapshot {
     let free: Int64
     var used: Int64 { max(0, total - free) }
     static func read() -> VolumeSnapshot? {
-        guard let a = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()),
+#if DEMO
+        if let disk = ProcessInfo.processInfo.environment["CC_DEMO_DISK"]?.split(separator: ",").compactMap({ Int64($0) }), disk.count == 2 {
+            return VolumeSnapshot(date: Date(), total: disk[0], free: disk[1])
+        }
+#endif
+        guard let a = try? FileManager.default.attributesOfFileSystem(forPath: homeDirectory),
               let total = (a[.systemSize] as? NSNumber)?.int64Value,
               let free = (a[.systemFreeSize] as? NSNumber)?.int64Value, total > 0 else { return nil }
         return VolumeSnapshot(date: Date(), total: total, free: min(max(0, free), total))

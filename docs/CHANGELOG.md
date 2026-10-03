@@ -1,0 +1,90 @@
+# Changelog
+
+What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
+
+## 0.18.3
+
+A public-release pass: a shorter README with screenshots made from demo data, this changelog, and release builds signed under the developer's name.
+
+## 0.18.2
+
+Makes selecting more, and running the command, smoother:
+
+- **Long commands stay short.** A command for many items reads its list from a file Context Cleaner saves, so it's one short line to paste whether you picked 5 items or 400. Short ones still spell out every path.
+- **Select from Folders too.** Select several folders (⌘A works), and Copy Move-to-Trash Command sits at the top of the summary. It covers the Safe and Rebuildable ones and says what it left out and why.
+- **Never a whole Downloads or ~/GitHub.** A Trash command never moves a place Context Cleaner looks in (Downloads, ~/GitHub, Codex scratch) unless that place is a cache, and never model libraries, virtual machines, simulators or chat history.
+- **Shift-click** ticks a range in Free up space, **ticks survive** a change of the untouched time, and items down to 100 MiB are listed.
+- **Open Terminal** sits next to the copied result.
+
+## 0.18.1
+
+Fixes two things found while recording the demo. Items you moved from inside a folder now leave Free up space at once, instead of waiting for the next scan. Items the recheck leaves out stay ticked, so the Copy button keeps saying what it copied ("Copied 20 of 21").
+
+## 0.18
+
+Is built around Free up space, and makes the Trash command dependable for any number of folders:
+
+- **Free up space comes first.** The Overview opens with free space and "You can get back", then the list. Select All and Copy sit above the list, so they're in reach however long it is, and the list scrolls inside its panel.
+- **Select All, by answer.** Filter the list to Safe, Rebuildable or Might hold work, each with its count and size, and tick everything shown in one click. Select All never ticks backups, saves, recovery copies or private copies; tick those yourself.
+- **Backups are never called rebuildable.** A folder named like a backup, save, recovery copy or private copy is "Might hold work", even inside a `build` or `generated` folder. On the Mac this was built on, that caught dated iPad backups that 0.17 listed as an old build.
+- **Checked again before copying.** When you click Copy, each item is rechecked: still there, no app has a file open in it, and nothing in it changed since the scan. Anything that fails is left out, and you're told why. The button shows what happened: Checking, Copied 82 of 84, or Nothing copied.
+- **A Trash command that works for 1 item or 400.** It moves each item with macOS's own `trash` tool, which is instant and never shows a dialog, and falls back to Finder for a read-only folder, saying first that macOS may ask for your password. It prints a line per item (Moved, Already gone, or NOT moved with the reason) and counts them at the end. An item only counts as moved once it's gone. An Android emulator goes with its `.ini` file.
+- **History shows your cleanups.** Scan History is now **History**, with **Cleanups** first: every command you copied, what was moved, what's still in place, and what was left out and why.
+- **Clearer answers.** "Your call" is now **Might hold work**. Every list and tile says what the answers mean: Safe is not needed again, Rebuildable is recreated by the next build, Might hold work may be the only copy, so look first.
+
+## 0.17
+
+Tells you what to remove right now:
+
+- **Free up space**, right under the chart: one list, biggest first, of everything safe plus everything nothing has touched or opened for the time you pick (12 hours, 1 day, 3 days or a week). That covers idle build output, Codex scratch, scratch work folders, recovery copies, Android emulators, and old runs inside folders you're still using. Each row says what removing it costs and how long it has sat untouched.
+- **Tick rows and copy one command** for all of them, with a running total.
+- **The Trash command reports back.** It moves each item on its own, skips any that are already gone, and prints "Moved 3 of 3 items to the Trash". Context Cleaner watches those folders and confirms when each one has left, then reminds you to empty the Trash.
+- **Hours, not "today".** A folder untouched for 20 hours says so, instead of looking busy.
+- **Scratch folders say what they are**, and rescanning a folder you removed says it's gone.
+
+## 0.16
+
+Finds the space that was hiding in "Everything else":
+
+- **Codex scratch is scanned.** On the Mac this was built on, `~/.codex/scratch` held 274 GiB that no view showed: fresh-clone test homes, device backups and build outputs from finished tasks. Each task folder now gets its own row, size, last use and answer.
+- **Ollama models, DiffusionBee and Android emulators are scanned too**, each with how to remove them properly (`ollama list` and `ollama rm`, DiffusionBee's settings, Android Studio's Device Manager).
+- **Is this project backed up?** Open any folder in Everything else. Git projects and Codex worktrees say whether every commit is pushed, nothing is uncommitted or stashed, and which ignored files, such as `ref/` or `.env`, git would not keep. Projects that are fully backed up and unused for a month are added up, with a Move-to-Trash command to copy. A repository that other worktrees use is never offered.
+- **Known folders are explained**, such as Ollama, Gemini and Antigravity, the Android SDK, Rust toolchains, conda and backups.
+- **Charts read one way.** Everything is space used: the line climbs toward a dashed Full line, and bars go up on days that used space and down on days that freed it. The headline, axis, hover and caption agree, and days before tracking began aren't drawn.
+
+## 0.15
+
+Makes it easier to know where you are and what everything means:
+
+- **Back and Forward** (⌘[ and ⌘]) in the toolbar. Open a folder from the Overview, dig into it, and go back to exactly where you were.
+- **Every folder card shows its full path** and an **Up to** link to the folder it sits in. Subfolders are named for themselves, such as "project_dex_archive in Android build intermediates".
+- **Copy Move-to-Trash Command on every card.** It asks Finder to move the folder, so **Put Back** works and same-named folders don't collide. You run it; Context Cleaner never does.
+- **Biggest first** is the default order in Folders.
+- **One vocabulary.** **Ignore** is your choice, so the folder is never suggested. **Leave it** is the app's answer for app libraries you manage inside their own apps.
+- **How fast it's growing.** Where the space went shows each place's change and its rate per day.
+- **A shorter Overview**, and a chart you can click and drag.
+- **Everything else, explained.** Click it to see what it is, and **Look Inside** sizes the rest of your home folder, Library and Applications. It's read-only and saves nothing.
+
+## 0.14
+
+Is a speed release. Nothing it shows changed, only how fast it gets there:
+
+- **Scans use about 40% less CPU** and finish about 25–35% sooner on big build folders. Each directory is read in batches with one system call instead of one call per file, with identical results.
+- **Launch reads your saved history in parallel**: about 0.2 s instead of 0.5 s for 21 scans.
+- **The interface does half the work per scan update**, and the Folders table no longer re-sorts on every click.
+
+See the [0.14 validation record](validation/Final%20validation%200.14.0.md) for before and after measurements.
+
+## 0.13
+
+made the Overview calmer and clearer:
+
+- **One color system.** Green is safe or freed, soft green is old items, cyan is rebuildable, orange is your call, gray is keep, purple is ignored, blue is used space and growth, and red means a scan couldn't read something. Each color means the same thing everywhere.
+- **Where the space went is clickable** and follows the chart: pick 24 hours, 7 days or 30 days, click a day, or drag across a span.
+- **Scan History you can read**: each scan's net change, what grew and shrank most, and anything it couldn't read.
+- **A calmer Overview**: one Scan button in the toolbar, a shorter Start here list, and Kept renamed **Ignored**.
+- **Shorter answers**, and old scans no longer hold their folder listings in memory.
+
+Earlier releases: [0.12](validation/Final%20validation%200.12.0.md) added "You can get back", old experiments inside build folders and the four answers. [0.11](validation/Final%20validation%200.11.0.md) stopped calling recently used caches safe. See [all releases](https://github.com/chrissotraidis/contextcleaner/releases).
+
+

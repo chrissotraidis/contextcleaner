@@ -15,7 +15,7 @@ What did you expect to see, and what did you see instead? Include the steps if y
 
 ## The folder, if it's about one
 
-- The answer it gave (Safe to remove, Check first or Keep) and the reason shown:
+- The answer it gave (Safe to remove, Rebuildable, Might hold work or Leave it) and the reason shown:
 - What the folder actually is, if you know:
 
 Screenshots help. Check them, and any paths, for anything private before posting.

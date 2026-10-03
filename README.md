@@ -70,6 +70,14 @@ Context Cleaner answers those questions for the places where this data piles up,
 
 ## What's new
 
+**0.18.2 makes selecting more, and running the command, smoother:**
+
+- **Long commands stay short.** A command for many items reads its list from a file Context Cleaner saves, so it's one short line to paste whether you picked 5 items or 400. Short ones still spell out every path.
+- **Select from Folders too.** Select several folders (⌘A works), and Copy Move-to-Trash Command sits at the top of the summary. It covers the Safe and Rebuildable ones and says what it left out and why.
+- **Never a whole Downloads or ~/GitHub.** A Trash command never moves a place Context Cleaner looks in (Downloads, ~/GitHub, Codex scratch) unless that place is a cache, and never model libraries, virtual machines, simulators or chat history.
+- **Shift-click** ticks a range in Free up space, **ticks survive** a change of the untouched time, and items down to 100 MiB are listed.
+- **Open Terminal** sits next to the copied result.
+
 **0.18.1** fixes two things found while recording the demo. Items you moved from inside a folder now leave Free up space at once, instead of waiting for the next scan. Items the recheck leaves out stay ticked, so the Copy button keeps saying what it copied ("Copied 20 of 21").
 
 **0.18 is built around Free up space, and makes the Trash command dependable for any number of folders:**

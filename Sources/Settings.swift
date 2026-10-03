@@ -32,7 +32,7 @@ struct GeneralSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                Label("Context Cleaner never deletes files. You decide, in Finder.", systemImage: "lock.shield")
+                Label("Context Cleaner never deletes files. You choose what goes to the Trash.", systemImage: "lock.shield")
             } footer: {
                 Text("\(model.records.count) \(model.records.count == 1 ? "scan" : "scans") and \(model.capacity.count) disk \(model.capacity.count == 1 ? "reading" : "readings") are saved on this Mac. Nothing is ever pruned.").font(.caption).foregroundStyle(.secondary)
             }

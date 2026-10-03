@@ -691,9 +691,12 @@ struct FolderRow: Identifiable {
     // MARK: Free up space
 
     /// How long a folder must sit untouched before it's suggested. Saved between launches.
+    /// Ticks survive a change of time: anything still listed stays ticked, anything no longer listed doesn't count.
     @Published var quietHours: Int = UserDefaults.standard.object(forKey: "quietHours") as? Int ?? 24 {
-        didSet { UserDefaults.standard.set(quietHours, forKey: "quietHours"); selectedSuggestions = [] }
+        didSet { UserDefaults.standard.set(quietHours, forKey: "quietHours") }
     }
+    /// Smallest item Free up space lists.
+    static var suggestionMinimum: Int64 = 100 * 1_048_576
     /// Suggestions you ticked, by path.
     @Published var selectedSuggestions: Set<String> = []
     private var suggestionCache: (key: String, value: [Suggestion]) = ("", [])
@@ -705,12 +708,42 @@ struct FolderRow: Identifiable {
         if suggestionCache.key == key { return suggestionCache.value }
         let items = baseMeasures().filter { !isExcluded($0.profile.path) }
         // Items you moved to the Trash leave the list at once, including old items inside folders, which no scan has seen go yet.
-        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600).filter { !trashedSinceScan.contains($0.path) }
+        // Whole folders follow the same rule as every Trash command; old items inside a folder are judged by the folder's rules.
+        let byPath = Dictionary(items.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600, minimum: Self.suggestionMinimum)
+            .filter { !trashedSinceScan.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false) }
         suggestionCache = (key, value)
         return value
     }
     /// Paths a Trash command moved since the last scan. Cleared when a scan is saved.
     @Published private(set) var trashedSinceScan: Set<String> = []
+    /// Whether a whole folder may go in a Trash command. Never: virtual machines, simulators, chat history, app libraries
+    /// and model libraries (remove those in their own apps), ignored, turned-off or Leave it folders, and the places
+    /// Context Cleaner looks in, such as Downloads, ~/GitHub or Codex scratch, unless that place is itself a cache.
+    func mayTrashWhole(_ m: FolderMeasurement) -> Bool {
+        let path = m.profile.path, category = m.profile.category
+        let cache: Set<FolderCategory> = [.packageCache, .installCache, .buildOutput, .debugSymbols]
+        // An Android emulator is a folder plus an .ini file, and the command moves both; other virtual machines are removed in their apps.
+        let emulator = category == .virtualMachine && path.hasSuffix(".avd")
+        guard emulator || ![.virtualMachine, .simulator, .history, .appData, .model].contains(category), !path.hasSuffix("/CoreSimulator/Devices"),
+              !isExcluded(path), !preferences.policy(path).isKept, !gone.contains(path) else { return false }
+        if Coverage.entries.contains(where: { $0.path(home: home) == path }) && !cache.contains(category) { return false }
+        return adviceFor(m).verdict != .keep
+    }
+    /// The folders from a Folders selection a single Trash command may move, each once (a folder inside another goes with it).
+    /// Only Safe and Rebuildable folders: nothing is lost. Might hold work folders are copied one at a time from their card,
+    /// or ticked in Free up space once they've sat untouched.
+    func trashable(_ paths: [String]) -> (paths: [String], skipped: Int) {
+        let known = Dictionary(baseMeasures().map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
+        var ready: [String] = []
+        for path in paths.sorted(by: { $0.count < $1.count }) {
+            guard let m = known[path], m.state == .measured, !trashedSinceScan.contains(path), mayTrashWhole(m),
+                  [.safe, .rebuild].contains(adviceFor(m).verdict) else { continue }
+            if hasAncestor(in: Set(ready), path) { continue }
+            ready.append(path)
+        }
+        return (ready, paths.count - ready.count)
+    }
 
     // MARK: Trash commands you copied
 
@@ -763,12 +796,13 @@ struct FolderRow: Identifiable {
         }
     }
     private func finishCopy(_ paths: [String], _ result: (ready: [String], leftOut: [String: LeftOut]), sizes: [String: Int64]) {
+        let id = UUID().uuidString
         if !result.ready.isEmpty {
-            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommand(trashTargets(result.ready)), forType: .string)
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommandText(trashTargets(result.ready), id: id), forType: .string)
         }
         TrashCopyState.shared.finish(paths, copied: result.ready.count, leftOut: result.leftOut.count)
         trashSizes = sizes
-        trashWatch = TrashWatch(paths: result.ready, bytes: result.ready.reduce(0) { $0 + (sizes[$1] ?? 0) }, leftOut: result.leftOut)
+        trashWatch = TrashWatch(id: id, paths: result.ready, bytes: result.ready.reduce(0) { $0 + (sizes[$1] ?? 0) }, leftOut: result.leftOut)
         trashWatchHidden = false
         // Items left out stay ticked, so you can see which they were and the Copy button keeps saying what it copied.
         let gone = result.leftOut.filter { $0.value == .gone }.map(\.key)
@@ -778,6 +812,12 @@ struct FolderRow: Identifiable {
         trashTimer?.invalidate()
         guard !result.ready.isEmpty else { return }
         trashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.checkTrashWatch() } }
+    }
+    /// The command to copy: every path written out when it's short, or read from a saved list when it's long.
+    func trashCommandText(_ targets: [String], id: String) -> String {
+        let inline = trashCommand(targets)
+        guard inline.utf8.count > trashInlineLimit, let store, let list = try? store.saveTrashList(id, targets) else { return inline }
+        return trashCommand(targets, list: list)
     }
     private func checkTrashWatch() {
         guard let watch = trashWatch else { trashTimer?.invalidate(); return }

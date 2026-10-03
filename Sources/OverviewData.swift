@@ -350,22 +350,32 @@ struct StaleItem: Equatable, Identifiable {
 /// Finder handles one item at a time, so it's the fallback: one stalled request makes it refuse every item after it.
 /// Paths are only quoted for the shell; Finder gets each as an argument. It runs in a subshell, so it leaves nothing set
 /// in your Terminal. Context Cleaner never runs it.
-func trashCommand(_ paths: [String]) -> String {
+///
+/// With a list file, the paths are read from that file (NUL-separated) instead, so a command for hundreds of items
+/// is still one short line to paste. The file is read on its own descriptor, so nothing in the loop can consume it.
+func trashCommand(_ paths: [String], list: String? = nil) -> String {
     func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     let total = paths.count == 1 ? "1 item" : "\(paths.count) items"
     let finder = "osascript -e 'on run a' -e 'with timeout of 300 seconds' -e 'tell application \"Finder\" to delete (POSIX file (item 1 of a) as alias)' -e 'end timeout' -e 'end run' \"$p\" 2>&1 >/dev/null"
     let gone = "[ ! -e \"$p\" ] && [ ! -L \"$p\" ]"
-    return "( m=0; g=0; f=0; for p in " + paths.map(quoted).joined(separator: " ") + "; do "
+    let loop = list.map { "echo \"Moving \(total) listed in \" " + quoted($0) + "; while IFS= read -r -d '' p <&3; do " }
+        ?? "for p in " + paths.map(quoted).joined(separator: " ") + "; do "
+    let end = list.map { "done 3< " + quoted($0) + "; " } ?? "done; "
+    return "( m=0; g=0; f=0; " + loop
         + "if " + gone + "; then g=$((g+1)); echo \"Already gone: $p\"; "
         + "elif [ -x /usr/bin/trash ] && /usr/bin/trash \"$p\" 2>/dev/null && " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
         + "else echo \"Asking Finder to move $p (macOS may ask for your password)\"; "
         + "e=$(" + finder + "); "
         + "if " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
-        + "else f=$((f+1)); echo \"NOT moved: $p (${e:-still in place})\"; fi; fi; done; "
+        + "else f=$((f+1)); echo \"NOT moved: $p (${e:-still in place})\"; fi; fi; " + end
         + "echo \"Moved $m of \(total) to the Trash.\"; "
         + "[ $g -gt 0 ] && echo \"$g already gone.\"; [ $f -gt 0 ] && echo \"$f not moved; the lines above say why.\"; "
         + "echo \"Empty the Trash to get the space back.\" )"
 }
+/// Commands longer than this read their paths from a list file, so pasting stays instant.
+let trashInlineLimit = 4000
+/// The paths as a list file's contents: each followed by a NUL, which no path can contain.
+func trashListData(_ paths: [String]) -> Data { Data(paths.map { $0 + "\u{0}" }.joined().utf8) }
 /// What a Trash command should move for these folders: each folder, plus an Android emulator's .ini file
 /// next to its .avd folder, so Android Studio isn't left with a device that points nowhere.
 func trashTargets(_ paths: [String], exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {

@@ -120,6 +120,18 @@ import Foundation
         let files = try fm.contentsOfDirectory(atPath: base.appendingPathComponent("store/cleanups").path)
         check(saved.count == 1 && saved[0].count(.moved) == 1 && saved[0].bytes(.moved) == 5 && saved[0].count(.leftOut) == 1 && files.count == 2,
               "History keeps every state of a cleanup as its own file and shows the newest")
+        // A long command reads its paths from a list file. Run it, in zsh and bash, on paths that don't exist: nothing can move.
+        let missing = (0..<300).map { base.path + "/never-made/item \($0) it's \"q\" · é" } + [base.path + "/never-made/line\nbreak"]
+        let listPath = try history.saveTrashList("list-fixture", missing)
+        let listed = trashCommand(missing, list: listPath)
+        check(listed.utf8.count < 2000 && trashCommand(missing).utf8.count > trashInlineLimit, "a command for 301 items is still one short line when it reads a list")
+        for shell in ["/bin/zsh", "/bin/bash"] {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: shell); process.arguments = ["-c", listed]; process.standardOutput = pipe
+            try process.run(); let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self); process.waitUntilExit()
+            check(output.contains("Moved 0 of 301 items to the Trash.") && output.contains("301 already gone.") && output.contains("line\nbreak"),
+                  "\(shell) reads every path from the list, quotes, accents and line breaks included")
+        }
         print("SUCCESS: \(count) detail checks; all fixtures preserved at \(base.path)")
     }
 }

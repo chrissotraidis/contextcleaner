@@ -28,7 +28,7 @@ struct MainView: View {
                 }
             }.navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
             .safeAreaInset(edge: .bottom) {
-                Label("Never deletes. You do, in Finder.", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                Label("Never deletes. You decide.", systemImage: "lock.shield").font(.caption).foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, alignment: .leading)
             }
         } detail: {
             VStack(spacing: 0) {
@@ -370,6 +370,13 @@ struct MainView: View {
                     Text("\(model.selection.count) folders selected").font(.headline)
                     Text(byteLabel(summary.bytes)).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                     Text(summary.unmeasured > 0 ? "Added together, counting folders inside others once. \(summary.unmeasured) not scanned yet." : "Added together, counting folders inside others once.").font(.caption).foregroundStyle(.secondary)
+                    // The Trash command first, so it's in reach however many folders are selected.
+                    let trash = model.trashable(Array(model.selection))
+                    TrashCopyButton(paths: trash.paths, prominent: true)
+                    Text(trash.skipped == 0 ? "One command for every folder selected."
+                         : "For the \(trash.paths.count) Safe and Rebuildable \(trash.paths.count == 1 ? "folder" : "folders"). Leaves out \(trash.skipped): Might hold work folders (copy each from its card, or tick it in Free up space), folders inside others, and places you remove in their own apps.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Divider()
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
                         HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.displayName).font(.callout); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.callout).monospacedDigit().foregroundStyle(.secondary) }
@@ -379,8 +386,7 @@ struct MainView: View {
                         HStack { Text(item.profile.displayName).font(.callout).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit() }
                     }
                     if summary.items.count > 12 { Text("and \(summary.items.count - 12) more").font(.caption).foregroundStyle(.secondary) }
-                    HStack { Button("Show All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.buttonStyle(.borderedProminent); Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.fixedSize() }
-                    Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
+                    HStack { Button("Show All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }; Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.fixedSize() }
                 } else if let item = model.chosen {
                     folderInspector(item)
                 } else if model.running, let path = model.selected {
@@ -472,7 +478,7 @@ struct MainView: View {
             Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)
         } else if item.state == .measured || simulatorRoot || SimulatorLocations.deviceRoot(path) != nil {
             VerdictCard(advice: model.adviceFor(item), sizeSource: sizeSourceText(item), neverUsed: item.scopeID == xcodeLiveScope,
-                        trashPath: [.virtualMachine, .simulator, .history, .appData].contains(item.profile.category) || item.profile.path.hasSuffix("/CoreSimulator/Devices") ? nil : path)
+                        trashPath: model.mayTrashWhole(item) ? path : nil)
         }
         if simulatorRoot { simulatorDeviceList() }
         if item.state != .measured && item.state != .pending {
@@ -508,7 +514,7 @@ struct MainView: View {
         Divider()
         DisclosureGroup("What's inside", isExpanded: $showInside) { if showInside { contents(item).padding(.top, 8) } }.font(.headline)
         DisclosureGroup("Details", isExpanded: $showDetails) { if showDetails { details(item).padding(.top, 8) } }.font(.headline)
-        Text("Context Cleaner never deletes files. You decide, in Finder.").font(.caption).foregroundStyle(.secondary)
+        Text("Context Cleaner never deletes files. You choose what goes to the Trash.").font(.caption).foregroundStyle(.secondary)
     }
     /// Every simulator Xcode knows, with current size, last use and a verdict. Read from Xcode, so it's never stale.
     @ViewBuilder func simulatorDeviceList() -> some View {
@@ -910,7 +916,7 @@ struct ReportPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Export cleanup list").font(.title2.weight(.semibold))
-            Text("A checklist of what you can remove, biggest first: safe folders, old items inside folders, rebuildable folders, and your calls, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("A checklist of what you can remove, biggest first: safe folders, old items inside folders, rebuildable folders, and folders that might hold work, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file has the whole list." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 .background(.background.secondary)
@@ -935,6 +941,12 @@ struct TrashWatchLine: View {
             Text(message).font(.callout).lineLimit(2)
             Spacer()
             if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.controlSize(.small) }
+            else if !watch.paths.isEmpty && watch.moved.isEmpty && !watch.expired {
+                // Opens Terminal only. You paste and run the command yourself.
+                Button("Open Terminal") {
+                    if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") { NSWorkspace.shared.open(terminal) }
+                }.controlSize(.small).help("Opens Terminal. Paste with ⌘V and press Return.")
+            }
             Button { model.dismissTrashWatch() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Dismiss").accessibilityLabel("Dismiss")
         }
         .padding(.horizontal, 10).padding(.vertical, 6)

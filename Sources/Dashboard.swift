@@ -663,6 +663,8 @@ struct StartPanel: View {
     @ObservedObject var model: CleanerModel
     var listHeight: CGFloat = 420
     @State private var filter: Verdict?
+    /// The row ticked or unticked last, for Shift-click ranges.
+    @State private var anchor: String?
     var body: some View {
         let list = model.suggestionList
         let shown = filter.map { f in list.filter { $0.cost == f } } ?? list
@@ -688,7 +690,7 @@ struct StartPanel: View {
                 ForEach([Verdict.safe, .rebuild, .check]) { v in chip(v, title: v.title, items: list.filter { $0.cost == v }) }
                 Spacer(minLength: 0)
             }
-            Text(filter.map { $0.filter.explanation } ?? "Safe: not needed again. Rebuildable: the next build or download recreates it. Might hold work: may be the only copy, so look first.")
+            Text((filter.map { $0.filter.explanation } ?? "Safe: not needed again. Rebuildable: the next build or download recreates it. Might hold work: may be the only copy, so look first.") + " Shift-click to tick a range.")
                 .font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             // Select, total, copy: above the list, always in reach.
             HStack(spacing: 10) {
@@ -710,7 +712,7 @@ struct StartPanel: View {
             }.padding(.horizontal, 10).padding(.vertical, 7).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             if let watch = model.trashWatch, !model.trashWatchHidden { TrashWatchLine(model: model, watch: watch) }
             ScrollView {
-                LazyVStack(spacing: 2) { ForEach(shown) { row($0) } }.padding(.trailing, 6)
+                LazyVStack(spacing: 2) { ForEach(shown) { row($0, in: shown) } }.padding(.trailing, 6)
             }.frame(height: shown.isEmpty ? 40 : min(listHeight, CGFloat(shown.count) * 42 + 8))
                 .overlay { if shown.isEmpty && !list.isEmpty { Text("Nothing \(filter?.title.lowercased() ?? "") untouched that long.").font(.callout).foregroundStyle(.secondary) } }
             HStack(spacing: 6) {
@@ -739,9 +741,16 @@ struct StartPanel: View {
                 .contentShape(Capsule())
         }.buttonStyle(.plain).help(verdict.map { $0.title + ": " + $0.filter.explanation } ?? "Everything in the list")
     }
-    private func row(_ s: Suggestion) -> some View {
-        let ticked = Binding(get: { model.selectedSuggestions.contains(s.path) },
-                             set: { on in if on { model.selectedSuggestions.insert(s.path) } else { model.selectedSuggestions.remove(s.path) } })
+    private func row(_ s: Suggestion, in shown: [Suggestion]) -> some View {
+        let ticked = Binding(get: { model.selectedSuggestions.contains(s.path) }, set: { on in
+            // Shift-click ticks or unticks every row between the last one you clicked and this one.
+            var paths = [s.path]
+            if NSEvent.modifierFlags.contains(.shift), let anchor, let a = shown.firstIndex(where: { $0.path == anchor }), let b = shown.firstIndex(where: { $0.path == s.path }) {
+                paths = shown[min(a, b)...max(a, b)].map(\.path)
+            }
+            if on { model.selectedSuggestions.formUnion(paths) } else { model.selectedSuggestions.subtract(paths) }
+            anchor = s.path
+        })
         return HStack(spacing: 10) {
             Toggle(s.name, isOn: ticked).toggleStyle(.checkbox).labelsHidden()
             RoundedRectangle(cornerRadius: 2).fill(s.cost.tint).frame(width: 4, height: 30).accessibilityHidden(true)

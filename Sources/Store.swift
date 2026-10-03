@@ -47,7 +47,7 @@ final class AppendStore {
     private(set) var warnings: [String] = []
     init(root: URL) throws {
         self.root = root
-        for folder in ["scans", "preferences", "imports", "discoveries", "capacity", "cleanups"] {
+        for folder in ["scans", "preferences", "imports", "discoveries", "capacity", "cleanups", "trash-lists"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
     }
@@ -108,6 +108,13 @@ final class AppendStore {
     func cleanups() -> [Cleanup] {
         let all = decodeAll("cleanups", as: Cleanup.self, label: "cleanup")
         return Dictionary(grouping: all, by: \.id).values.compactMap { $0.max { $0.updatedAt < $1.updatedAt } }.sorted { $0.copiedAt > $1.copiedAt }
+    }
+    /// Saves the paths of a long Trash command as a new file, for the command to read. Returns its path.
+    func saveTrashList(_ id: String, _ paths: [String]) throws -> String {
+        guard id.range(of: "^[a-zA-Z0-9-]+$", options: .regularExpression) != nil else { throw StoreError.invalid("list ID") }
+        let url = root.appendingPathComponent("trash-lists/\(id).txt")
+        try writeNew(trashListData(paths), to: url)
+        return url.path
     }
     func importLegacy(_ source: URL, home: String) throws -> Int {
         let data = try Data(contentsOf: source), sourceDigest = digest(data)

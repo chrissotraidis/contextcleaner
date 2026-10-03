@@ -256,7 +256,7 @@ struct TrashCopyButton: View {
             guard mine else { return paths.count > 1 ? "Copy Move-to-Trash Command (\(paths.count))" : "Copy Move-to-Trash Command" }
             if state.checking { return "Checking \(paths.count == 1 ? "the folder" : "\(paths.count) items")…" }
             if state.copied == 0 { return "Nothing copied" }
-            return paths.count == 1 ? "Copied" : "Copied \(state.copied) of \(paths.count)"
+            return paths.count == 1 ? "Copied" : state.copied == paths.count ? "Copied all \(paths.count)" : "Copied \(state.copied) of \(paths.count)"
         }()
         let symbol = mine && !state.checking ? (state.copied > 0 ? "checkmark.circle.fill" : "exclamationmark.circle") : "doc.on.clipboard"
         let button = Button { requestTrashCopy(paths, bytes: bytes, sizes: sizes) } label: { Label(title, systemImage: symbol).monospacedDigit() }

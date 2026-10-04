@@ -61,5 +61,5 @@ ln -s /Applications "$package_dir/Applications"
 printf '%s\n' "$stage_dir" > "$release_root/build-stage.txt"
 hdiutil create -volname 'Context Cleaner 0.19.0' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.19.0.dmg"
 hdiutil verify "$release_root/Context-Cleaner-0.19.0.dmg"
-shasum -a 256 "$release_root/Context-Cleaner-0.19.0.dmg" > "$release_root/SHA256SUMS.txt"
+(cd "$release_root" && shasum -a 256 Context-Cleaner-0.19.0.dmg > SHA256SUMS.txt)
 printf 'App retained at: %s\n' "$app"

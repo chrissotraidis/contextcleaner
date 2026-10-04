@@ -363,6 +363,9 @@ import Foundation
               && worktreeAdvice(cleanTree, .unread, now: now).short == "Checking git…" && worktreeAdvice(cleanTree, .noRepository, now: now).verdict == .check,
               "uncommitted work, files git doesn't keep, unpushed detached commits, a missing repository or no answer from git keep a worktree Might hold work")
         let states = [cleanTree.profile.path: kept(), oldTree.profile.path: kept(), dirtyTree.profile.path: kept(changes: 3)]
+        let variants = [kept(), kept(changes: 2), kept(changes: nil), kept(ignored: ["ref/"]), kept(branch: nil), kept(main: "/nonexistent/repository"), kept(main: "/")]
+        check(variants.allSatisfy { [.safe, .rebuild].contains(worktreeAdvice(cleanTree, .read($0), now: now).verdict) == $0.keepsEverything },
+              "the check repeated before copying agrees with the Clean worktree answer in every case")
         func treeAdvice(_ m: FolderMeasurement) -> Advice {
             advice(for: m, policy: LocationPolicy(), devices: [:], worktree: isWorktreeFolder(m.profile.path) ? states[m.profile.path].map { .read($0) } ?? .noRepository : nil, now: now)
         }

@@ -1171,6 +1171,15 @@ func worktreeRepository(_ folder: String) -> String? {
 }
 /// What git said about a worktree folder.
 enum WorktreeGit: Equatable { case unread, noRepository, read(RepoBackup) }
+extension RepoBackup {
+    /// Nothing in the folder exists only there: every change committed, its commits kept (in its repository or pushed),
+    /// no other worktree depending on it, its repository still on disk, and nothing ignored but build output, caches
+    /// and exact copies. The test for a Clean worktree, read again just before a command is copied.
+    var keepsEverything: Bool {
+        guard changes == 0, backedUp, worktrees == 0, unkeptIgnored.isEmpty else { return false }
+        return mainRepository.map { FileManager.default.fileExists(atPath: $0) } ?? true
+    }
+}
 /// The answer for a whole worktree folder. It's only Safe or Rebuildable when nothing in it exists only here:
 /// every change committed, its commits on a branch of the main repository (or pushed), no other worktree depending
 /// on it, and git ignoring nothing but build output and caches.
@@ -1222,8 +1231,8 @@ func elsewhereAbout(_ path: String, home: String) -> String? {
         "/Applications": "Apps for everyone on this Mac. Uninstall ones you don't use.",
         "Applications": "Apps installed just for you. Uninstall ones you don't use.",
         "GitHub": "Your projects: source, git history and assets. Open it to see which are backed up. Build folders inside are scanned separately.",
-        ".codex": "Codex's own folder. Open it to see its parts. Conversations, scratch, backups and worktree builds are scanned separately.",
-        ".codex/worktrees": "Codex's copies of your projects, one per task. Open it to see which are backed up. Their build folders are scanned separately.",
+        ".codex": "Codex's own folder. Open it to see its parts. Conversations, scratch, backups, tasks and worktrees are scanned separately; this is the rest, such as its databases and logs.",
+        ".codex/worktrees": "Codex's copies of your projects, one per task. They're scanned separately, each judged by git.",
         ".ollama": "Ollama. Its models are scanned separately; this is the rest.",
         ".gemini": "Gemini CLI and Antigravity: settings, history, browser profiles and copies of Antigravity's data.",
         ".gemini/antigravity-backup": "A backup of Antigravity's data. If Antigravity works, you likely don't need it.",

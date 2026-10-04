@@ -822,18 +822,34 @@ struct FolderRow: Identifiable {
         for path in paths { sizes[path] = known[path] ?? knownBytes(path) }
         if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
         let items = paths.map { (path: $0, seen: seenDate($0)) }
-        // Worktrees listed because git had everything in them are checked with git again.
-        let cleanTrees = Set(paths.filter { isWorktreeFolder($0) && worktrees[$0]?.changes == 0 })
+        // Worktrees offered because git had everything in them get the same git check again, in full.
+        let cleanTrees = paths.filter { isWorktreeFolder($0) && worktrees[$0]?.keepsEverything == true }
         state.start(paths)
         DispatchQueue.global(qos: .userInitiated).async {
             let snapshot = ActivitySnapshot.capture()
             var result = recheck(items, open: snapshot.available ? snapshot.observations : nil)
-            // A clean worktree goes only if git still has everything: anything uncommitted now, anywhere inside, leaves it out.
-            for path in result.ready where cleanTrees.contains(path) {
-                let clean = worktreeRepository(path).flatMap { gitOutput($0, ["status", "--porcelain", "--untracked-files=normal"], timeout: 20) }
-                if clean != "" { result.ready.removeAll { $0 == path }; result.leftOut[path] = .changed }
+            // A clean worktree goes only if git still has everything: a new uncommitted change or a new file git
+            // doesn't keep, anywhere inside, leaves it out.
+            let trees = cleanTrees.filter { result.ready.contains($0) }
+            var fresh = [RepoBackup?](repeating: nil, count: trees.count)
+            fresh.withUnsafeMutableBufferPointer { slots in
+                let base = slots.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: trees.count) { index in
+                    base[index] = worktreeRepository(trees[index]).map(readRepoBackup)
+                }
             }
-            DispatchQueue.main.async { self.finishCopy(paths, result, sizes: sizes) }
+            for (index, path) in trees.enumerated() where fresh[index]?.keepsEverything != true {
+                result.ready.removeAll { $0 == path }; result.leftOut[path] = .changed
+            }
+            DispatchQueue.main.async {
+                // What git just said replaces what it said at the scan, so the row's answer is current too.
+                if !trees.isEmpty {
+                    var states = self.worktrees
+                    for (index, path) in trees.enumerated() { states[path] = fresh[index] }
+                    self.worktrees = states
+                }
+                self.finishCopy(paths, result, sizes: sizes)
+            }
         }
     }
     private func finishCopy(_ paths: [String], _ result: (ready: [String], leftOut: [String: LeftOut]), sizes: [String: Int64]) {

@@ -2,6 +2,14 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.19.1
+
+Tightens the last-second check on whole worktrees, found while checking 0.19.0 end to end:
+
+- **The same git test, again, when you copy.** Copying a Clean worktree now repeats the full test that made it clean: nothing uncommitted or untracked, and nothing ignored that isn't build output, a cache or an exact copy of the main checkout's. 0.19.0 only repeated the first half, so a new file inside an ignored folder such as `ref/` could slip through.
+- **The row updates at once.** If that check finds something, the worktree leaves the list right away and its build folder takes its place, instead of keeping its old answer until the next scan.
+- "Everything else" no longer says only worktree build folders are scanned.
+
 ## 0.19.0
 
 Finds much more to remove, especially what Codex leaves behind:

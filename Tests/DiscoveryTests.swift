@@ -248,6 +248,26 @@ import Foundation
         check(expectedPaths.allSatisfy(found.contains), "worktrees and task folders are measured whole, with the build and work folders of the repository inside, nested or not")
         check(worktreeRepository(codexHome + "/.codex/worktrees/wrapped") == codexHome + "/.codex/worktrees/wrapped/app" && worktreeRepository(codexHome + "/.codex/worktrees/flat") == codexHome + "/.codex/worktrees/flat"
               && worktreeRepository(codexHome + "/.codex/tasks/task-a") == nil, "a worktree folder's repository is itself or the one repository it wraps")
+        // Real git: a worktree is clean only while nothing in it exists only there.
+        let gitRoot = root.appendingPathComponent("git").path, mainRepo = gitRoot + "/main", wtree = gitRoot + "/wtree"
+        try fm.createDirectory(atPath: mainRepo + "/ref", withIntermediateDirectories: true)
+        func runGit(_ arguments: [String]) { let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/git"); p.arguments = arguments; p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice; try? p.run(); p.waitUntilExit() }
+        try writeNew(Data("ref/\nbuild/\n".utf8), to: URL(fileURLWithPath: mainRepo + "/.gitignore"))
+        try writeNew(Data("input".utf8), to: URL(fileURLWithPath: mainRepo + "/ref/game.bin"))
+        runGit(["-C", mainRepo, "init", "-q"]); runGit(["-C", mainRepo, "add", ".gitignore"])
+        runGit(["-C", mainRepo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"])
+        runGit(["-C", mainRepo, "worktree", "add", "-q", "-b", "codex/t", wtree])
+        try fm.createDirectory(atPath: wtree + "/build", withIntermediateDirectories: true)
+        try writeNew(Data("out".utf8), to: URL(fileURLWithPath: wtree + "/build/a.o"))
+        check(readRepoBackup(wtree).keepsEverything && readRepoBackup(wtree).mainRepository.map { URL(fileURLWithPath: $0).lastPathComponent } == "main", "a fresh worktree holding only build output keeps nothing unique")
+        try fm.createDirectory(atPath: wtree + "/ref", withIntermediateDirectories: true)
+        try writeNew(Data("input".utf8), to: URL(fileURLWithPath: wtree + "/ref/game.bin"))
+        let copied = readRepoBackup(wtree)
+        check(copied.keepsEverything && copied.copiedIgnored == ["ref/"], "an ignored ref/ that matches the main checkout's, file for file, is a copy")
+        try writeNew(Data("save".utf8), to: URL(fileURLWithPath: wtree + "/ref/save.dat"))
+        check(!readRepoBackup(wtree).keepsEverything && readRepoBackup(wtree).unkeptIgnored == ["ref/"], "a new file inside an ignored folder makes the worktree hold something only it has")
+        try writeNew(Data("x".utf8), to: URL(fileURLWithPath: wtree + "/notes.txt"))
+        check(readRepoBackup(wtree).changes == 1 && !readRepoBackup(wtree).keepsEverything, "an untracked file counts as uncommitted")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

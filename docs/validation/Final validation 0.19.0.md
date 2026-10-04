@@ -28,3 +28,7 @@ Build 44.
 - A worktree's answer comes from the git read after a scan; until it finishes (about a minute here), worktrees say "Checking git…" and aren't listed whole.
 - The exact-copy check compares names and sizes, not contents.
 - Nothing on this Mac's disk was moved during this work; moves happened on a disposable disk image.
+
+## Follow-up
+
+An end-to-end check found that the git recheck before copying covered uncommitted and untracked files but not new files inside ignored folders. Fixed in 0.19.1; see its validation record.

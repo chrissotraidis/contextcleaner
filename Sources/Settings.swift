@@ -207,10 +207,10 @@ struct CoverageSettings: View {
                     .toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
             }
             if open {
-                Text(entry.writes + (entry.kind == .folder ? "" : " Each " + (entry.kind == .children ? "subfolder" : "project's build folder") + " is listed on its own.")).font(.caption).foregroundStyle(.secondary).padding(.leading, 40)
-                Text("~/" + entry.relativePath).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(.secondary).padding(.leading, 40)
+                Text(entry.writes + (entry.kind == .folder ? "" : " Each " + (entry.kind == .children ? "subfolder" : entry.kind == .workspaces ? "folder, and its build and work folders," : "project's build folder") + " is listed on its own.")).font(.caption).foregroundStyle(.secondary).padding(.leading, 40)
+                Text(entry.shownPath).font(.system(.caption, design: .monospaced)).textSelection(.enabled).foregroundStyle(.secondary).padding(.leading, 40)
             }
-        }.help("~/" + entry.relativePath + "\n" + entry.writes).accessibilityElement(children: .contain).accessibilityLabel(entry.writer + " " + entry.name)
+        }.help(entry.shownPath + "\n" + entry.writes).accessibilityElement(children: .contain).accessibilityLabel(entry.writer + " " + entry.name)
     }
     private var yourFolders: some View {
         let catalog = Set(Coverage.entries.map { $0.path(home: model.home) })
@@ -306,7 +306,7 @@ struct ScanPlanView: View {
                 DisclosureGroup("Exact paths") {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 4) {
-                            ForEach(included) { entry in Text("~/" + entry.relativePath).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
+                            ForEach(included) { entry in Text(entry.shownPath).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                             ForEach(added, id: \.self) { path in Text(path).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(maxHeight: 120)

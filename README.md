@@ -71,7 +71,7 @@ Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses 
 | Group | Places |
 |---|---|
 | AI tools | Codex worktrees, scratch, backups, tasks and conversations; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
-| Developer tools | Build folders in `~/GitHub`; Xcode DerivedData and device support; simulators; iPhone install caches; npm, pip, uv, Yarn, Gradle, Homebrew and Playwright caches |
+| Developer tools | Build folders in `~/GitHub`; Xcode DerivedData and device support; simulators; iPhone install caches; npm, pip, uv, Yarn, Gradle, Homebrew and Playwright caches; your temporary folder |
 | Virtual machines | Parallels, Docker Desktop, UTM, Android emulators |
 | Games | Steam, CrossOver, OpenEmu |
 | Downloads | Your Downloads folder |
@@ -141,4 +141,3 @@ More: [changelog](docs/CHANGELOG.md) · [design notes](docs/DESIGN.md) · [valid
 Questions or bugs: [Discord](https://discord.gg/xwHfUD2bxW) or [open an issue](https://github.com/chrissotraidis/contextcleaner/issues/new/choose). Check screenshots for private paths before posting.
 
 No open-source license has been chosen yet, so the code isn't licensed for reuse. Context Cleaner is independent and not affiliated with OpenAI, Apple or any tool it looks at.
-

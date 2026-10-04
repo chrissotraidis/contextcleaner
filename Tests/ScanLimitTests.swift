@@ -9,7 +9,8 @@ import Darwin
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let wide = root.appendingPathComponent("wide")
         try FileManager.default.createDirectory(at: wide, withIntermediateDirectories: true)
-        for index in (0..<520).reversed() { try writeNew(Data([UInt8(index % 255)]), to: wide.appendingPathComponent(String(format: "%04d.bin", index))) }
+        // The first 8 files are tiny; the other 512 take two disk blocks each, so they're the biggest.
+        for index in (0..<520).reversed() { try writeNew(index < 8 ? Data([UInt8(index % 255)]) : Data(repeating: UInt8(index % 255), count: 8192), to: wide.appendingPathComponent(String(format: "%04d.bin", index))) }
         let original = try Data(contentsOf: wide.appendingPathComponent("0000.bin"))
         let profile = Classifier.profile(path: wide.path, home: root.path)
         func measure(_ limits: ScanLimits, prefs: Preferences = Preferences(), token: Cancellation = Cancellation()) -> FolderMeasurement {
@@ -18,8 +19,8 @@ import Darwin
         let full = measure(.manual)
         check(full.state == .measured && full.fileCount == 520, "streaming traversal completely measures a wide folder")
         check(full.contents?.listedChildren == 520 && full.contents?.children.count == 512, "child retention is bounded independently of traversal width")
-        let expectedNames = Set((0..<512).map { String(format: "%04d.bin", $0) })
-        check(Set(full.contents!.children.map(\.name)) == expectedNames, "retained child names are the alphabetically first 512 regardless of enumeration order")
+        let expectedNames = Set((8..<520).map { String(format: "%04d.bin", $0) })
+        check(Set(full.contents!.children.map(\.name)) == expectedNames, "the 512 biggest items are kept, whatever order they're read in")
         let limited = measure(ScanLimits(seconds: 120, entries: 10))
         check(limited.state == .limited && limited.allocatedBytes == nil && limited.logicalBytes == nil && limited.contents == nil, "entry limit never publishes a partial size or detail as complete")
         check(limited.diagnostic?.contains("Entry allowance") == true, "entry-limit reason is actionable")

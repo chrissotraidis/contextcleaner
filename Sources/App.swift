@@ -16,6 +16,8 @@ struct MainView: View {
     @State var showDetails = false
     @State var historyTab = 0
     let timer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
+    /// Often enough that anything you moved yourself, in Terminal or Finder, leaves Free up space within seconds.
+    let goneTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
     var busy: Bool { model.running || model.inspecting || model.discovering }
     var body: some View {
         NavigationSplitView {
@@ -102,6 +104,8 @@ struct MainView: View {
             model.refreshVolume()
             model.checkScheduledPass()
         }
+        .onReceive(goneTimer) { _ in model.checkVanished() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.checkVanished() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.cancellation.cancel(); model.inspectionCancellation.cancel() }
     }
     var header: some View {
@@ -846,6 +850,7 @@ struct PolicyEditor: View {
 }
 @main struct ContextCleanerApp: App {
     @StateObject private var model = CleanerModel()
+    init() { keepReadsLocal() }
     var body: some Scene {
         WindowGroup("Context Cleaner") { MainView(model: model) }.defaultSize(width: 1480, height: 920)
             .commands {
@@ -958,6 +963,9 @@ struct TrashWatchLine: View {
     private var message: String {
         let total = watch.paths.count
         let left = watch.leftOut.isEmpty ? "" : " " + leftOutText
+        if total == 0 && !watch.leftOut.isEmpty && watch.leftOut.values.allSatisfy({ $0 == .gone }) {
+            return "Nothing to copy: \(watch.leftOut.count == 1 ? "it was" : "all \(watch.leftOut.count) were") already gone, so they've left the list."
+        }
         if total == 0 { return "Nothing copied. " + leftOutText + " Scan again, then try once more." }
         let moved = "\(watch.moved.count) of \(total) moved to the Trash (\(byteLabel(watch.movedBytes)))."
         if watch.done { return "Moved to the Trash: \(total == 1 ? "the item" : "all \(total)"), \(byteLabel(watch.movedBytes)). Empty the Trash to get the space back." + left }

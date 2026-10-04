@@ -353,7 +353,10 @@ struct StaleItem: Equatable, Identifiable {
 ///
 /// With a list file, the paths are read from that file (NUL-separated) instead, so a command for hundreds of items
 /// is still one short line to paste. The file is read on its own descriptor, so nothing in the loop can consume it.
-func trashCommand(_ paths: [String], list: String? = nil) -> String {
+///
+/// Repositories in prune had worktrees in the list: once they're moved, git is told they're gone (git worktree prune
+/// only forgets worktrees whose folders no longer exist), so their branches can be checked out again.
+func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = []) -> String {
     func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
     let total = paths.count == 1 ? "1 item" : "\(paths.count) items"
     let finder = "osascript -e 'on run a' -e 'with timeout of 300 seconds' -e 'tell application \"Finder\" to delete (POSIX file (item 1 of a) as alias)' -e 'end timeout' -e 'end run' \"$p\" 2>&1 >/dev/null"
@@ -361,13 +364,14 @@ func trashCommand(_ paths: [String], list: String? = nil) -> String {
     let loop = list.map { "echo \"Moving \(total) listed in \" " + quoted($0) + "; while IFS= read -r -d '' p <&3; do " }
         ?? "for p in " + paths.map(quoted).joined(separator: " ") + "; do "
     let end = list.map { "done 3< " + quoted($0) + "; " } ?? "done; "
+    let forget = prune.isEmpty ? "" : "for r in " + prune.map(quoted).joined(separator: " ") + "; do [ -d \"$r\" ] && git -C \"$r\" worktree prune 2>/dev/null; done; "
     return "( m=0; g=0; f=0; " + loop
         + "if " + gone + "; then g=$((g+1)); echo \"Already gone: $p\"; "
         + "elif [ -x /usr/bin/trash ] && /usr/bin/trash \"$p\" 2>/dev/null && " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
         + "else echo \"Asking Finder to move $p (macOS may ask for your password)\"; "
         + "e=$(" + finder + "); "
         + "if " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
-        + "else f=$((f+1)); echo \"NOT moved: $p (${e:-still in place})\"; fi; fi; " + end
+        + "else f=$((f+1)); echo \"NOT moved: $p (${e:-still in place})\"; fi; fi; " + end + forget
         + "echo \"Moved $m of \(total) to the Trash.\"; "
         + "[ $g -gt 0 ] && echo \"$g already gone.\"; [ $f -gt 0 ] && echo \"$f not moved; the lines above say why.\"; "
         + "echo \"Empty the Trash to get the space back.\" )"
@@ -520,12 +524,13 @@ func sizeSourceText(_ m: FolderMeasurement) -> String? {
     return m.scopeID == xcodeLiveScope ? "size from Xcode, now" : "size from " + ageText(m.observedAt)
 }
 /// The verdict: your own choice first, then the folder rules, then what git says about its project.
-func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, now: Date = Date()) -> Advice {
+func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, worktree: WorktreeGit? = nil, now: Date = Date()) -> Advice {
     if policy.isKept {
         var kept = Advice(verdict: .keep, reason: "You chose to ignore this. It's still scanned but never suggested.", howTo: "Choose Stop Ignoring to get suggestions for it again.", command: nil, lastUsed: [m.latestModifiedAt, project?.lastCommit].compactMap { $0 }.max())
         kept.short = "Ignored by you"
         return kept
     }
+    if let worktree, isWorktreeFolder(m.profile.path), m.state == .measured, m.processes.isEmpty { return worktreeAdvice(m, worktree, now: now) }
     var result = projectAdvice(for: m, policy: policy, devices: devices, project: project, now: now)
     // A folder you're still using may hold old items that tools recreate. Point at those instead of the whole folder.
     let rebuildable: Bool = {
@@ -539,8 +544,10 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
     }()
     // Project build and scratch folders hold one subfolder per build or experiment; a week untouched means it's done.
     let projectOutput = isProjectOutput(m.profile.path) || (m.profile.category == .buildOutput && !m.profile.path.contains("/DerivedData"))
-    if [.rebuild, .check].contains(result.verdict), rebuildable || projectOutput, m.state == .measured {
-        let days: Double = projectOutput ? 7 : 30
+    let temporary = m.profile.category == .temporary
+    if [.rebuild, .check].contains(result.verdict), rebuildable || projectOutput || temporary, m.state == .measured {
+        // macOS clears temporary files nothing has used for 3 days; Context Cleaner uses the same rule.
+        let days: Double = temporary ? 3 : projectOutput ? 7 : 30
         let stale = staleChildren(m, now: now, days: days)
         let total = stale.reduce(Int64(0)) { $0 + $1.bytes }
         if total >= 1 << 30 {
@@ -583,6 +590,7 @@ private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActi
         case .download: return "Your downloads"
         case .virtualMachine: return "Whole computer"
         case .simulator: return "Apps and saves"
+        case .temporary: return "Apps write here"
         default: return m.state == .pending ? "Not scanned yet" : "Look inside"
         }
     }
@@ -733,11 +741,16 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         return Advice(verdict: .check, reason: "Simulator data outside a device folder.", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
     case .unknown:
         return Advice(verdict: .check, reason: "Context Cleaner doesn't recognize this folder.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
+    case .temporary:
+        if path == Coverage.temporaryFolder { return Advice(verdict: .check, reason: "Your temporary folder, where apps and command-line tools leave work files. Don't remove the folder itself; apps write here all the time.", howTo: "Remove the items inside that nothing has used for 3 days. Free up space lists them.", command: nil, lastUsed: m.latestModifiedAt) }
+        if let idle, idle >= 3 { return Advice(verdict: .safe, reason: "A temporary item nothing has used for \(Int(idle)) days. macOS itself clears these after 3 days.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
+        return Advice(verdict: .check, reason: "A temporary item changed \(ageText(m.latestModifiedAt, now: now)). A running task may still need it.", howTo: "Wait until nothing has used it for 3 days, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     }
 }
 /// Where a project folder lives, so identical project names can be told apart:
 /// "Codex worktree kartpad-stabilization-20260918" or "GitHub/kartpad".
 func locationHint(_ path: String) -> String? {
+    if isWorktreeFolder(path) { return nil }
     let parts = path.split(separator: "/").map(String.init)
     if let i = parts.firstIndex(of: "worktrees"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex worktree " + parts[i + 1] }
     if let i = parts.firstIndex(of: "GitHub"), i + 1 < parts.count { return "GitHub/" + parts[i + 1] }
@@ -909,13 +922,16 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
     var taken: Set<String> = []
     for m in sorted {
         let path = m.profile.path
-        guard !hasAncestor(in: taken, path), m.processes.isEmpty, let bytes = m.allocatedBytes, bytes >= minimum else { continue }
+        // Apps always have files open somewhere in the temporary folder; there, only the items they hold are left out.
+        let temporary = m.profile.category == .temporary
+        guard !hasAncestor(in: taken, path), m.processes.isEmpty || temporary, let bytes = m.allocatedBytes, bytes >= minimum else { continue }
         let a = advice(m)
         guard a.verdict != .keep else { continue }
         let idle = m.latestModifiedAt.map { now.timeIntervalSince($0) }
         let untouched = idle.map { "untouched " + quietText($0) }
         let isQuiet = (idle ?? 0) >= quiet
         let scratch = path.contains("/.codex/scratch/")
+        let worktree = isWorktreeFolder(path)
         let rebuildable = m.profile.category.reproducible || m.profile.category == .debugSymbols || isProjectBuildOutput(path)
         func add(_ cost: Verdict, _ label: String, age: Bool = true, backup: Bool = false) {
             found.append(Suggestion(path: path, name: m.profile.displayName, place: locationHint(path), bytes: bytes, cost: cost, why: ([label] + [age ? untouched : nil].compactMap { $0 }).joined(separator: " · "),
@@ -924,7 +940,12 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         }
         let irreplaceable = looksIrreplaceable(URL(fileURLWithPath: path).lastPathComponent) || m.profile.category == .backup
         // Safe answers already say how long it's been unused.
-        if a.verdict == .safe && !irreplaceable { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: false); continue }
+        if a.verdict == .safe && !irreplaceable { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: worktree); continue }
+        // A whole worktree is listed only when git has everything in it. Otherwise its build folders are judged on their own.
+        if worktree {
+            if a.verdict == .rebuild && isQuiet { add(.rebuild, a.short) }
+            continue
+        }
         if isQuiet {
             if irreplaceable {
                 // Backups, saves and recovery copies may be the only copy; recovery copies wait at least three days.
@@ -948,12 +969,16 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
             if m.profile.category == .virtualMachine && m.profile.associatedApp == "Android Emulator" { add(.check, "Android emulator"); continue }
         }
         // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments or scratch.
-        guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch else { continue }
-        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum, backups: true) {
+        guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch || temporary else { continue }
+        let held = m.processes.map(\.path)
+        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum, backups: true) where !held.contains(where: { containsPath(child.path, $0) }) {
             let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
             let backup = looksIrreplaceable(child.name)
-            let label = backup ? "Looks like a backup" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
-            found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: rebuildable && !backup ? .rebuild : .check,
+            // macOS itself clears temporary items nothing has used for 3 days.
+            let oldTemporary = temporary && !backup && child.modifiedAt.map { now.timeIntervalSince($0) >= 3 * 86400 } == true
+            let label = backup ? "Looks like a backup" : temporary ? "Temporary item" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
+            let cost: Verdict = oldTemporary ? .safe : rebuildable && !backup ? .rebuild : .check
+            found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: cost,
                                     why: ([label] + [age].compactMap { $0 }).joined(separator: " · "), owner: path, seen: child.modifiedAt, backup: backup))
         }
     }
@@ -1004,6 +1029,10 @@ struct RepoBackup: Equatable {
     /// Last sign of work: the newest commit on any local branch, or the last checkout or pull.
     /// File dates don't count; git and worktrees touch .git every day.
     var lastActivity: Date? = nil
+    /// For a worktree: the repository it belongs to, which keeps its branch and commits.
+    var mainRepository: String? = nil
+    /// Ignored items that match the same item in the main repository, file for file: copies Codex made, such as ref/.
+    var copiedIgnored: [String] = []
     /// Clean worktree on a branch: nothing in the folder exists only there, though its commits may not be pushed.
     var keptByRepository: Bool { isWorktree && changes == 0 && branch != nil }
     var backedUp: Bool { (hasRemote && unpushed == 0 && changes == 0 && stashes == 0) || keptByRepository }
@@ -1075,8 +1104,109 @@ func readRepoBackup(_ root: String) -> RepoBackup {
     let newestBranch = isWorktree ? nil : gitOutput(root, ["for-each-ref", "--sort=-committerdate", "--count=1", "--format=%(committerdate:unix)", "refs/heads"]).flatMap(Double.init)
     let lastCheckout = gitOutput(root, ["log", "-g", "-1", "--format=%ct"]).flatMap(Double.init)
     let activity = [newestBranch, lastCheckout, lastCommit?.timeIntervalSince1970].compactMap { $0 }.max().map { Date(timeIntervalSince1970: $0) }
-    return RepoBackup(hasRemote: !remotes.isEmpty, unpushed: unpushed, changes: status?.changes, stashes: stashes, unkeptIgnored: status?.unkeptIgnored ?? [], lastCommit: lastCommit,
-                      isWorktree: isWorktree, branch: branch, worktrees: worktrees, lastActivity: activity)
+    var main: String?
+    if isWorktree, let pointer = try? String(contentsOfFile: root + "/.git", encoding: .utf8), let range = pointer.range(of: "/.git/worktrees/") {
+        main = String(pointer[..<range.lowerBound]).replacingOccurrences(of: "gitdir:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    // Codex copies inputs git ignores (ref/, private/, downloaded libraries) into each worktree. A copy that matches
+    // the main repository's file for file isn't the only one.
+    var unkept = status?.unkeptIgnored ?? [], copied: [String] = []
+    if let main {
+        copied = unkept.filter { item in
+            let relative = item.hasSuffix("/") ? String(item.dropLast()) : item
+            return sameFiles(root + "/" + relative, main + "/" + relative)
+        }
+        unkept.removeAll { copied.contains($0) }
+    }
+    return RepoBackup(hasRemote: !remotes.isEmpty, unpushed: unpushed, changes: status?.changes, stashes: stashes, unkeptIgnored: unkept, lastCommit: lastCommit,
+                      isWorktree: isWorktree, branch: branch, worktrees: worktrees, lastActivity: activity, mainRepository: main, copiedIgnored: copied)
+}
+/// Whether two files or folders hold the same files with the same sizes. Metadata only; Finder's .DS_Store files don't count.
+/// Gives up, answering no, past the file limit or if either can't be read.
+func sameFiles(_ a: String, _ b: String, limit: Int = 20_000) -> Bool {
+    func listing(_ root: String) -> [String: Int64]? {
+        var st = stat()
+        guard lstat(root, &st) == 0 else { return nil }
+        switch st.st_mode & S_IFMT {
+        case S_IFREG: return ["": Int64(st.st_size)]
+        case S_IFDIR: break
+        default: return nil
+        }
+        guard let walker = FileManager.default.enumerator(atPath: root) else { return nil }
+        var files: [String: Int64] = [:]
+        while let relative = walker.nextObject() as? String {
+            guard files.count < limit else { return nil }
+            if relative.hasSuffix(".DS_Store") { continue }
+            var entry = stat()
+            guard lstat(root + "/" + relative, &entry) == 0 else { return nil }
+            switch entry.st_mode & S_IFMT {
+            case S_IFREG: files[relative] = Int64(entry.st_size)
+            case S_IFDIR: continue
+            default: files[relative] = -1
+            }
+        }
+        return files
+    }
+    guard let left = listing(a), let right = listing(b) else { return false }
+    return left == right
+}
+
+// MARK: - Codex worktrees
+
+/// A whole Codex worktree folder: ~/.codex/worktrees/<name>, one task's copy of a project.
+func isWorktreeFolder(_ path: String) -> Bool {
+    guard let range = path.range(of: "/.codex/worktrees/") else { return false }
+    let name = path[range.upperBound...]
+    return !name.isEmpty && !name.contains("/")
+}
+/// The repository in a worktree folder: the folder itself, or the one repository it wraps (name/repo/.git, beside
+/// Codex's .codex-worktree-name marker). Nil when there is none, more than one, or other files sit beside it.
+func worktreeRepository(_ folder: String) -> String? {
+    var st = stat()
+    if lstat(folder + "/.git", &st) == 0 { return folder }
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else { return nil }
+    let others = names.filter { ![".codex-worktree-name", ".DS_Store"].contains($0) }
+    guard others.count == 1, lstat(folder + "/" + others[0] + "/.git", &st) == 0 else { return nil }
+    return folder + "/" + others[0]
+}
+/// What git said about a worktree folder.
+enum WorktreeGit: Equatable { case unread, noRepository, read(RepoBackup) }
+/// The answer for a whole worktree folder. It's only Safe or Rebuildable when nothing in it exists only here:
+/// every change committed, its commits on a branch of the main repository (or pushed), no other worktree depending
+/// on it, and git ignoring nothing but build output and caches.
+func worktreeAdvice(_ m: FolderMeasurement, _ git: WorktreeGit, now: Date = Date()) -> Advice {
+    var backup: RepoBackup?
+    if case .read(let b) = git { backup = b }
+    let lastUsed = [m.latestModifiedAt, backup?.lastActivity].compactMap { $0 }.max()
+    func answer(_ verdict: Verdict, _ short: String, _ reason: String, _ howTo: String) -> Advice {
+        var a = Advice(verdict: verdict, reason: reason, howTo: howTo, command: nil, lastUsed: lastUsed)
+        a.short = short
+        if let backup { a.evidence = ["Git: " + backup.line + "."] }
+        return a
+    }
+    let look = "Open it in Finder and keep what you need. Its build folders are listed on their own."
+    guard let b = backup else {
+        if git == .unread { return answer(.check, "Checking git…", "A Codex worktree. Checking what git has of it before answering.", look) }
+        return answer(.check, "No single repository", "A Codex worktree folder without one git repository in it, so git can't say what exists only here.", look)
+    }
+    if let main = b.mainRepository, !FileManager.default.fileExists(atPath: main) {
+        return answer(.check, "Repository gone", "The repository this worktree belongs to is gone, so its files may be the only copy.", look)
+    }
+    guard let changes = b.changes else { return answer(.check, "Git didn't answer", "Git couldn't read this worktree in time, so what exists only here is unknown.", look) }
+    if changes > 0 { return answer(.check, "\(changes) not committed", "\(changes) \(changes == 1 ? "file isn't" : "files aren't") committed. They exist only in this folder.", "Commit or copy what you need, then move it to the Trash. " + look) }
+    guard b.backedUp, b.worktrees == 0 else { return answer(.check, "Not backed up", b.line + ".", look) }
+    guard b.unkeptIgnored.isEmpty else {
+        let shown = b.unkeptIgnored.prefix(3).joined(separator: ", ") + (b.unkeptIgnored.count > 3 ? " and \(b.unkeptIgnored.count - 3) more" : "")
+        return answer(.check, "Holds files git doesn't keep", "Everything is committed, but git doesn't keep \(shown). Those exist only here.", "Look at those first. " + look)
+    }
+    let repo = b.mainRepository.map { URL(fileURLWithPath: $0).lastPathComponent } ?? m.profile.displayName
+    let kept = b.isWorktree ? "Every change is committed and stays in \(repo)" + (b.branch.map { " on \($0)" } ?? "") : "Every change is committed and pushed"
+    let copies = b.copiedIgnored.isEmpty ? "" : " Its " + b.copiedIgnored.prefix(3).map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }.joined(separator: ", ")
+        + (b.copiedIgnored.count > 3 ? " and \(b.copiedIgnored.count - 3) more" : "") + " match \(repo)'s, file for file."
+    let how = "Move it to the Trash. The command also tells git the worktree is gone, so the branch is free to use again."
+    let idle = lastUsed.map { now.timeIntervalSince($0) / 86400 } ?? .infinity
+    if idle >= 7 { return answer(.safe, "Clean worktree", kept + ". Only build output and caches go with it." + copies, how) }
+    return answer(.rebuild, "Clean worktree", kept + ". Only build output and caches go with it; you'd need a new worktree and a fresh build to work here again." + copies, how)
 }
 /// Projects that are fully backed up and haven't been touched in a while: the ones you can remove and clone again.
 func idleBackedUp(_ items: [ElsewhereItem], now: Date = Date(), days: Double = 30) -> [ElsewhereItem] {
@@ -1162,36 +1292,46 @@ struct SpaceChange: Identifiable, Equatable {
     var bytes: Int64 = 0
     /// Folders in this place that were created inside the span; their whole size counts as growth.
     var newFolders = 0
+    /// Folders in this place that were removed inside the span; their whole size counts as space freed.
+    var removedFolders = 0
     /// Biggest contributors, largest first: display name and change.
     var examples: [(name: String, path: String, bytes: Int64)] = []
-    static func == (a: SpaceChange, b: SpaceChange) -> Bool { a.title == b.title && a.bytes == b.bytes && a.newFolders == b.newFolders }
+    static func == (a: SpaceChange, b: SpaceChange) -> Bool { a.title == b.title && a.bytes == b.bytes && a.newFolders == b.newFolders && a.removedFolders == b.removedFolders }
 }
 /// Splits growth since from across places. A folder counts if it was scanned before from (the change since),
 /// or was created after from (its whole size). Folders first scanned later but older than from are unknown and skipped.
-/// Nested folders count once, through their outermost scanned folder.
-func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement], created: [String: Date], from: Date, to: Date? = nil, home: String) -> [SpaceChange] {
-    let measured = latest.filter { $0.state == .measured && $0.allocatedBytes != nil }.sorted { $0.profile.path.utf8.count < $1.profile.path.utf8.count }
+/// A folder in removed, gone from disk now, counts as freed (its size before from) if a scan saw it inside the span.
+/// Nested folders count once, through their outermost folder that has sizes for the span.
+func spaceChanges(history: [String: [HistoryPoint]], latest: [FolderMeasurement], created: [String: Date], from: Date, to: Date? = nil, removed: Set<String> = [], home: String) -> [SpaceChange] {
+    let measured = latest.filter { ($0.state == .measured && $0.allocatedBytes != nil) || removed.contains($0.profile.path) }.sorted { $0.profile.path.utf8.count < $1.profile.path.utf8.count }
     var accepted: Set<String> = []
     var groups: [String: SpaceChange] = [:]
     for item in measured {
         let path = normalized(item.profile.path)
         guard !hasAncestor(in: accepted, path) else { continue }
-        accepted.insert(path)
+        let points = history[item.profile.path] ?? []
+        let gone = removed.contains(item.profile.path)
         // The size at the end of the span: the latest scan, or the last scan before the span ended.
-        var now = item.allocatedBytes ?? 0
-        if let to, item.observedAt > to {
-            guard let atEnd = history[item.profile.path]?.last(where: { $0.date <= to && $0.bytes != nil })?.bytes else { continue }
+        var now = gone ? 0 : item.allocatedBytes ?? 0
+        if gone {
+            // Removed inside the span only if a scan saw it after the span began.
+            guard points.contains(where: { $0.date >= from && $0.bytes != nil }) else { continue }
+        } else if let to, item.observedAt > to {
+            guard let atEnd = points.last(where: { $0.date <= to && $0.bytes != nil })?.bytes else { continue }
             now = atEnd
         }
         var delta: Int64, isNew = false
-        if let before = history[item.profile.path]?.last(where: { $0.date <= from && $0.bytes != nil })?.bytes { delta = now - before }
-        else if let born = created[item.profile.path], born >= from, born <= (to ?? .distantFuture) { delta = now; isNew = true }
+        if let before = points.last(where: { $0.date <= from && $0.bytes != nil })?.bytes { delta = now - before }
+        else if !gone, let born = created[item.profile.path], born >= from, born <= (to ?? .distantFuture) { delta = now; isNew = true }
         else { continue }
+        // Only a folder with sizes for the span stands in for the folders inside it.
+        accepted.insert(path)
         guard delta != 0 else { continue }
         let title = changePlace(item, home: home)
         var group = groups[title] ?? SpaceChange(title: title)
         group.bytes += delta
         if isNew { group.newFolders += 1 }
+        if gone { group.removedFolders += 1 }
         group.examples.append((item.profile.displayName, item.profile.path, delta))
         groups[title] = group
     }

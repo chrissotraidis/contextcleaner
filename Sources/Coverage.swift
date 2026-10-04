@@ -3,9 +3,14 @@ import Foundation
 /// Declared, hard-coded coverage: every place the app knows a tool writes to. Discovery reads this
 /// catalog; the Coverage settings tab shows it. Adding a writer means adding one entry here.
 struct CoverageEntry: Identifiable, Hashable {
-    enum Kind: String { case folder = "Folder", children = "Each child folder", projects = "Each project's build folders" }
+    enum Kind: String {
+        case folder = "Folder", children = "Each child folder", projects = "Each project's build folders"
+        /// Each child folder whole, plus the build, generated and work folders of the repository in it.
+        case workspaces = "Each folder, and its build and work folders"
+    }
     var id: String { relativePath }
     var writer: String
+    /// Under your home folder, or an absolute path such as your temporary folder.
     var relativePath: String
     var kind: Kind
     var category: FolderCategory
@@ -13,7 +18,9 @@ struct CoverageEntry: Identifiable, Hashable {
     /// Short label shown after the app name, e.g. "Codex · Conversations".
     var name: String
     var group: CoverageGroup
-    func path(home: String) -> String { home + "/" + relativePath }
+    func path(home: String) -> String { relativePath.hasPrefix("/") ? relativePath : home + "/" + relativePath }
+    /// The path as you'd type it: ~/.codex/worktrees, or the full path outside your home folder.
+    var shownPath: String { relativePath.hasPrefix("/") ? relativePath : "~/" + relativePath }
 }
 
 enum CoverageGroup: String, CaseIterable, Identifiable {
@@ -39,13 +46,22 @@ enum CoveragePresence {
 
 enum Coverage {
     static let projectSuffixes = ["android/app/.cxx", "android/app/build/intermediates", "build", "generated", "work"]
+    /// Your own temporary folder (\$TMPDIR), where apps and command-line tools leave work files. Resolved, without symbolic links.
+    static let temporaryFolder: String? = {
+#if DEMO
+        if let demo = ProcessInfo.processInfo.environment["CC_DEMO_HOME"] { return demo + "/TemporaryItems" }
+#endif
+        guard let real = realpath(NSTemporaryDirectory(), nil) else { return nil }
+        defer { free(real) }
+        return String(cString: real)
+    }()
     static let entries: [CoverageEntry] = [
         CoverageEntry(writer: "Codex", relativePath: ".codex/sessions", kind: .folder, category: .history, writes: "Conversation transcripts and tool output for every Codex session.", name: "Conversations", group: .ai),
         CoverageEntry(writer: "Codex", relativePath: ".codex/backups", kind: .children, category: .backup, writes: "Recovery copies of worktrees taken before risky operations.", name: "Recovery copies", group: .ai),
-        CoverageEntry(writer: "Codex", relativePath: ".codex/tasks", kind: .children, category: .workspace, writes: "Per-task scratch folders, downloads and generated files.", name: "Task folders", group: .ai),
-        CoverageEntry(writer: "Codex", relativePath: ".codex/worktrees", kind: .projects, category: .workspace, writes: "Isolated Git checkouts; their build, generated and work folders are measured individually.", name: "Worktrees", group: .ai),
+        CoverageEntry(writer: "Codex", relativePath: ".codex/tasks", kind: .workspaces, category: .workspace, writes: "Per-task scratch folders, downloads and generated files.", name: "Task folders", group: .ai),
+        CoverageEntry(writer: "Codex", relativePath: ".codex/worktrees", kind: .workspaces, category: .workspace, writes: "Isolated Git checkouts, one per task, measured whole and with their build, generated and work folders.", name: "Worktrees", group: .ai),
         CoverageEntry(writer: "Codex", relativePath: ".codex/scratch", kind: .children, category: .workspace, writes: "Scratch space Codex tasks leave behind: builds, downloads, logs, test copies and device backups.", name: "Scratch", group: .ai),
-        CoverageEntry(writer: "Codex", relativePath: "Documents/Codex", kind: .folder, category: .workspace, writes: "Task outputs, reports and files mentioned in conversations.", name: "Task outputs", group: .ai),
+        CoverageEntry(writer: "Codex", relativePath: "Documents/Codex", kind: .children, category: .workspace, writes: "Task outputs, reports and files mentioned in conversations.", name: "Task outputs", group: .ai),
         CoverageEntry(writer: "Codex", relativePath: "Library/Application Support/Codex", kind: .folder, category: .appData, writes: "App state, caches and local databases.", name: "App data", group: .ai),
         CoverageEntry(writer: "Claude", relativePath: "Library/Application Support/Claude", kind: .folder, category: .appData, writes: "App state, caches and local databases.", name: "App data", group: .ai),
         CoverageEntry(writer: "Your projects", relativePath: "GitHub", kind: .projects, category: .workspace, writes: "Build output, generated files and work folders inside each repository.", name: "Build folders", group: .developer),
@@ -73,7 +89,7 @@ enum Coverage {
         CoverageEntry(writer: "CrossOver", relativePath: "Library/Application Support/CrossOver", kind: .folder, category: .appData, writes: "Windows bottles with their installed programs and saves.", name: "Windows bottles", group: .games),
         CoverageEntry(writer: "OpenEmu", relativePath: "Library/Application Support/OpenEmu", kind: .folder, category: .appData, writes: "Game library, save states and screenshots.", name: "Game library", group: .games),
         CoverageEntry(writer: "You", relativePath: "Downloads", kind: .folder, category: .download, writes: "Installers, archives and documents saved by browsers and other apps.", name: "Downloads folder", group: .downloads),
-    ]
+    ] + (temporaryFolder.map { [CoverageEntry(writer: "Apps and tools", relativePath: $0, kind: .folder, category: .temporary, writes: "Work files apps and command-line tools leave behind: build trees, traces, unpacked downloads. macOS clears what nothing has used for 3 days, but not always.", name: "Temporary files", group: .developer)] } ?? [])
     /// What the app deliberately does not scan, stated so the boundary is explicit.
     static let notScanned: [String] = [
         "System files and the macOS installation (/System, /Library, /private).",

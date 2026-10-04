@@ -19,7 +19,11 @@ struct Classifier {
             p.category = category; p.name = name; p.associatedApp = app; p.explanation = explanation; p.consequence = consequence
             p.evidence.append(Evidence(label: "Association", value: app, level: .inferred, source: "Matched known directory structure; not proof of the historical writer."))
         }
-        if path.contains("/AppInstallationBinaryDeltas/") {
+        if let temporary = Coverage.temporaryFolder, containsPath(temporary, path) {
+            assign(.temporary, path == temporary ? "Temporary files" : url.lastPathComponent, "Apps and tools", "Work files apps and command-line tools left in your temporary folder: build trees, traces, unpacked downloads.", "Nothing keeps temporary files. macOS itself clears ones nothing has used for 3 days.")
+        } else if isWorktreeFolder(path) {
+            assign(.workspace, url.lastPathComponent, "Codex worktree", "A copy of a project Codex made for one task. Its commits belong to the main repository; build output and files git doesn't track exist only here.", "Uncommitted changes and files git doesn't track are lost with it. Committed work stays in the main repository.")
+        } else if path.contains("/AppInstallationBinaryDeltas/") {
             assign(.installCache, url.lastPathComponent + " install cache", "Apple CoreDevice", "Mac-side app installation cache. The final path component identifies the target app, not the tool that initiated installation.", "Future device installations can recreate cached data. Stop device installs before manual review.")
             p.evidence.append(Evidence(label: "Target bundle identifier", value: url.lastPathComponent, level: .inferred, source: "Installation-cache directory name"))
         } else if path.contains("/CoreSimulator/Devices/") || path.hasSuffix("/CoreSimulator/Devices") {

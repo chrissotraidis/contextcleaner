@@ -2,6 +2,20 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.19.0
+
+Finds much more to remove, especially what Codex leaves behind:
+
+- **Whole Codex worktrees.** Each worktree is measured whole, and git is asked what's in it. A worktree with every change committed, its commits kept in the main repository, and nothing ignored except build output and caches is listed as **Clean worktree**: Rebuildable, or Safe after a week untouched. The command moves it and then tells git it's gone (`git worktree prune`), so its branch is free again. A worktree with uncommitted work, or files git doesn't keep (such as `ref/` or `private/` that differ from the main checkout's), is never listed whole; its build folders are listed on their own.
+- **Nested worktrees.** Codex can wrap a worktree in a folder of its own (`name/repo/.git`). Their build and work folders were never scanned; now they are. On the Mac this was built on, one such `build` folder held 94 GiB.
+- **Codex task work folders.** Old experiment runs inside `~/.codex/tasks/*/work` are listed like scratch.
+- **Your temporary folder.** Apps and command-line tools leave build trees, Instruments traces and unpacked downloads there, in a folder Finder doesn't show. Items nothing has used for 3 days are listed as Safe, the same rule macOS uses; newer ones as Might hold work.
+- **No more stale rows.** Anything that leaves its place, however it went, leaves Free up space within seconds, so a copy never offers items that are already gone. If every item you ticked was already gone, it says so.
+- **Where the space went counts what you removed.** A folder you removed counts as space freed in its own place ("GitHub projects −234 GiB · 26 removed"), instead of disappearing into "Everything else".
+- **Scans don't stall on iCloud.** Context Cleaner no longer asks iCloud (or any cloud folder) to download anything while reading sizes, and skips macOS's private items in the temporary folder. A Documents folder synced with iCloud had stalled every full scan for minutes.
+- **~/Documents/Codex is measured folder by folder**, so one slow folder can't hide the rest, and each folder keeps its 512 biggest items rather than the first 512 by name.
+- **Each byte counts once, for the innermost folder that holds it.** A worktree that holds uncommitted work no longer hides its rebuildable build folder in "You can get back".
+
 ## 0.18.3
 
 A public-release pass: a shorter README with screenshots made from demo data, this changelog, and release builds signed under the developer's name.
@@ -86,5 +100,3 @@ made the Overview calmer and clearer:
 - **Shorter answers**, and old scans no longer hold their folder listings in memory.
 
 Earlier releases: [0.12](validation/Final%20validation%200.12.0.md) added "You can get back", old experiments inside build folders and the four answers. [0.11](validation/Final%20validation%200.11.0.md) stopped calling recently used caches safe. See [all releases](https://github.com/chrissotraidis/contextcleaner/releases).
-
-

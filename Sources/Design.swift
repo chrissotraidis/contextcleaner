@@ -304,6 +304,7 @@ extension FolderCategory {
         case .download: return Color(hue: 0.13, saturation: 0.35, brightness: 0.72)
         case .virtualMachine: return Color(hue: 0.58, saturation: 0.35, brightness: 0.75)
         case .appData: return .gray
+        case .temporary: return Color(hue: 0.08, saturation: 0.3, brightness: 0.65)
         case .unknown: return .secondary
         }
     }

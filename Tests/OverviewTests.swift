@@ -230,6 +230,15 @@ import Foundation
         let past = spaceChanges(history: [grown.profile.path: [point(grown.profile.path, 5, 30 * gib), point(grown.profile.path, 2, 35 * gib), point(grown.profile.path, 0, 50 * gib)]],
                                 latest: [laterGrown], created: [:], from: now.addingTimeInterval(-4 * 86400), to: now.addingTimeInterval(-86400), home: "/Users/x")
         check(past.first?.bytes == 5 * gib, "a span that ended in the past uses the last scan before it ended")
+        var wholeNew = item("/Users/x/.codex/worktrees/a", .workspace, 80 * gib); wholeNew.observedAt = now
+        let pastInner = spaceChanges(history: [grown.profile.path: [point(grown.profile.path, 5, 30 * gib), point(grown.profile.path, 2, 35 * gib), point(grown.profile.path, 0, 50 * gib)], wholeNew.profile.path: [point(wholeNew.profile.path, 0, 80 * gib)]],
+                                     latest: [wholeNew, laterGrown], created: [:], from: now.addingTimeInterval(-4 * 86400), to: now.addingTimeInterval(-86400), home: "/Users/x")
+        check(pastInner.first?.bytes == 5 * gib, "a folder first measured after the span doesn't hide the folders inside it that were measured")
+        let removedRun = item("/Users/x/.codex/scratch/old-run", .workspace, 12 * gib), longGone = item("/Users/x/.codex/scratch/ancient", .workspace, 3 * gib)
+        let freed = spaceChanges(history: [removedRun.profile.path: [point(removedRun.profile.path, 5, 12 * gib), point(removedRun.profile.path, 1, 12 * gib)], longGone.profile.path: [point(longGone.profile.path, 40, 3 * gib)]],
+                                 latest: [removedRun, longGone], created: [:], from: from, removed: [removedRun.profile.path, longGone.profile.path], home: "/Users/x")
+        check(freed.count == 1 && freed[0].title == "Codex · Scratch" && freed[0].bytes == -12 * gib && freed[0].removedFolders == 1,
+              "a folder removed inside the span counts as freed in its own place; one removed before the span doesn't")
         check(locationHint("/Users/x/.codex/worktrees/kartpad-stab/android/app/build") == "Codex worktree kartpad-stab" && locationHint("/Users/x/GitHub/kartpad/build") == "GitHub/kartpad" && locationHint("/tmp/x") == nil, "same-named projects are told apart by where they live")
         let single = record("single", [cache])
         check(single.folderSummary == cache.profile.displayName, "single-folder scan history identifies the folder")
@@ -337,6 +346,49 @@ import Foundation
         check(suggestions([recovery], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now.addingTimeInterval(3 * 86400)).first?.backup == true, "an old recovery copy is listed, marked as a backup")
         check(staleChildren(generated, now: now, days: 1).map(\.name) == ["toolchains"], "a folder's old items never include its backups")
         check(dayList.allSatisfy { $0.seen != nil }, "each suggestion keeps the newest change the scan saw, for the recheck before copying")
+        // 0.19: whole Codex worktrees, judged by git.
+        func kept(changes: Int? = 0, ignored: [String] = [], branch: String? = "codex/fix", main: String? = nil) -> RepoBackup {
+            RepoBackup(hasRemote: true, unpushed: 2, changes: changes, stashes: 0, unkeptIgnored: ignored, lastCommit: nil, isWorktree: true, branch: branch, worktrees: 0, lastActivity: nil, mainRepository: main)
+        }
+        let cleanTree = aged("/Users/x/.codex/worktrees/kp-fix", .workspace, hours: 30, gib: 40)
+        let oldTree = aged("/Users/x/.codex/worktrees/kp-old", .workspace, hours: 24 * 9, gib: 20)
+        let dirtyTree = aged("/Users/x/.codex/worktrees/kp-dirty", .workspace, hours: 30, gib: 50)
+        let dirtyBuild = aged("/Users/x/.codex/worktrees/kp-dirty/kartpad/build", .workspace, hours: 30, gib: 45)
+        check(isWorktreeFolder(cleanTree.profile.path) && !isWorktreeFolder(dirtyBuild.profile.path) && !isWorktreeFolder("/Users/x/.codex/worktrees"), "only a folder directly in ~/.codex/worktrees is a whole worktree")
+        check(worktreeAdvice(cleanTree, .read(kept()), now: now).verdict == .rebuild && worktreeAdvice(oldTree, .read(kept()), now: now).verdict == .safe && worktreeAdvice(oldTree, .read(kept()), now: now).short == "Clean worktree",
+              "a clean worktree whose commits stay in its repository is rebuildable, and safe after a week untouched")
+        check(worktreeAdvice(dirtyTree, .read(kept(changes: 3)), now: now).short == "3 not committed" && worktreeAdvice(cleanTree, .read(kept(ignored: ["ref"])), now: now).verdict == .check
+              && worktreeAdvice(cleanTree, .read(kept(branch: nil)), now: now).verdict == .check && worktreeAdvice(cleanTree, .read(kept(changes: nil)), now: now).verdict == .check
+              && worktreeAdvice(cleanTree, .read(kept(main: "/nonexistent/repository")), now: now).short == "Repository gone"
+              && worktreeAdvice(cleanTree, .unread, now: now).short == "Checking git…" && worktreeAdvice(cleanTree, .noRepository, now: now).verdict == .check,
+              "uncommitted work, files git doesn't keep, unpushed detached commits, a missing repository or no answer from git keep a worktree Might hold work")
+        let states = [cleanTree.profile.path: kept(), oldTree.profile.path: kept(), dirtyTree.profile.path: kept(changes: 3)]
+        func treeAdvice(_ m: FolderMeasurement) -> Advice {
+            advice(for: m, policy: LocationPolicy(), devices: [:], worktree: isWorktreeFolder(m.profile.path) ? states[m.profile.path].map { .read($0) } ?? .noRepository : nil, now: now)
+        }
+        let treeList = suggestions([cleanTree, oldTree, dirtyTree, dirtyBuild], advice: treeAdvice, gone: [], quiet: 24 * 3600, now: now)
+        check(treeList.map(\.path) == [dirtyBuild, cleanTree, oldTree].map(\.profile.path) && treeList[1].cost == .rebuild && treeList[2].cost == .safe && treeList[1].why == "Clean worktree · untouched 30 hours",
+              "clean worktrees are listed whole; one with uncommitted work isn't, but its build folder is")
+        check(suggestions([cleanTree], advice: treeAdvice, gone: [], quiet: 72 * 3600, now: now).isEmpty, "a clean worktree used more recently than the quiet time stays out")
+        let own = exclusiveBytes([dirtyTree, dirtyBuild, cleanTree])
+        check(own[dirtyTree.profile.path] == 5 * gib && own[dirtyBuild.profile.path] == 45 * gib && own[cleanTree.profile.path] == 40 * gib, "each byte counts once, for the innermost scanned folder that holds it")
+        let pruned = trashCommand([oldTree.profile.path], prune: ["/Users/x/GitHub/kartpad"])
+        check(pruned.contains("for r in '/Users/x/GitHub/kartpad'; do [ -d \"$r\" ] && git -C \"$r\" worktree prune") && pruned.range(of: "worktree prune")!.lowerBound > pruned.range(of: "done; ")!.lowerBound
+              && !trashCommand(["/a"]).contains("worktree"), "moving worktrees tells their repository afterwards; other commands don't mention git")
+        // 0.19: your temporary folder. Items nothing has used for 3 days are safe, as macOS itself treats them.
+        let tmpRoot = Coverage.temporaryFolder ?? "/private/var/folders/xx/T"
+        var temp = item(tmpRoot, .temporary, 30 * gib); temp.latestModifiedAt = now
+        temp.contents = FolderContents(children: [ChildSummary(name: "trace.ktrace", directory: true, identity: "1", bytes: 12 * gib, files: 1, modifiedAt: now.addingTimeInterval(-6 * 86400)),
+                                                  ChildSummary(name: "build-tmp", directory: true, identity: "2", bytes: 2 * gib, files: 9, modifiedAt: now.addingTimeInterval(-30 * 3600)),
+                                                  ChildSummary(name: "live", directory: true, identity: "3", bytes: 9 * gib, files: 9, modifiedAt: now.addingTimeInterval(-600))],
+                                       fileTypes: [], listedChildren: 3, retainedLimit: 512, omittedEntries: 0)
+        let tempList = suggestions([temp], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 24 * 3600, now: now)
+        check(tempList.map(\.name) == ["trace.ktrace", "build-tmp"] && tempList[0].cost == .safe && tempList[1].cost == .check && tempList[0].why == "Temporary item · untouched 6 days" && tempList[0].owner == tmpRoot,
+              "old temporary items are listed: safe after 3 days, Might hold work before; anything used recently stays out")
+        check(advice(for: temp, policy: LocationPolicy(), devices: [:], now: now).staleItems.map(\.name) == ["trace.ktrace"], "the temporary folder counts items untouched for 3 days as old")
+        var busyTemp = temp; busyTemp.processes = [ProcessEvidence(pid: 1, command: "xcodebuild", access: "r", path: tmpRoot + "/build-tmp/log.txt")]
+        check(suggestions([busyTemp], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 24 * 3600, now: now).map(\.name) == ["trace.ktrace"],
+              "apps holding files in the temporary folder leave out only the items they hold")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

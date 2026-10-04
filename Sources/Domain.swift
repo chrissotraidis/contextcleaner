@@ -75,6 +75,7 @@ enum FolderCategory: String, Codable, CaseIterable {
     case simulator = "Simulator data", debugSymbols = "Debugging symbols", workspace = "Mixed workspace"
     case backup = "Recovery backup", history = "Conversation history", model = "Model library"
     case appData = "Application data", download = "Downloads", virtualMachine = "Virtual machine", unknown = "Unclassified"
+    case temporary = "Temporary files"
     var displayName: String {
         switch self {
         case .workspace: return "Project files"
@@ -89,6 +90,7 @@ enum FolderCategory: String, Codable, CaseIterable {
         case .debugSymbols: return "Debug files"
         case .download: return "Downloads"
         case .virtualMachine: return "Virtual machines"
+        case .temporary: return "Temporary files"
         case .unknown: return "Other files"
         }
     }
@@ -253,6 +255,21 @@ func uniqueAllocatedTotal(_ measurements: [FolderMeasurement]) -> Int64 {
         accepted.insert(path)
         return sum + (item.allocatedBytes ?? 0)
     }
+}
+/// Each folder's own share of the space: its size minus the scanned folders inside it. Every byte counts once,
+/// for the innermost scanned folder that holds it, so a worktree's build folder keeps its own answer.
+func exclusiveBytes(_ measurements: [FolderMeasurement]) -> [String: Int64] {
+    var size: [String: Int64] = [:]
+    for m in measurements where m.state == .measured { if let bytes = m.allocatedBytes { size[normalized(m.profile.path)] = bytes } }
+    var own = size
+    for (path, bytes) in size {
+        var current = Substring(path)
+        while let slash = current.lastIndex(of: "/"), slash > current.startIndex {
+            current = current[..<slash]
+            if own[String(current)] != nil { own[String(current)]! -= bytes; break }
+        }
+    }
+    return own.mapValues { max(0, $0) }
 }
 
 struct ScanChange { var path: String; var name: String; var delta: Int64 }

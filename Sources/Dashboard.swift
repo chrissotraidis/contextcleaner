@@ -17,6 +17,7 @@ extension FolderCategory {
         case .appData: return "app.dashed"
         case .download: return "arrow.down.circle"
         case .virtualMachine: return "desktopcomputer"
+        case .temporary: return "clock.arrow.circlepath"
         case .unknown: return "questionmark.folder"
         }
     }
@@ -34,6 +35,7 @@ extension FolderCategory {
         case .appData: return "App libraries, settings, databases and saves. Being large doesn't make them disposable."
         case .download: return "Installers, documents and other downloads. Some may be the only copy."
         case .virtualMachine: return "Virtual computers and container disks. Each holds a whole system and its files."
+        case .temporary: return "Work files apps and tools leave behind. macOS clears ones nothing has used for 3 days."
         case .unknown: return "A folder whose purpose isn't known yet."
         }
     }
@@ -622,7 +624,7 @@ struct WentPanel: View {
     @ViewBuilder private func placeRow(_ place: SpaceChange, largest: Double, days: Double) -> some View {
         let open = selected == place.title
         Button { withAnimation(.easeOut(duration: 0.15)) { selected = open ? nil : place.title } } label: {
-            bar(place.title, detail: ([rateText(place.bytes, days: days)] + (place.newFolders > 0 ? ["\(place.newFolders) new"] : [])).joined(separator: " · "), bytes: place.bytes, largest: largest, open: open)
+            bar(place.title, detail: ([rateText(place.bytes, days: days)] + (place.newFolders > 0 ? ["\(place.newFolders) new"] : []) + (place.removedFolders > 0 ? ["\(place.removedFolders) removed"] : [])).joined(separator: " · "), bytes: place.bytes, largest: largest, open: open)
         }.buttonStyle(.plain).accessibilityHint(open ? "Hides its folders" : "Shows its folders")
         if open {
             VStack(alignment: .leading, spacing: 4) {

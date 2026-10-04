@@ -135,7 +135,9 @@ struct FolderRow: Identifiable {
     func adviceFor(_ m: FolderMeasurement) -> Advice {
         if adviceCache.preferences != preferencesVersion || adviceCache.discovery != discoveryVersion { adviceCache = (preferencesVersion, discoveryVersion, [:]) }
         if let cached = adviceCache.value[m.profile.path], cached.observedAt == m.observedAt, cached.bytes == m.allocatedBytes, cached.state == m.state { return cached.advice }
-        var value = advice(for: m, policy: preferences.policy(m.profile.path), devices: simDevices, project: project(for: m.profile.path))
+        let path = m.profile.path
+        let worktree: WorktreeGit? = isWorktreeFolder(path) ? (worktrees[path].map { .read($0) } ?? (projectsRead ? .noRepository : .unread)) : nil
+        var value = advice(for: m, policy: preferences.policy(path), devices: simDevices, project: project(for: path), worktree: worktree)
         // Until git activity has been read, a project folder can't be called safe: it may be work in progress.
         if !projectsRead, value.verdict == .safe, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData") {
             var held = Advice(verdict: .check, reason: "Checking its project's git activity before answering. " + value.reason, howTo: value.howTo, command: value.command, lastUsed: value.lastUsed)
@@ -148,6 +150,8 @@ struct FolderRow: Identifiable {
     }
     /// Git activity for the projects that scanned folders belong to, keyed by project root. Read-only.
     @Published var projects: [String: ProjectActivity] = [:] { didSet { discoveryVersion += 1 } }
+    /// What git has of each whole Codex worktree folder, keyed by the folder. Read-only.
+    @Published var worktrees: [String: RepoBackup] = [:] { didSet { discoveryVersion += 1 } }
     /// Whether git activity has been read at least once since launch.
     private(set) var projectsRead = false
     private var projectRoots: [String: String] = [:]
@@ -165,7 +169,18 @@ struct FolderRow: Identifiable {
                 project.ignored = ignoredByGit(root, paths: roots.filter { $0.value == root }.map(\.key))
                 activity[root] = project
             }
-            DispatchQueue.main.async { self.projectRoots = roots; self.projectsRead = true; self.projects = activity }
+            // Whole worktree folders: is everything in them kept by git? A few at a time; git status reads every file.
+            let folders = paths.filter(isWorktreeFolder)
+            var backups = [RepoBackup?](repeating: nil, count: folders.count)
+            backups.withUnsafeMutableBufferPointer { slots in
+                let base = slots.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: folders.count) { index in
+                    if let repository = worktreeRepository(folders[index]) { base[index] = readRepoBackup(repository) }
+                }
+            }
+            var states: [String: RepoBackup] = [:]
+            for (index, folder) in folders.enumerated() { if let backup = backups[index] { states[folder] = backup } }
+            DispatchQueue.main.async { self.projectRoots = roots; self.projectsRead = true; self.worktrees = states; self.projects = activity }
         }
     }
     func deviceAdvice(_ device: SimDevice) -> Advice {
@@ -470,12 +485,14 @@ struct FolderRow: Identifiable {
         // History, growth and the saved sizes change only when a scan is saved; progress during a scan only overlays partial results.
         if derived.historyKey != recordsVersion {
             var saved: [String: FolderMeasurement] = [:]
+            // A place now measured folder by folder (~/Documents/Codex) may have an old whole size; it would hide the folders inside.
+            let home = self.home
+            let containers = Set(Coverage.entries.filter { $0.kind != .folder }.map { $0.path(home: home) })
             for record in records.sorted(by: { $0.finishedAt < $1.finishedAt }) {
-                for item in record.measurements where item.state != .cancelled { saved[item.profile.path] = item }
+                for item in record.measurements where item.state != .cancelled && !containers.contains(item.profile.path) { saved[item.profile.path] = item }
             }
             // Older scans saved names from earlier naming rules. Show today's names: subfolders named for
             // themselves, projects named for their own folder. Saved files are never changed.
-            let home = self.home
             for (path, item) in saved where ![.simulator].contains(item.profile.category) && SimulatorLocations.containerRoot(path) == nil {
                 let fresh = Classifier.profile(path: path, home: home, readMetadata: false)
                 guard fresh.category == item.profile.category else { continue }
@@ -665,14 +682,12 @@ struct FolderRow: Identifiable {
         let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)"
         if reclaimCache.key == key { return reclaimCache.value }
         var value = Reclaim()
-        // Count each byte once: only the outermost scanned folder counts, whatever its answer.
-        let all = Verdict.allCases.flatMap { v in (verdictGroups[v] ?? []).map { ($0, v) } }.sorted { $0.0.profile.path.utf8.count < $1.0.profile.path.utf8.count }
-        var accepted: Set<String> = []
+        // Count each byte once, with the answer of the innermost scanned folder that holds it:
+        // a worktree that holds uncommitted work doesn't hide its rebuildable build folder.
+        let all = Verdict.allCases.flatMap { v in (verdictGroups[v] ?? []).map { ($0, v) } }
+        let own = exclusiveBytes(all.map(\.0))
         for (m, verdict) in all {
-            let path = normalized(m.profile.path)
-            guard !hasAncestor(in: accepted, path) else { continue }
-            accepted.insert(path)
-            let bytes = m.allocatedBytes ?? 0, inside = adviceFor(m).staleBytes
+            let bytes = own[normalized(m.profile.path)] ?? 0, inside = min(adviceFor(m).staleBytes, bytes)
             switch verdict {
             case .safe: value.safe.bytes += bytes
             case .rebuild: value.rebuild.bytes += bytes - inside
@@ -704,19 +719,38 @@ struct FolderRow: Identifiable {
     /// and at least every ten minutes as folders age.
     var suggestionList: [Suggestion] {
         let bucket = Int(Date().timeIntervalSince1970 / 600)
-        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)|\(quietHours)|\(bucket)|\(trashedSinceScan.count)"
+        let key = "\(recordsVersion)|\(preferencesVersion)|\(discoveryVersion)|\(quietHours)|\(bucket)|\(trashedSinceScan.count)|\(vanished.count)"
         if suggestionCache.key == key { return suggestionCache.value }
         let items = baseMeasures().filter { !isExcluded($0.profile.path) }
         // Items you moved to the Trash leave the list at once, including old items inside folders, which no scan has seen go yet.
         // Whole folders follow the same rule as every Trash command; old items inside a folder are judged by the folder's rules.
         let byPath = Dictionary(items.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
         let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600, minimum: Self.suggestionMinimum)
-            .filter { !trashedSinceScan.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false) }
+            .filter { !trashedSinceScan.contains($0.path) && !vanished.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false) }
         suggestionCache = (key, value)
         return value
     }
     /// Paths a Trash command moved since the last scan. Cleared when a scan is saved.
     @Published private(set) var trashedSinceScan: Set<String> = []
+    /// Suggestions that are no longer on disk, however they went: a Trash command, Finder, or a tool cleaning up.
+    /// They leave the list at once, so a copy never offers what's already gone.
+    @Published private(set) var vanished: Set<String> = []
+    private var checkingVanished = false
+    func checkVanished() {
+        guard !checkingVanished else { return }
+        let paths = Array(Set(suggestionList.map(\.path)).union(selectedSuggestions))
+        guard !paths.isEmpty else { return }
+        checkingVanished = true
+        DispatchQueue.global(qos: .utility).async {
+            let missing = missingPaths(paths)
+            DispatchQueue.main.async {
+                self.checkingVanished = false
+                guard !missing.isEmpty else { return }
+                if !missing.isSubset(of: self.vanished) { self.vanished.formUnion(missing) }
+                if !self.selectedSuggestions.isDisjoint(with: missing) { self.selectedSuggestions.subtract(missing) }
+            }
+        }
+    }
     /// Whether a whole folder may go in a Trash command. Never: virtual machines, simulators, chat history, app libraries
     /// and model libraries (remove those in their own apps), ignored, turned-off or Leave it folders, and the places
     /// Context Cleaner looks in, such as Downloads, ~/GitHub or Codex scratch, unless that place is itself a cache.
@@ -788,10 +822,17 @@ struct FolderRow: Identifiable {
         for path in paths { sizes[path] = known[path] ?? knownBytes(path) }
         if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
         let items = paths.map { (path: $0, seen: seenDate($0)) }
+        // Worktrees listed because git had everything in them are checked with git again.
+        let cleanTrees = Set(paths.filter { isWorktreeFolder($0) && worktrees[$0]?.changes == 0 })
         state.start(paths)
         DispatchQueue.global(qos: .userInitiated).async {
             let snapshot = ActivitySnapshot.capture()
-            let result = recheck(items, open: snapshot.available ? snapshot.observations : nil)
+            var result = recheck(items, open: snapshot.available ? snapshot.observations : nil)
+            // A clean worktree goes only if git still has everything: anything uncommitted now, anywhere inside, leaves it out.
+            for path in result.ready where cleanTrees.contains(path) {
+                let clean = worktreeRepository(path).flatMap { gitOutput($0, ["status", "--porcelain", "--untracked-files=normal"], timeout: 20) }
+                if clean != "" { result.ready.removeAll { $0 == path }; result.leftOut[path] = .changed }
+            }
             DispatchQueue.main.async { self.finishCopy(paths, result, sizes: sizes) }
         }
     }
@@ -807,6 +848,7 @@ struct FolderRow: Identifiable {
         // Items left out stay ticked, so you can see which they were and the Copy button keeps saying what it copied.
         let gone = result.leftOut.filter { $0.value == .gone }.map(\.key)
         selectedSuggestions.subtract(gone)
+        vanished.formUnion(gone)
         if result.leftOut.values.contains(.gone) { refreshGone() }
         saveCleanup()
         trashTimer?.invalidate()
@@ -815,9 +857,10 @@ struct FolderRow: Identifiable {
     }
     /// The command to copy: every path written out when it's short, or read from a saved list when it's long.
     func trashCommandText(_ targets: [String], id: String) -> String {
-        let inline = trashCommand(targets)
+        let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil })).sorted()
+        let inline = trashCommand(targets, prune: prune)
         guard inline.utf8.count > trashInlineLimit, let store, let list = try? store.saveTrashList(id, targets) else { return inline }
-        return trashCommand(targets, list: list)
+        return trashCommand(targets, list: list, prune: prune)
     }
     private func checkTrashWatch() {
         guard let watch = trashWatch else { trashTimer?.invalidate(); return }
@@ -876,8 +919,10 @@ struct FolderRow: Identifiable {
         refreshDerived()
         let readings = usage
         guard let first = readings.first(where: { $0.date >= start && $0.date <= end }), let last = readings.last(where: { $0.date <= end && $0.date >= start }), first.date < last.date else { wentCache = (key, nil); return nil }
-        let current = derived.saved.values.filter { !isExcluded($0.profile.path) && !gone.contains($0.profile.path) }
-        let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, to: last.date, home: home)
+        // Folders removed since their last scan count as freed in their own place, when the range reaches the present.
+        let reachesNow = last.date >= (readings.last?.date ?? last.date)
+        let current = derived.saved.values.filter { !isExcluded($0.profile.path) && (reachesNow || !gone.contains($0.profile.path)) }
+        let places = spaceChanges(history: derived.history, latest: Array(current), created: created, from: first.date, to: last.date, removed: reachesNow ? gone : [], home: home)
         let value = SpaceWent(from: first.date, to: last.date, diskChange: last.used - first.used, places: places)
         wentCache = (key, value)
         return value
@@ -1092,7 +1137,7 @@ struct FolderRow: Identifiable {
                 }
             }
             DispatchQueue.main.async {
-                self.records = droppingOldContents(self.records + [record]); self.trashedSinceScan = []; self.refreshVolume(); self.refreshGone(); self.loadSimDevices(); self.refreshProjects()
+                self.records = droppingOldContents(self.records + [record]); self.trashedSinceScan = []; self.vanished = []; self.refreshVolume(); self.refreshGone(); self.loadSimDevices(); self.refreshProjects()
                 do { try self.store?.append(record) }
                 catch { self.error = "Scan is available in memory but could not be saved: \(error.localizedDescription)" }
                 self.autoWatch(after: record)

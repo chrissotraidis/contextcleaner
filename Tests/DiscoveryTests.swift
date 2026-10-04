@@ -234,6 +234,20 @@ import Foundation
         check(worktree.isWorktree && worktree.registered == true && worktree.merged == true && worktree.mainRepository == repo.path && worktree.branch == "feature",
               "a worktree is recognized, with its main repository and merge state")
         check(repositoryRoot(for: tree.path + "/build/intermediates", home: root.path) == tree.path && repositoryRoot(for: root.path + "/elsewhere", home: root.path) == nil, "a folder finds its project by looking for .git above it")
+        // 0.19: Codex worktrees are measured whole, and a worktree folder that wraps its repository (name/repo/.git) is looked inside.
+        let codexHome = root.appendingPathComponent("codex-home").path
+        let fm = FileManager.default
+        for folder in [".codex/worktrees/flat/build", ".codex/worktrees/wrapped/app/build", ".codex/tasks/task-a/work/run-1"] {
+            try fm.createDirectory(atPath: codexHome + "/" + folder, withIntermediateDirectories: true)
+        }
+        try writeNew(Data("gitdir: /nowhere/.git/worktrees/flat\n".utf8), to: URL(fileURLWithPath: codexHome + "/.codex/worktrees/flat/.git"))
+        try writeNew(Data("gitdir: /nowhere/.git/worktrees/b\n".utf8), to: URL(fileURLWithPath: codexHome + "/.codex/worktrees/wrapped/app/.git"))
+        try writeNew(Data(), to: URL(fileURLWithPath: codexHome + "/.codex/worktrees/wrapped/.codex-worktree-name"))
+        let found = Set(Inventory.discover(home: codexHome, preferences: Preferences()).profiles.map(\.path))
+        let expectedPaths = [".codex/worktrees/flat", ".codex/worktrees/flat/build", ".codex/worktrees/wrapped", ".codex/worktrees/wrapped/app/build", ".codex/tasks/task-a", ".codex/tasks/task-a/work"].map { codexHome + "/" + $0 }
+        check(expectedPaths.allSatisfy(found.contains), "worktrees and task folders are measured whole, with the build and work folders of the repository inside, nested or not")
+        check(worktreeRepository(codexHome + "/.codex/worktrees/wrapped") == codexHome + "/.codex/worktrees/wrapped/app" && worktreeRepository(codexHome + "/.codex/worktrees/flat") == codexHome + "/.codex/worktrees/flat"
+              && worktreeRepository(codexHome + "/.codex/tasks/task-a") == nil, "a worktree folder's repository is itself or the one repository it wraps")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

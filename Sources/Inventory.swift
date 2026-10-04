@@ -49,15 +49,26 @@ struct Inventory {
                 return lstat(path, &child) != 0 || (child.st_mode & S_IFMT) == S_IFDIR
             }
         }
+        /// The repositories in a project folder: the folder itself, or, for a folder that wraps them
+        /// (Codex's nested worktrees: name/repo/.git), each child that holds a .git entry.
+        func repositories(_ folder: String) -> [String] {
+            var st = stat()
+            if lstat(folder + "/.git", &st) == 0 { return [folder] }
+            let inner = children(folder).filter { lstat($0 + "/.git", &st) == 0 }
+            return inner.isEmpty ? [folder] : inner
+        }
         for entry in Coverage.entries {
             let root = entry.path(home: home)
             switch entry.kind {
             case .folder: add(root)
             case .children: for p in children(root) { add(p) }
-            case .projects:
+            case .projects, .workspaces:
                 for project in children(root) {
                     var st = stat(); guard lstat(project, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { continue }
-                    for suffix in Coverage.projectSuffixes { add(project + "/" + suffix) }
+                    if entry.kind == .workspaces { add(project) }
+                    for repository in repositories(project) {
+                        for suffix in Coverage.projectSuffixes { add(repository + "/" + suffix) }
+                    }
                 }
             }
         }
@@ -76,6 +87,15 @@ struct Inventory {
         if cancellation.stopped { complete = false; notes.append("Discovery cancelled. Previously known locations are retained.") }
         return Discovery(profiles: profiles, notes: notes, complete: complete)
     }
+}
+
+/// Reading sizes must never download anything. With iCloud's Desktop & Documents or another cloud folder, files and
+/// folders can be "dataless": opening one asks the cloud for it, which takes disk space and can stall a scan for minutes.
+/// This turns that off for the whole app: such items are skipped and take no space on this Mac anyway.
+/// It also stops reads from mounting network folders (autofs).
+func keepReadsLocal() {
+    _ = setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+    _ = setiopolicy_np(IOPOL_TYPE_VFS_TRIGGER_RESOLVE, IOPOL_SCOPE_PROCESS, IOPOL_VFS_TRIGGER_RESOLVE_OFF)
 }
 
 struct Cancellation: @unchecked Sendable {
@@ -273,12 +293,20 @@ struct TreeMeasure {
             return false
         }
         var childMap: [String: ChildBox] = [:], typeMap: [String: FileTypeSummary] = [:]
-        var retainedNames: Set<String> = [], listedChildren = 0
+        var listedChildren = 0
+        /// Keeps the biggest top-level items. Folders are read one at a time, so every item but the one being read is
+        /// complete when the list is trimmed; a folder with hundreds of thousands of items never holds them all.
+        func trimChildren(keeping current: String) {
+            let keep = Set(childMap.values.sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }.prefix(512).map(\.name))
+            childMap = childMap.filter { keep.contains($0.key) || $0.key == current }
+        }
         struct FileIdentity: Hashable { let device: Int32; let inode: UInt64 }
         var seen: Set<FileIdentity> = [], failures: [String] = [], omitted = 0
         func incomplete(_ reason: String) -> FolderMeasurement {
             result(.limited, diagnostic: "\(reason) after \(entries.formatted()) entries. Partial sizes are withheld. Measure a smaller child folder or run a manual scan with its larger allowance.")
         }
+        // In your temporary folder, macOS keeps a few system services' items private; they aren't yours to remove.
+        let skipsPrivate = profile.category == .temporary
         // One open directory per level of depth, so a folder with millions of names never builds a huge list.
         var stack: [BulkCursor] = []
         if (rootStat.st_mode & S_IFMT) == S_IFDIR {
@@ -300,10 +328,7 @@ struct TreeMeasure {
             if !excludedInside.isEmpty && isExcluded(child) { omitted += 1; entries += 1; if entries >= limits.entries { return incomplete("Entry allowance reached") }; continue }
             if atRoot {
                 listedChildren += 1
-                if retainedNames.count < 512 { retainedNames.insert(name) }
-                else if let largest = retainedNames.max(), name < largest {
-                    retainedNames.remove(largest); childMap.removeValue(forKey: largest); retainedNames.insert(name)
-                }
+                if childMap.count >= 4096 { trimChildren(keeping: name) }
             }
             if entries >= limits.entries { return incomplete("Entry allowance reached") }
             entries += 1
@@ -313,7 +338,7 @@ struct TreeMeasure {
             }
             let top = cursor.top ?? name
             var box = cursor.box
-            if atRoot && retainedNames.contains(name) {
+            if atRoot {
                 box = childMap[name] ?? ChildBox(name: name, directory: entry.isDirectory, identity: "\(entry.device):\(entry.fileID)")
                 childMap[name] = box
             }
@@ -335,12 +360,14 @@ struct TreeMeasure {
             if entry.isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
                 do { stack.append(try BulkCursor(child, top: top, box: box)) }
+                catch let error as POSIXError where error.code == .EDEADLK { omitted += 1 }
+                catch let error as POSIXError where skipsPrivate && (error.code == .EPERM || error.code == .EACCES) { omitted += 1 }
                 catch { if failures.count < 3 { failures.append(child + ": " + error.localizedDescription) } }
             } else { files += 1 }
             if entries % 4000 == 0 { Thread.sleep(forTimeInterval: 0.002) }
         }
         if !failures.isEmpty { return result(.inaccessible, diagnostic: "Incomplete measurement; partial sizes withheld. " + failures.joined(separator: "\n")) }
-        contents = FolderContents(children: childMap.values.map(\.summary).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }, fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted)
+        contents = FolderContents(children: Array(childMap.values.map(\.summary).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }.prefix(512)), fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted)
         let latest = latestSeconds == Int.min ? nil : Date(timeIntervalSince1970: Double(latestSeconds))
         return result(.measured, bytes, logical, files, latest, diagnostic: omitted > 0 ? "\(omitted) excluded paths, symbolic links or other-volume entries were skipped. Size describes only included contents." : nil)
     }

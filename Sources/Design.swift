@@ -4,7 +4,7 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case freeUp = "Free Up Space", overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "History"
+    case overview = "Overview", freeUp = "Free Up Space", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -19,7 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
-        case .freeUp: return "What nothing has touched for a while, biggest first. Tick it, copy one command, paste it in Terminal."
+        case .freeUp: return "What nothing has touched for a while, biggest first. Tick it, copy one command, paste it in your terminal."
         case .overview: return "How full your disk is, and what's filling it."
         case .locations: return "Every folder Context Cleaner knows, biggest first."
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
@@ -245,6 +245,8 @@ struct VerdictCard: View {
     func finish(_ paths: [String], copied: Int, leftOut: Int) { self.paths = paths; checking = false; self.copied = copied; self.leftOut = leftOut }
 }
 /// The one Copy Move-to-Trash button. It rechecks the folders first, then says what it copied, or why it copied nothing.
+/// A big selection, or one with Review first folders, asks once in place before copying. After a copy, a button beside it
+/// opens your terminal, chosen in Settings, so you can paste.
 struct TrashCopyButton: View {
     let paths: [String]
     var bytes: Int64? = nil
@@ -255,8 +257,41 @@ struct TrashCopyButton: View {
     var shortcut = false
     /// A different name for the button before it's clicked.
     var label: String? = nil
+    /// Asked in place before copying, from trashConfirmation. Nil copies straight away.
+    var confirm: String? = nil
     @ObservedObject private var state = TrashCopyState.shared
+    @AppStorage(terminalDefaultsKey) private var terminalID = ""
+    /// The paths a confirmation is showing for. Changing the selection drops it.
+    @State private var asking: [String]?
     var body: some View {
+        if let confirm, asking == paths, !paths.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { confirmText(confirm).fixedSize(); confirmButtons }
+                VStack(alignment: .leading, spacing: 6) { confirmText(confirm).fixedSize(horizontal: false, vertical: true); HStack(spacing: 8) { confirmButtons } }
+            }.padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Color.caution.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+        } else {
+            HStack(spacing: 8) {
+                copyButton
+                if !paths.isEmpty && state.paths == paths && !state.checking && state.copied > 0 {
+                    let terminal = chosenTerminal(terminalID)
+                    Button { openTerminal(terminal) } label: { Label("Open \(terminal.name)", systemImage: "terminal") }
+                        .controlSize(prominent ? .regular : .small)
+                        .help("Opens \(terminal.name). Paste with Command-V and press Return. Choose another terminal in Settings.")
+                }
+            }
+        }
+    }
+    private func confirmText(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(.primary)
+            .symbolRenderingMode(.multicolor)
+    }
+    @ViewBuilder private var confirmButtons: some View {
+        Button("Cancel") { asking = nil }.controlSize(.small).keyboardShortcut(.cancelAction)
+        Button("Copy Anyway") { asking = nil; requestTrashCopy(paths, bytes: bytes, sizes: sizes) }
+            .buttonStyle(.borderedProminent).controlSize(.small)
+    }
+    private var copyButton: some View {
         let mine = !paths.isEmpty && state.paths == paths
         let title: String = {
             guard mine else { return (label ?? "Copy Move-to-Trash Command") + (paths.count > 1 ? " (\(paths.count))" : "") }
@@ -265,12 +300,38 @@ struct TrashCopyButton: View {
             return paths.count == 1 ? "Copied" : state.copied == paths.count ? "Copied all \(paths.count)" : "Copied \(state.copied) of \(paths.count)"
         }()
         let symbol = mine && !state.checking ? (state.copied > 0 ? "checkmark.circle.fill" : "exclamationmark.circle") : "doc.on.clipboard"
-        let button = Button { requestTrashCopy(paths, bytes: bytes, sizes: sizes) } label: { Label(title, systemImage: symbol).monospacedDigit().contentTransition(.numericText()) }
+        let button = Button {
+            if confirm != nil && asking != paths { asking = paths } else { asking = nil; requestTrashCopy(paths, bytes: bytes, sizes: sizes) }
+        } label: { Label(title, systemImage: symbol).monospacedDigit().contentTransition(.numericText()) }
             .controlSize(.small).disabled(paths.isEmpty || state.checking)
             .help("Checks each item is still there, not open in an app and unchanged since the scan, then copies one Terminal command that moves them to the Trash and prints a line for each. Put Back works. Context Cleaner never runs it." + (shortcut ? " Shortcut: Shift-Command-C." : ""))
             .keyboardShortcut(shortcut ? KeyboardShortcut("c", modifiers: [.command, .shift]) : nil)
-        if prominent { button.buttonStyle(.borderedProminent).controlSize(.regular) } else { button }
+        return Group { if prominent { button.buttonStyle(.borderedProminent).controlSize(.regular) } else { button } }
     }
+}
+
+/// Terminal apps a copied command can be pasted into. Settings lists the ones installed.
+struct TerminalApp: Identifiable, Equatable { let id: String; let name: String }
+let terminalApps: [TerminalApp] = [
+    TerminalApp(id: "com.apple.Terminal", name: "Terminal"),
+    TerminalApp(id: "com.mitchellh.ghostty", name: "Ghostty"),
+    TerminalApp(id: "com.googlecode.iterm2", name: "iTerm"),
+    TerminalApp(id: "dev.warp.Warp-Stable", name: "Warp"),
+    TerminalApp(id: "net.kovidgoyal.kitty", name: "kitty"),
+    TerminalApp(id: "org.alacritty", name: "Alacritty"),
+    TerminalApp(id: "com.github.wez.wezterm", name: "WezTerm"),
+]
+let terminalDefaultsKey = "terminalApp"
+func terminalInstalled(_ id: String) -> Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil }
+/// The terminal chosen in Settings while it's still installed; otherwise Terminal, which every Mac has.
+func chosenTerminal(_ saved: String?, installed: (String) -> Bool = terminalInstalled) -> TerminalApp {
+    if let saved, let app = terminalApps.first(where: { $0.id == saved }), installed(app.id) { return app }
+    return terminalApps[0]
+}
+/// Opens the terminal only. You paste the command and press Return yourself.
+func openTerminal(_ app: TerminalApp) {
+    guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.id) else { return }
+    NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
 }
 
 /// Asks the app to copy a Move-to-Trash command and watch its folders until they're gone.

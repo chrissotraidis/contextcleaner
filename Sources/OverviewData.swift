@@ -928,6 +928,28 @@ struct Suggestion: Identifiable, Equatable {
     var seen: Date? = nil
     /// A backup, save or recovery copy: possibly the only copy. Select All never ticks it.
     var backup = false
+    /// Safe to remove or Rebuildable: removing it loses nothing.
+    var losesNothing: Bool { cost == .safe || cost == .rebuild }
+    /// What sort of thing it is, for grouping the list: "Build output", "Clean worktree", "Left by a Codex task".
+    var kind: String {
+        if cost == .safe && owner == nil { return "Not needed again" }
+        return why.components(separatedBy: " · ").first ?? why
+    }
+}
+/// Copying this many items, or this much, in one command asks once first.
+let trashConfirmCount = 20
+let trashConfirmBytes: Int64 = 100 << 30
+/// What to ask, in place, before copying one Trash command; nil copies straight away. It asks when the command includes
+/// Review first items, which may hold the only copy of something, or when it's big.
+func trashConfirmation(count: Int, bytes: Int64, review: Int, reviewBytes: Int64) -> String? {
+    let big = count >= trashConfirmCount || bytes >= trashConfirmBytes
+    guard review > 0 || big else { return nil }
+    let size = "\(count) \(count == 1 ? "item" : "items"), \(byteLabel(bytes))"
+    if review > 0 {
+        let part = "\(review) Review first (\(byteLabel(reviewBytes)))"
+        return (review == count ? "\(size), all Review first." : "\(size), including \(part).") + " Each may hold the only copy of something. Copy anyway?"
+    }
+    return "\(size) in one command. Nothing is lost, but builds and downloads take time to come back. Copy anyway?"
 }
 /// "20 hours", "3 days", "2 weeks": how long something has sat untouched.
 func quietText(_ seconds: TimeInterval) -> String {

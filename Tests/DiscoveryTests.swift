@@ -197,7 +197,7 @@ import Foundation
         navModel.records = verdictModel.records
         navModel.section = .overview
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        // The app opens on Free Up Space; moving to the Overview is its own step.
+        // The app opens on the Overview; count steps from here.
         let startSteps = navModel.backStack.count
         navModel.open(buildProfile.path)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))

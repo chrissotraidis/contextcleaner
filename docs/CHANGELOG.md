@@ -2,6 +2,20 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.0
+
+From the [0.20.0 review](IMPROVEMENTS.md#improvements-from-the-0200-review-2026-10-05-evening).
+
+- **Opens on the Overview** again, with Free Up Space second in the sidebar.
+- **Nothing lost.** Free Up Space filters by **Nothing lost** (Safe to remove and Rebuildable together) or **Review first**; each row still says which. Empty filters are hidden, so it never shows "0 B".
+- **By kind.** Group the list by what each item is (build output, Codex scratch, install caches…), each group with a tick box and its total.
+- **One Copy button, which asks when it should.** Folders has a single Copy button for everything selected. A command with Review first items, 20 or more items, or 100 GiB or more asks in place before copying, with the count and size. No pop-ups.
+- **Open your terminal.** After copying, a button beside Copy opens Terminal, Ghostty, iTerm, Warp, kitty, Alacritty or WezTerm; pick it in Settings › General. You still paste and run the command yourself.
+- **No banner to close.** The button says what it copied; one line in the footer follows the items to the Trash. History records every command.
+- **Tick boxes in Folders**, on every row.
+- **Where the space went** draws growth to the right and space freed to the left of a center line, under **Grew** and **Freed**.
+- **What a scan does.** The first launch opens the scan sheet, which lists what a scan reads, the read-only tools it runs, what it saves and where, and what it never does.
+
 ## 0.20.0
 
 Built around the one thing the app is for: getting space back. From the [2026-10-05 review](IMPROVEMENTS.md).

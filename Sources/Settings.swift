@@ -15,6 +15,8 @@ struct GeneralSettings: View {
     @ObservedObject var model: CleanerModel
     @State private var fullDiskAccess = hasFullDiskAccess()
     @State private var showingAccessHelp = false
+    @AppStorage(terminalDefaultsKey) private var terminalID = ""
+    @State private var installedTerminals = terminalApps.filter { terminalInstalled($0.id) }
     var body: some View {
         let schedule = model.preferences.effectiveSchedule
         let busy = model.running || model.inspecting || model.discovering
@@ -56,6 +58,14 @@ struct GeneralSettings: View {
                 Button("How It Works…") { showingAccessHelp = true }.buttonStyle(.link)
             } header: { Text("Permission") } footer: {
                 Text("Optional. Context Cleaner only reads sizes and dates either way. After turning it on in System Settings, quit and reopen Context Cleaner.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Picker(selection: Binding(get: { chosenTerminal(terminalID).id }, set: { terminalID = $0 })) {
+                    ForEach(installedTerminals) { Text($0.name).tag($0.id) }
+                } label: { Label("Open commands in", systemImage: "terminal") }
+            } header: { Text("Terminal") } footer: {
+                Text("After you copy a Move-to-Trash command, the Open button beside Copy opens this app. You paste with Command-V and press Return; Context Cleaner never runs the command.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section {
                 Picker(selection: Binding(get: { model.preferences.appearance ?? "System" }, set: { model.setAppearance($0) })) {
@@ -268,6 +278,15 @@ struct CoverageSettings: View {
 struct ScanPlanView: View {
     @ObservedObject var model: CleanerModel
     @Environment(\.dismiss) private var dismiss
+    /// Open until the first scan, so what a scan does is the first thing you read.
+    @State private var showHow: Bool
+    init(model: CleanerModel) { self.model = model; _showHow = State(initialValue: model.records.isEmpty) }
+    private func fact(_ symbol: String, _ title: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(Color.accentColor).frame(width: 16).accessibilityHidden(true)
+            (Text(title + ". ").fontWeight(.semibold) + Text(text).foregroundColor(.secondary)).font(.caption).fixedSize(horizontal: false, vertical: true)
+        }
+    }
     private var included: [CoverageEntry] { Coverage.entries.filter { !model.preferences.excluded($0.path(home: model.home)) } }
     private var busy: Bool { model.running || model.inspecting || model.discovering || model.store == nil }
     var body: some View {
@@ -325,13 +344,17 @@ struct ScanPlanView: View {
                     }.frame(maxHeight: 120)
                 }.font(.callout)
             }.padding(16).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
-            VStack(alignment: .leading, spacing: 4) {
-                Text("What happens").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text("1. Looks for new folders in these places.  2. Measures each one, four at a time.  3. Compares with the last scan and updates every answer.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Text("Only these places, not your whole disk. macOS may ask for permission the first time; the scan waits for your answer. You can stop at any time.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
+            DisclosureGroup(isExpanded: $showHow) {
+                VStack(alignment: .leading, spacing: 8) {
+                    fact("doc.text.magnifyingglass", "Reads", "The names, sizes and last-changed dates of files in the places above, plus a few small metadata files such as git's pointers and Ollama's manifests. It doesn't read what's in your files, and it leaves iCloud files that aren't downloaded in iCloud.")
+                    fact("terminal", "Runs, read-only", "git (status, log, rev-list and similar) in project folders, to see what's committed and pushed, with no fetch. lsof, to see which apps have files open. xcrun simctl list, for simulators.")
+                    fact("internaldrive", "Saves", "Paths, sizes and dates, on this Mac only, in ~/Library/Application Support/Context Cleaner.")
+                    fact("hand.raised", "Never touches", "Your files are never opened, changed, moved or deleted, and nothing goes over the network. The Trash commands it copies run only when you paste them.")
+                    fact("lock", "Asks", "macOS may ask before it reads other apps' data or your Documents; the scan waits for your answer. Full Disk Access, in Settings, skips the questions.")
+                    Text("Steps: it looks for new folders in these places, measures each one, four at a time, then compares with the last scan and updates every answer. Only these places, not your whole disk. You can stop at any time.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }.padding(.top, 6)
+            } label: { Text("What a scan does").font(.callout.weight(.semibold)) }
             HStack {
                 SettingsLink { Text("Change Places…") }
                 Spacer()

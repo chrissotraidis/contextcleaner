@@ -29,7 +29,7 @@
   <a href="#faq">FAQ</a>
 </p>
 
-![Free Up Space: 104 GiB untouched for a day or longer, 21 items ticked and one command copied for 20 of them, one left out because it changed since the scan](docs/images/free-up-space.png)
+![Free Up Space grouped by kind: 103.6 GiB untouched for a day or longer, the build output, download cache and old build groups ticked, one command copied for all 7, and Open Terminal beside it](docs/images/free-up-space.png)
 
 <sub>Screenshots use made-up demo folders.</sub>
 
@@ -41,8 +41,8 @@ Coding agents, Xcode, simulators and package managers write a lot to disk and ne
 
 1. **Scan.** It measures the places where these tools pile up data (sizes and dates only), and reads git, read-only, for project folders.
 2. **Answer.** Every folder gets one answer, with the reason and evidence on its card.
-3. **Free Up Space.** The page it opens on. Pick how long something must have sat untouched, tick what you want gone (or **Select All**), and copy one command (⇧⌘C). Folders works the same way: select folders, copy one command.
-4. **You run it.** Paste it in Terminal. It moves each item to the Trash, prints what happened to each, and Context Cleaner records the cleanup in **History**. Put Back works.
+3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or group **By kind**, tick what you want gone, and copy one command (⇧⌘C). Big commands, and any with Review first items, ask once before copying. Folders works the same way: tick folders, copy one command.
+4. **You run it.** Paste it in your terminal (Terminal, Ghostty, iTerm and others; the button beside Copy opens the one you pick in Settings). It moves each item to the Trash, prints what happened to each, and Context Cleaner records the cleanup in **History**. Put Back works.
 
 | Answer | What removing it costs |
 |---|---|
@@ -64,8 +64,8 @@ Before copying, every item is checked again: anything gone, open in an app or ch
 
 1. Download the DMG from the [latest release](https://github.com/chrissotraidis/contextcleaner/releases/latest) and drag **Context Cleaner** to Applications.
 2. It's signed but not notarized. The first time, open it, choose **Done**, then **System Settings › Privacy & Security › Open Anyway**.
-3. Choose **Scan Folders…** (⌘R). The first scan takes a few minutes. macOS may ask about other apps' data; either answer is fine, it only reads sizes.
-4. Start on **Free Up Space**, the first page.
+3. The first launch shows what a scan reads and never does. Choose **Start Full Scan**; it takes a few minutes. macOS may ask about other apps' data; either answer is fine, it only reads sizes.
+4. Open **Free Up Space**, second in the sidebar.
 
 Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses Finder to move items; on 15 and later it uses macOS's `trash` tool.
 

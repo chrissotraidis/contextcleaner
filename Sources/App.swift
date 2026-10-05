@@ -111,7 +111,11 @@ struct MainView: View {
         .onReceive(goneTimer) { _ in model.checkVanished() }
         // Coming back from Terminal or Finder is when things have moved: check what's gone, and the Trash.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.checkVanished(); model.refreshTrash() }
-        .task { model.refreshTrash() }
+        .task {
+            model.refreshTrash()
+            // The first time, show what a scan reads and never does before anything is scanned.
+            if model.records.isEmpty && model.store != nil && !model.running { model.showingScanPlan = true }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.cancellation.cancel(); model.inspectionCancellation.cancel() }
     }
     var header: some View {
@@ -297,6 +301,13 @@ struct MainView: View {
     }
     var folderTable: some View {
         Table(model.sortedRows(sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
+            // A tick box per row, the same as Command-click: tick several, then copy one command from the right.
+            TableColumn("") { row in
+                let isOn = model.selection.contains(row.id)
+                Toggle("Select \(row.name)", isOn: Binding(get: { isOn }, set: { on in
+                    if on { model.selection.insert(row.id) } else { model.selection.remove(row.id) }
+                })).toggleStyle(.checkbox).labelsHidden()
+            }.width(20)
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }
@@ -389,21 +400,18 @@ struct MainView: View {
                     Text("\(model.selection.count) folders selected").font(.headline)
                     Text(byteLabel(summary.bytes)).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
                     Text(summary.unmeasured > 0 ? "Added together, counting folders inside others once. \(summary.unmeasured) not scanned yet." : "Added together, counting folders inside others once.").font(.caption).foregroundStyle(.secondary)
-                    // The Trash command first, so it's in reach however many folders are selected.
-                    let trash = model.trashable(Array(model.selection))
-                    let withReview = model.trashable(Array(model.selection), includeReview: true)
-                    let review = withReview.paths.count - trash.paths.count
-                    TrashCopyButton(paths: trash.paths, prominent: true, shortcut: true)
-                    Text(trash.skipped == 0 ? "One command for every folder selected."
-                         : "For the \(trash.paths.count) Safe to remove and Rebuildable \(trash.paths.count == 1 ? "folder" : "folders"): nothing is lost." + (review > 0 ? "" : " Leaves out \(trash.skipped): folders inside others, and places you remove in their own apps."))
+                    // One Trash command for everything selected that may go in one. Review first folders are in it too;
+                    // the button asks in place before copying them, or before copying a lot.
+                    let all = model.trashable(Array(model.selection), includeReview: true)
+                    let lossless = Set(model.trashable(Array(model.selection)).paths)
+                    let review = all.paths.filter { !lossless.contains($0) }
+                    let allBytes = all.paths.reduce(Int64(0)) { $0 + model.knownBytes($1) }
+                    TrashCopyButton(paths: all.paths, bytes: allBytes, prominent: true, shortcut: true,
+                                    confirm: trashConfirmation(count: all.paths.count, bytes: allBytes, review: review.count, reviewBytes: review.reduce(Int64(0)) { $0 + model.knownBytes($1) }))
+                    Text(all.paths.isEmpty ? "None of these can go in a Trash command: places you remove in their own apps, ignored folders, and the places Context Cleaner looks in."
+                         : (review.isEmpty ? "One command for \(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders"). Nothing is lost." : "One command for \(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders"), \(review.count) of them Review first, so it asks before copying.")
+                            + (all.skipped > 0 ? " Leaves out \(all.skipped): folders inside others, and places you remove in their own apps." : ""))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    if review > 0 {
-                        VStack(alignment: .leading, spacing: 6) {
-                            TrashCopyButton(paths: withReview.paths, label: "Copy Command Including Review First")
-                            Text("Includes \(review) Review first \(review == 1 ? "folder" : "folders") too. Each may hold something that exists only there, such as files made by hand or a backup, so only include them once you've looked.")
-                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(Verdict.check.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    }
                     Divider()
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
@@ -832,12 +840,13 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
             if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled).lineLimit(3) }
-            if let watch = model.trashWatch, !model.trashWatchHidden, model.section != .freeUp { TrashWatchLine(model: model, watch: watch) }
             HStack(spacing: 6) {
                 Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking watched and growing folders daily while open." : "Checking watched and growing folders weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
                 Spacer()
-                Text("\(model.discovery.profiles.count) folders known · \(model.records.count) scans saved").font(.caption).foregroundStyle(.secondary)
+                // The last Trash command, in one line until it's done or half an hour has passed. History keeps every one.
+                if let watch = model.trashWatch, !watch.expired { TrashWatchStatus(watch: watch) }
+                else { Text("\(model.discovery.profiles.count) folders known · \(model.records.count) scans saved").font(.caption).foregroundStyle(.secondary) }
             }
         }.padding(.horizontal, 16).padding(.bottom, 10)
     }
@@ -1077,41 +1086,31 @@ struct ReportPreview: View {
     }
 }
 
-/// After you copy a Move-to-Trash command: what's still waiting, and what has left its place.
-struct TrashWatchLine: View {
-    @ObservedObject var model: CleanerModel
+/// After you copy a Move-to-Trash command: one line in the footer saying what's still waiting and what has left its place.
+struct TrashWatchStatus: View {
     let watch: CleanerModel.TrashWatch
+    @AppStorage(terminalDefaultsKey) private var terminalID = ""
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol).foregroundStyle(tint)
-            Text(message).font(.callout).lineLimit(2)
-            Spacer()
-            if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.controlSize(.small) }
-            else if !watch.paths.isEmpty && watch.moved.isEmpty && !watch.expired {
-                // Opens Terminal only. You paste and run the command yourself.
-                Button("Open Terminal") {
-                    if let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") { NSWorkspace.shared.open(terminal) }
-                }.controlSize(.small).help("Opens Terminal. Paste with ⌘V and press Return.")
+        HStack(spacing: 6) {
+            Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
+            Text(message).lineLimit(1).truncationMode(.tail)
+            if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.buttonStyle(.link) }
+            else if !watch.paths.isEmpty && watch.moved.isEmpty {
+                let terminal = chosenTerminal(terminalID)
+                Button("Open \(terminal.name)") { openTerminal(terminal) }.buttonStyle(.link).help("Opens \(terminal.name). Paste with Command-V and press Return.")
             }
-            Button { model.dismissTrashWatch() } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).help("Dismiss").accessibilityLabel("Dismiss")
-        }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
-        .help(itemList)
+        }.font(.caption).foregroundStyle(.secondary).help(itemList)
     }
     private var symbol: String { watch.done ? "checkmark.circle.fill" : watch.paths.isEmpty ? "exclamationmark.circle" : "doc.on.clipboard" }
     private var tint: Color { watch.done ? Color.stable : watch.paths.isEmpty ? Color.caution : Color.accentColor }
     private var message: String {
         let total = watch.paths.count
         let left = watch.leftOut.isEmpty ? "" : " " + leftOutText
-        if total == 0 && !watch.leftOut.isEmpty && watch.leftOut.values.allSatisfy({ $0 == .gone }) {
-            return "Nothing to copy: \(watch.leftOut.count == 1 ? "it was" : "all \(watch.leftOut.count) were") already gone, so they've left the list."
-        }
+        if total == 0 && !watch.leftOut.isEmpty && watch.leftOut.values.allSatisfy({ $0 == .gone }) { return "Nothing to copy: already gone." }
         if total == 0 { return "Nothing copied. " + leftOutText + " Scan again, then try once more." }
-        let moved = "\(watch.moved.count) of \(total) moved to the Trash (\(byteLabel(watch.movedBytes)))."
-        if watch.done { return "Moved to the Trash: \(total == 1 ? "the item" : "all \(total)"), \(byteLabel(watch.movedBytes)). Empty the Trash to get the space back." + left }
-        if watch.moved.isEmpty { return "Copied a command for \(total == 1 ? "1 item" : "\(total) items") (\(byteLabel(watch.bytes))). Paste it in Terminal and press Return; it prints a line for each." + left }
-        return moved + (watch.expired ? " The rest are still in place; History lists them." : " Waiting for the rest.")
+        if watch.done { return "Moved \(total == 1 ? "1 item" : "all \(total)") to the Trash, \(byteLabel(watch.movedBytes)). Empty it to get the space back." + left }
+        if watch.moved.isEmpty { return "Copied a command for \(total == 1 ? "1 item" : "\(total) items"), \(byteLabel(watch.bytes)). Paste it and press Return." + left }
+        return "\(watch.moved.count) of \(total) moved to the Trash, \(byteLabel(watch.movedBytes)). Waiting for the rest." + left
     }
     private var itemList: String {
         let copied = watch.paths.map { (watch.moved.contains($0) ? "✓ " : "· ") + abbreviatedPath($0) }

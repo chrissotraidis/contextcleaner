@@ -82,6 +82,10 @@ import Darwin
         let discovery = Inventory.discover(home: home.path, preferences: prefs)
         check(!discovery.profiles.contains { containsPath(excluded.path, $0.path) }, "discovery honors exclusions")
         check(try Data(contentsOf: excluded.appendingPathComponent("unique")) == original, "all scan and migration tests preserve original fixture data")
+        check(terminalApps.first?.id == "com.apple.Terminal" && terminalApps.contains { $0.id == "com.mitchellh.ghostty" && $0.name == "Ghostty" }, "Terminal is the default and Ghostty is offered")
+        check(chosenTerminal("com.mitchellh.ghostty", installed: { _ in true }).name == "Ghostty" && chosenTerminal("com.mitchellh.ghostty", installed: { $0 == "com.apple.Terminal" }).name == "Terminal"
+              && chosenTerminal(nil, installed: { _ in true }).name == "Terminal" && chosenTerminal("com.example.unknown", installed: { _ in true }).name == "Terminal",
+              "the chosen terminal is used while installed; otherwise, or if unknown, Terminal")
         print("SUCCESS: \(checks) non-destructive checks. Every fixture and previous record remains at \(root.path)")
     }
 }

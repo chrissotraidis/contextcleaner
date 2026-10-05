@@ -411,6 +411,23 @@ import Foundation
         var busyTemp = temp; busyTemp.processes = [ProcessEvidence(pid: 1, command: "xcodebuild", access: "r", path: tmpRoot + "/build-tmp/log.txt")]
         check(suggestions([busyTemp], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 24 * 3600, now: now).map(\.name) == ["trace.ktrace"],
               "apps holding files in the temporary folder leave out only the items they hold")
+        // 0.21: Safe and Rebuildable form one Nothing lost group; kinds group the list; big or Review first copies ask first.
+        let lossless = Suggestion(path: "/a", name: "a", place: nil, bytes: gib, cost: .rebuild, why: "Build output · untouched 2 days")
+        let finished = Suggestion(path: "/b", name: "b", place: nil, bytes: gib, cost: .safe, why: "Project finished")
+        let oldTemp = Suggestion(path: "/t/x", name: "x", place: "Inside Temporary files", bytes: gib, cost: .safe, why: "Temporary item · untouched 4 days", owner: "/t")
+        let look = Suggestion(path: "/c", name: "c", place: nil, bytes: gib, cost: .check, why: "Left by a Codex task · untouched 2 days")
+        check(lossless.losesNothing && finished.losesNothing && oldTemp.losesNothing && !look.losesNothing,
+              "Safe to remove and Rebuildable both lose nothing; Review first doesn't")
+        check(lossless.kind == "Build output" && finished.kind == "Not needed again" && oldTemp.kind == "Temporary item" && look.kind == "Left by a Codex task",
+              "each item's kind is the first words of why it's listed, and whole folders that are safe group as Not needed again")
+        check(trashConfirmation(count: 3, bytes: 12 * gib, review: 0, reviewBytes: 0) == nil, "a small command of things that lose nothing copies straight away")
+        let bigAsk = trashConfirmation(count: 51, bytes: 198 * gib, review: 0, reviewBytes: 0)
+        check(bigAsk?.hasPrefix("51 items, 198 GiB in one command.") == true && bigAsk?.hasSuffix("Copy anyway?") == true, "selecting a lot (51 items) asks once, with the count and size")
+        check(trashConfirmation(count: 1, bytes: 120 * gib, review: 0, reviewBytes: 0) != nil && trashConfirmation(count: 19, bytes: 99 * gib, review: 0, reviewBytes: 0) == nil,
+              "100 GiB or 20 items asks; just under both doesn't")
+        let mixedAsk = trashConfirmation(count: 2, bytes: 3 * gib, review: 1, reviewBytes: gib)
+        check(mixedAsk == "2 items, 3 GiB, including 1 Review first (1 GiB). Each may hold the only copy of something. Copy anyway?", "any Review first item asks, however small the command")
+        check(trashConfirmation(count: 2, bytes: 3 * gib, review: 2, reviewBytes: 3 * gib)?.hasPrefix("2 items, 3 GiB, all Review first.") == true, "a command of only Review first items says so")
         print("SUCCESS: \(count) overview checks; no filesystem mutations.")
     }
 }

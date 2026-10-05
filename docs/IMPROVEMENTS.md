@@ -39,3 +39,18 @@ Feedback from using 0.19.1 to clear a nearly full disk. Free up space is the par
 21. **About** should say what the app is, its version, and link to the project. **Done.**
 22. **README**: first-class, with badges like the other repositories. **Done:** more badges, new demo-data screenshots.
 
+
+# Improvements from the 0.20.0 review (2026-10-05, evening)
+
+Feedback from a full scan with 0.20.0. All addressed in 0.21.0; see the [changelog](CHANGELOG.md).
+
+23. **Open on the Overview.** It's what you expect to see first; Free Up Space sits right under it. **Done:** the app opens on the Overview, and Free Up Space is second in the sidebar.
+24. **Where the space went** reads as two lists going the same way, with plus and minus signs. **Done:** bars grow right from a center line for space used and left for space freed, under **Grew** and **Freed**, without signs.
+25. **Free Up Space said "Safe to remove 0 B" at every untouched time**, though Rebuildable items lose nothing either. **Done:** one **Nothing lost** filter for Safe to remove and Rebuildable together, each row still saying which; empty filters are hidden.
+26. **A long list is hard to act on**, and big worktree builds get lost among small items. **Done:** **By kind** groups the list (build output, Codex scratch, install caches…), each group with its own tick box and total.
+27. **Two copy buttons in Folders**, one greyed out. **Done:** one button for everything selected that may go in a command.
+28. **Selecting a lot, or Review first items, should ask first**, without a pop-up. **Done:** the button asks in place ("51 items, 198 GiB in one command… Copy Anyway?") when a command has Review first items, 20 or more items, or 100 GiB or more.
+29. **Open the command in my terminal** (Ghostty), and choose it in Settings. **Done:** after copying, **Open Ghostty** (or Terminal, iTerm, Warp, kitty, Alacritty, WezTerm) sits beside the button; Settings › General › Terminal picks it.
+30. **The banner at the bottom** after every copy, which always needs closing. **Done:** gone; the button says what it copied, and one quiet line in the footer follows the items to the Trash. History records every command.
+31. **Tick boxes in Folders.** Shift- and Command-click aren't obvious. **Done:** a tick box on every row.
+32. **Be open about what a scan does.** Developers will want to know. **Done:** the first launch opens the scan sheet with **What a scan does**: what it reads, the read-only tools it runs (git, lsof, simctl), what it saves and where, what it never does (open, change or delete files, use the network), and when macOS asks.

@@ -604,15 +604,23 @@ struct WentPanel: View {
                     Text(change >= 0 ? "\(byteLabel(change)) more used" : "\(byteLabel(-change)) freed").font(.callout.weight(.semibold)).foregroundStyle(change >= 0 ? Color.growing : Color.stable)
                     Text("· about \(byteLabel(Int64(Double(abs(change)) / went.days))) a day · \(model.chartWindowPhrase)").font(.callout).foregroundStyle(.secondary)
                 }.monospacedDigit()
+                // Two groups around one center line: what grew reaches right, what was freed reaches left.
+                let elsewhere = abs(outside) >= 1 << 30
+                // A center line only when there's something on each side; otherwise bars use the full width.
+                let split = (!grew.isEmpty || (elsewhere && outside > 0)) && (!shrank.isEmpty || (elsewhere && outside < 0))
                 VStack(spacing: 2) {
-                    ForEach(grew + shrank) { place in placeRow(place, largest: largest, days: went.days) }
-                    if abs(outside) >= 1 << 30 {
-                        Button { model.showingElsewhere = true } label: {
-                            bar(outside >= 0 ? "Everything else" : "Freed elsewhere", detail: rateText(outside, days: went.days), bytes: outside, largest: largest, open: false, opens: false)
-                        }.buttonStyle(.plain).help("See what's outside the scanned folders")
+                    if !grew.isEmpty || (elsewhere && outside > 0) {
+                        heading("Grew", bytes: grew.reduce(Int64(0)) { $0 + $1.bytes } + (elsewhere && outside > 0 ? outside : 0), tint: .growing)
+                        ForEach(grew) { place in placeRow(place, largest: largest, days: went.days, split: split) }
+                        if elsewhere && outside > 0 { elsewhereRow(outside, largest: largest, days: went.days, split: split) }
+                    }
+                    if !shrank.isEmpty || (elsewhere && outside < 0) {
+                        heading("Freed", bytes: -(shrank.reduce(Int64(0)) { $0 + $1.bytes } + (elsewhere && outside < 0 ? outside : 0)), tint: .stable)
+                        ForEach(shrank) { place in placeRow(place, largest: largest, days: went.days, split: split) }
+                        if elsewhere && outside < 0 { elsewhereRow(outside, largest: largest, days: went.days, split: split) }
                     }
                 }
-                Text("Click a place to see its folders. \"Everything else\" is outside the scanned folders; click it to look inside. The range follows the chart.")
+                Text((split ? "Bars reach right for space used, left for space freed. " : "") + "Click a place to see its folders. \"Everything else\" is outside the scanned folders; click it to look inside. The range follows the chart.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Needs disk readings from two times in this range. Context Cleaner notes disk space every hour while it's open.").font(.callout).foregroundStyle(.secondary)
@@ -620,10 +628,10 @@ struct WentPanel: View {
         }
     }
     private func rateText(_ bytes: Int64, days: Double) -> String { "\(byteLabel(Int64(Double(abs(bytes)) / days))) a day" }
-    @ViewBuilder private func placeRow(_ place: SpaceChange, largest: Double, days: Double) -> some View {
+    @ViewBuilder private func placeRow(_ place: SpaceChange, largest: Double, days: Double, split: Bool) -> some View {
         let open = selected == place.title
         Button { withAnimation(.easeOut(duration: 0.15)) { selected = open ? nil : place.title } } label: {
-            bar(place.title, detail: ([rateText(place.bytes, days: days)] + (place.newFolders > 0 ? ["\(place.newFolders) new"] : []) + (place.removedFolders > 0 ? ["\(place.removedFolders) removed"] : [])).joined(separator: " · "), bytes: place.bytes, largest: largest, open: open)
+            bar(place.title, detail: ([rateText(place.bytes, days: days)] + (place.newFolders > 0 ? ["\(place.newFolders) new"] : []) + (place.removedFolders > 0 ? ["\(place.removedFolders) removed"] : [])).joined(separator: " · "), bytes: place.bytes, largest: largest, open: open, split: split)
         }.buttonStyle(.plain).accessibilityHint(open ? "Hides its folders" : "Shows its folders")
         if open {
             VStack(alignment: .leading, spacing: 4) {
@@ -633,7 +641,7 @@ struct WentPanel: View {
                             Text(item.name).lineLimit(1).truncationMode(.middle)
                             if let hint = locationHint(item.path) { Text(hint).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                             Spacer(minLength: 8)
-                            Text(signedBytes(item.bytes)).monospacedDigit().foregroundStyle(item.bytes >= 0 ? Color.growing : .stable)
+                            Text((item.bytes >= 0 ? "grew " : "freed ") + byteLabel(abs(item.bytes))).monospacedDigit().foregroundStyle(item.bytes >= 0 ? Color.growing : .stable)
                             Image(systemName: "chevron.right").foregroundStyle(.tertiary)
                         }.font(.caption).padding(.vertical, 3).padding(.horizontal, 8).contentShape(Rectangle())
                     }.buttonStyle(.plain).pointingHand().help("Open in Folders")
@@ -641,21 +649,40 @@ struct WentPanel: View {
             }.padding(.leading, 18).padding(.bottom, 4)
         }
     }
-    private func bar(_ title: String, detail: String?, bytes: Int64, largest: Double, open: Bool, opens: Bool = true) -> some View {
+    private func heading(_ title: String, bytes: Int64, tint: Color) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(tint)
+            Text(byteLabel(bytes)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            Spacer()
+        }.padding(.top, 6).padding(.leading, 24)
+    }
+    private func elsewhereRow(_ bytes: Int64, largest: Double, days: Double, split: Bool) -> some View {
+        Button { model.showingElsewhere = true } label: {
+            bar("Everything else", detail: rateText(bytes, days: days), bytes: bytes, largest: largest, open: false, opens: false, split: split)
+        }.buttonStyle(.plain).help("See what's outside the scanned folders")
+    }
+    private func bar(_ title: String, detail: String?, bytes: Int64, largest: Double, open: Bool, opens: Bool = true, split: Bool) -> some View {
         let tint: Color = bytes >= 0 ? .growing : .stable
         return HStack(spacing: 10) {
             Image(systemName: "chevron.right").font(.caption2.weight(.semibold)).rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(.tertiary).frame(width: 10)
                 .opacity(opens ? 1 : 0)
-            // One line per place: name, bar, change, and the rate beside it.
-            Text(title).font(.callout).lineLimit(1).frame(width: 170, alignment: .leading)
+            // One line per place: name, a bar from the center line, the amount, and the rate beside it.
+            Text(title).font(.callout).lineLimit(1).frame(width: 160, alignment: .leading)
             GeometryReader { geo in
-                RoundedRectangle(cornerRadius: 3).fill(tint.opacity(0.85)).frame(width: max(3, geo.size.width * Double(abs(bytes)) / largest))
-            }.frame(height: 8)
-            Text(signedBytes(bytes)).font(.callout).monospacedDigit().foregroundStyle(tint).frame(width: 88, alignment: .trailing)
+                let half = split ? geo.size.width / 2 : 0
+                let width = max(3, (geo.size.width - half) * Double(abs(bytes)) / largest)
+                ZStack(alignment: .leading) {
+                    if split { Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 1, height: 14).offset(x: half) }
+                    RoundedRectangle(cornerRadius: 3).fill(tint.opacity(0.85)).frame(width: width, height: 8).offset(x: !split ? 0 : bytes >= 0 ? half + 1 : half - width)
+                }.frame(height: 14)
+            }.frame(height: 14)
+            Text(byteLabel(abs(bytes))).font(.callout).monospacedDigit().foregroundStyle(tint).frame(width: 84, alignment: .trailing)
             Text(detail ?? "").font(.caption).foregroundStyle(.secondary).monospacedDigit().lineLimit(1).frame(width: 118, alignment: .trailing)
         }.padding(.vertical, 3).padding(.horizontal, 4)
             .background(open ? Color.secondary.opacity(0.10) : .clear, in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(title), \(bytes >= 0 ? "grew" : "freed") \(byteLabel(abs(bytes)))")
     }
 }
 /// The Free Up Space page: freshness and free space in one line, then the list, which fills the window.
@@ -670,25 +697,22 @@ struct FreeUpView: View {
         }
     }
 }
-/// On the Overview: what's waiting in Free Up Space, by answer, one click from it.
+/// On the Overview: what's waiting in Free Up Space, by what removing it costs, one click from it.
 struct FreeUpSummary: View {
     @ObservedObject var model: CleanerModel
     var body: some View {
         let list = model.suggestionList
         let total = list.reduce(Int64(0)) { $0 + $1.bytes }
+        let free = list.filter(\.losesNothing), review = list.filter { !$0.losesNothing }
         HStack(spacing: 14) {
             Image(systemName: "checklist").font(.title2).foregroundStyle(Color.accentColor).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(list.isEmpty ? "Nothing has sat untouched for \(model.quietHours >= 24 ? "\(model.quietHours / 24) \(model.quietHours == 24 ? "day" : "days")" : "\(model.quietHours) hours")" : "\(byteLabel(total)) you could get back now")
+                Text(list.isEmpty ? "Nothing has sat untouched for \(quietPhrase(model.quietHours))" : "\(byteLabel(total)) you could get back now")
                     .font(.title3.weight(.semibold)).monospacedDigit()
                 HStack(spacing: 12) {
-                    ForEach([Verdict.safe, .rebuild, .check]) { v in
-                        let items = list.filter { $0.cost == v }
-                        if !items.isEmpty {
-                            HStack(spacing: 5) { Circle().fill(v.tint).frame(width: 8, height: 8); Text("\(v.title) \(byteLabel(items.reduce(Int64(0)) { $0 + $1.bytes }))").monospacedDigit() }
-                        }
-                    }
-                    Text("\(list.count) \(list.count == 1 ? "item" : "items") untouched for \(model.quietHours >= 168 ? "a week" : model.quietHours >= 24 ? "\(model.quietHours / 24) \(model.quietHours == 24 ? "day" : "days")" : "\(model.quietHours) hours") or longer").foregroundStyle(.secondary)
+                    if !free.isEmpty { HStack(spacing: 5) { Circle().fill(Verdict.safe.tint).frame(width: 8, height: 8); Text("Nothing lost \(byteLabel(free.reduce(Int64(0)) { $0 + $1.bytes }))").monospacedDigit() } }
+                    if !review.isEmpty { HStack(spacing: 5) { Circle().fill(Verdict.check.tint).frame(width: 8, height: 8); Text("Review first \(byteLabel(review.reduce(Int64(0)) { $0 + $1.bytes }))").monospacedDigit() } }
+                    Text("\(list.count) \(list.count == 1 ? "item" : "items") untouched for \(quietPhrase(model.quietHours)) or longer").foregroundStyle(.secondary)
                 }.font(.callout)
             }
             Spacer()
@@ -697,41 +721,58 @@ struct FreeUpSummary: View {
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary)
     }
 }
-/// What to move to the Trash now: one list, biggest first, each with what removing it costs.
+struct KindGroup: Identifiable { let kind: String; let items: [Suggestion]; var id: String { kind } }
+/// "12 hours", "a day", "3 days", "a week".
+func quietPhrase(_ hours: Int) -> String {
+    switch hours { case 12: return "12 hours"; case 24: return "a day"; case 72: return "3 days"; case 168: return "a week"; default: return hours >= 24 ? "\(hours / 24) days" : "\(hours) hours" }
+}
+/// What to remove now: one list, biggest first, each with what removing it costs.
 /// The controls sit above the list, so Select All and Copy are in reach however long the list is.
 struct StartPanel: View {
     @ObservedObject var model: CleanerModel
     var listHeight: CGFloat = 420
-    @State private var filter: Verdict?
+    /// Nothing lost (Safe to remove and Rebuildable together) or Review first; nil shows everything.
+    @State private var filter: Bool?
+    /// Groups the list by what each item is, each group with its own tick box.
+    @AppStorage("freeUpByKind") private var byKind = false
     /// The row ticked or unticked last, for Shift-click ranges.
     @State private var anchor: String?
     var body: some View {
         let list = model.suggestionList
-        let shown = filter.map { f in list.filter { $0.cost == f } } ?? list
+        let free = list.filter(\.losesNothing), review = list.filter { !$0.losesNothing }
+        // A filter that's emptied, by a scan or a cleanup, falls back to everything.
+        let active: Bool? = filter == true && free.isEmpty || filter == false && review.isEmpty ? nil : filter
+        let filtered = active.map { $0 ? free : review } ?? list
+        let groups = byKind ? kindGroups(filtered) : [KindGroup(kind: "", items: filtered)]
+        let shown = groups.flatMap(\.items)
         let chosen = list.filter { model.selectedSuggestions.contains($0.path) }
         let chosenBytes = chosen.reduce(Int64(0)) { $0 + $1.bytes }
+        let chosenReview = chosen.filter { !$0.losesNothing }
         let selectable = shown.filter { !$0.backup }
         let allTicked = !selectable.isEmpty && selectable.allSatisfy { model.selectedSuggestions.contains($0.path) }
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(list.isEmpty ? "Nothing has sat untouched that long" : byteLabel(list.reduce(Int64(0)) { $0 + $1.bytes }) + " you could get back")
                     .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1)
-                if !list.isEmpty { Text("\(list.count) \(list.count == 1 ? "item" : "items") untouched for \(quietPhrase) or longer").font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1) }
+                if !list.isEmpty { Text("\(list.count) \(list.count == 1 ? "item" : "items") untouched for \(quietPhrase(model.quietHours)) or longer").font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1) }
                 Spacer(minLength: 8)
                 Text("Untouched for").font(.caption).foregroundStyle(.secondary).fixedSize()
                 Picker("Untouched for", selection: $model.quietHours) {
                     Text("12 hours").tag(12); Text("1 day").tag(24); Text("3 days").tag(72); Text("1 week").tag(168)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize()
             }
-            // Filters by what removing costs, each with its count and size; the Trash beside them, since that's where it all goes.
+            // Filters by what removing costs, each with its count and size; an empty one isn't shown.
             HStack(spacing: 6) {
-                chip(nil, title: "All", items: list)
-                ForEach([Verdict.safe, .rebuild, .check]) { v in chip(v, title: v.title, items: list.filter { $0.cost == v }) }
+                chip(nil, title: "All", tint: .accentColor, items: list, on: active == nil)
+                if !free.isEmpty { chip(true, title: "Nothing lost", tint: Verdict.safe.tint, items: free, on: active == true) }
+                if !review.isEmpty { chip(false, title: Verdict.check.title, tint: Verdict.check.tint, items: review, on: active == false) }
+                Picker("Show", selection: $byKind) { Text("Biggest first").tag(false); Text("By kind").tag(true) }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize().padding(.leading, 6)
+                    .help("By kind groups the list, such as build output or Codex scratch, each group with its own tick box")
                 Spacer(minLength: 0)
                 trashStatus
             }
-            Text((filter.map { $0.filter.explanation } ?? "Safe to remove: not needed again. Rebuildable: the next build or download recreates it. Review first: may hold something only here, so look inside first.") + " Shift-click to tick a range.")
-                .font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Text(explanation(active)).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             // Select, total, copy: above the list, always in reach.
             HStack(spacing: 10) {
                 Toggle(isOn: Binding(get: { allTicked }, set: { on in
@@ -748,14 +789,48 @@ struct StartPanel: View {
                     Text("\(chosen.count) ticked · \(byteLabel(chosenBytes))").font(.callout.weight(.semibold)).monospacedDigit()
                     Button("Clear") { model.selectedSuggestions = [] }.controlSize(.small)
                 }
-                TrashCopyButton(paths: chosen.map(\.path), bytes: chosenBytes, prominent: true, shortcut: true)
+                TrashCopyButton(paths: chosen.map(\.path), bytes: chosenBytes, prominent: true, shortcut: true,
+                                confirm: trashConfirmation(count: chosen.count, bytes: chosenBytes, review: chosenReview.count, reviewBytes: chosenReview.reduce(Int64(0)) { $0 + $1.bytes }))
             }.padding(.horizontal, 10).padding(.vertical, 7).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-            if let watch = model.trashWatch, !model.trashWatchHidden { TrashWatchLine(model: model, watch: watch) }
             ScrollView {
-                LazyVStack(spacing: 2) { ForEach(shown) { row($0, in: shown) } }.padding(.trailing, 6)
-            }.frame(maxHeight: shown.isEmpty ? 40 : min(listHeight, CGFloat(shown.count) * 42 + 8))
-                .overlay { if shown.isEmpty && !list.isEmpty { Text("Nothing \(filter?.title.lowercased() ?? "") untouched that long.").font(.callout).foregroundStyle(.secondary) } }
+                LazyVStack(spacing: 2) {
+                    ForEach(groups) { group in
+                        if byKind { groupHeader(group.kind, group.items) }
+                        ForEach(group.items) { row($0, in: shown) }
+                    }
+                }.padding(.trailing, 6)
+            }.frame(maxHeight: shown.isEmpty ? 40 : min(listHeight, CGFloat(shown.count) * 42 + CGFloat(byKind ? groups.count * 34 : 0) + 8))
+                .overlay { if shown.isEmpty && !list.isEmpty { Text("Nothing in this list untouched that long.").font(.callout).foregroundStyle(.secondary) } }
         }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(.background.secondary)
+    }
+    private func explanation(_ active: Bool?) -> String {
+        switch active {
+        case true?: return "Removing these loses nothing. Safe to remove: not needed again. Rebuildable: the next build or download recreates it, so you wait for that. Shift-click ticks a range."
+        case false?: return LocationFilter.check.explanation + " Shift-click ticks a range."
+        case nil: return "Nothing lost: safe to remove, or recreated by the next build or download. Review first: may hold something that's only here, so look inside first. Shift-click ticks a range."
+        }
+    }
+    /// Groups by kind, biggest group first; each group keeps biggest first.
+    private func kindGroups(_ items: [Suggestion]) -> [KindGroup] {
+        Dictionary(grouping: items, by: \.kind).map { KindGroup(kind: $0.key, items: $0.value) }
+            .sorted { $0.items.reduce(Int64(0)) { $0 + $1.bytes } > $1.items.reduce(Int64(0)) { $0 + $1.bytes } }
+    }
+    private func groupHeader(_ kind: String, _ items: [Suggestion]) -> some View {
+        let selectable = items.filter { !$0.backup }
+        let ticked = !selectable.isEmpty && selectable.allSatisfy { model.selectedSuggestions.contains($0.path) }
+        let some = items.contains { model.selectedSuggestions.contains($0.path) }
+        let review = items.filter { !$0.losesNothing }.count
+        return HStack(spacing: 10) {
+            Toggle(kind, isOn: Binding(get: { ticked }, set: { on in
+                if on { model.selectedSuggestions.formUnion(selectable.map(\.path)) } else { model.selectedSuggestions.subtract(items.map(\.path)) }
+            })).toggleStyle(.checkbox).labelsHidden().disabled(selectable.isEmpty)
+                .help(selectable.isEmpty ? "Backups are ticked one at a time" : "Ticks every \(kind.lowercased()) item here" + (selectable.count < items.count ? " except backups" : ""))
+            Text(kind).font(.callout.weight(.semibold)) + Text(some && !ticked ? "  some ticked" : "").font(.caption).foregroundColor(.secondary)
+            Text(review == 0 ? "nothing lost" : review == items.count ? "review first" : "\(review) to review first").font(.caption)
+                .foregroundStyle(review == 0 ? Verdict.safe.tint : Verdict.check.tint)
+            Spacer(minLength: 8)
+            Text("\(items.count) · \(byteLabel(items.reduce(Int64(0)) { $0 + $1.bytes }))").font(.callout).monospacedDigit().foregroundStyle(.secondary)
+        }.padding(.top, 8).padding(.bottom, 2).frame(height: 32)
     }
     /// How much the Trash holds, beside the controls, since that's where everything goes and space only comes back once it's emptied.
     private var trashStatus: some View {
@@ -766,25 +841,22 @@ struct StartPanel: View {
                 .help("Opens the Trash in Finder. Space comes back when you empty it; Context Cleaner never does.")
         }.font(.caption).foregroundStyle(.secondary).fixedSize()
     }
-    private var quietPhrase: String {
-        switch model.quietHours { case 12: return "12 hours"; case 24: return "a day"; case 72: return "3 days"; default: return "a week" }
-    }
-    private func chip(_ verdict: Verdict?, title: String, items: [Suggestion]) -> some View {
-        let on = filter == verdict
-        let tint = verdict?.tint ?? .accentColor
-        return Button { withAnimation(.snappy(duration: 0.15)) { filter = verdict } } label: {
+    private func chip(_ value: Bool?, title: String, tint: Color, items: [Suggestion], on: Bool) -> some View {
+        Button { withAnimation(.snappy(duration: 0.15)) { filter = value } } label: {
             HStack(spacing: 6) {
-                if let verdict { Circle().fill(verdict.tint).frame(width: 8, height: 8) }
+                if value != nil { Circle().fill(tint).frame(width: 8, height: 8) }
                 Text(title).fontWeight(on ? .semibold : .regular)
                 Text("\(items.count) · \(byteLabel(items.reduce(Int64(0)) { $0 + $1.bytes }))").foregroundStyle(.secondary).monospacedDigit()
             }.font(.callout).padding(.horizontal, 10).padding(.vertical, 5)
                 .background(on ? tint.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
                 .overlay(Capsule().strokeBorder(on ? tint.opacity(0.6) : .clear))
                 .contentShape(Capsule())
-        }.buttonStyle(.plain).help(verdict.map { $0.title + ": " + $0.filter.explanation } ?? "Everything in the list")
+        }.buttonStyle(.plain).help(value == nil ? "Everything in the list" : value! ? "Safe to remove and Rebuildable: removing them loses nothing" : Verdict.check.title + ": " + LocationFilter.check.explanation)
     }
     private func row(_ s: Suggestion, in shown: [Suggestion]) -> some View {
-        let ticked = Binding(get: { model.selectedSuggestions.contains(s.path) }, set: { on in
+        // The value is read here, not inside the binding, so the row redraws when it changes.
+        let isTicked = model.selectedSuggestions.contains(s.path)
+        let ticked = Binding(get: { isTicked }, set: { on in
             // Shift-click ticks or unticks every row between the last one you clicked and this one.
             var paths = [s.path]
             if NSEvent.modifierFlags.contains(.shift), let anchor, let a = shown.firstIndex(where: { $0.path == anchor }), let b = shown.firstIndex(where: { $0.path == s.path }) {

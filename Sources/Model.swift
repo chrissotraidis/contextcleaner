@@ -80,7 +80,7 @@ struct FolderRow: Identifiable {
         if retained != selection { selection = retained }
     }
     /// Free Up Space first: it's what the app is for.
-    @Published var section: AppSection = .freeUp { willSet { placeWillChange() } }
+    @Published var section: AppSection = .overview { willSet { placeWillChange() } }
     @Published var locationFilter: LocationFilter = .all { willSet { placeWillChange() } }
     @Published var editing: String?
     @Published var search = ""
@@ -811,8 +811,6 @@ struct FolderRow: Identifiable {
         var expired: Bool { Date().timeIntervalSince(started) > 1800 }
     }
     @Published private(set) var trashWatch: TrashWatch?
-    /// The footer line was closed; the folders are still watched until they go or half an hour passes.
-    @Published private(set) var trashWatchHidden = false
     /// Every Trash command you copied, newest first, with what became of each item.
     @Published private(set) var cleanups: [Cleanup] = []
     private var trashTimer: Timer?
@@ -877,7 +875,6 @@ struct FolderRow: Identifiable {
         TrashCopyState.shared.finish(paths, copied: result.ready.count, leftOut: result.leftOut.count)
         trashSizes = sizes
         trashWatch = TrashWatch(id: id, paths: result.ready, bytes: result.ready.reduce(0) { $0 + (sizes[$1] ?? 0) }, leftOut: result.leftOut)
-        trashWatchHidden = false
         // Items left out stay ticked, so you can see which they were and the Copy button keeps saying what it copied.
         let gone = result.leftOut.filter { $0.value == .gone }.map(\.key)
         selectedSuggestions.subtract(gone)
@@ -915,8 +912,6 @@ struct FolderRow: Identifiable {
             }
         }
     }
-    /// Hides the footer line. The folders are still watched, and the cleanup is still recorded in History.
-    func dismissTrashWatch() { trashWatchHidden = true }
     /// Saves the current Trash command's state as a new file, and shows it in History.
     private func saveCleanup() {
         guard let watch = trashWatch else { return }

@@ -465,7 +465,7 @@ struct MainView: View {
         }
         if !rows.isEmpty && model.section != .needsAttention {
             Divider()
-            Text("Select a folder to see what it is. ⌘-click or ⇧-click several to add their sizes.").font(.caption).foregroundStyle(.secondary)
+            Text("Select a folder to see what it is. Tick several to add up their sizes and copy one Move-to-Trash command for them.").font(.caption).foregroundStyle(.secondary)
         }
     }
     func summaryRow(_ profile: FolderProfile, value: String, tint: Color) -> some View {

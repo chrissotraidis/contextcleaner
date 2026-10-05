@@ -33,7 +33,7 @@ struct FolderRow: Identifiable {
     var growing: Bool { (change.delta ?? 0) > 0 && (change.delta ?? 0) >= (policy.growthThresholdBytes ?? 0) && !policy.expected }
     /// One plain word, shown only when it tells you something. Empty for an ordinary scanned folder.
     var status: String {
-        if policy.excluded { return "Not scanned" }
+        if policy.excluded { return "Scanning off" }
         if policy.isKept { return "Ignored" }
         if gone { return "Gone" }
         if measurement.state == .pending { return "Not scanned" }
@@ -50,7 +50,7 @@ struct FolderRow: Identifiable {
         if policy.expected { return "Expected" }
         if growing { return "Growing" }
         if policy.isWatched { return "Watching" }
-        if !measurement.processes.isEmpty { return "In use" }
+        if !measurement.processes.isEmpty { return "Open at last scan" }
         return ""
     }
     /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
@@ -79,7 +79,8 @@ struct FolderRow: Identifiable {
         let retained = selection.intersection(visible)
         if retained != selection { selection = retained }
     }
-    @Published var section: AppSection = .overview { willSet { placeWillChange() } }
+    /// Free Up Space first: it's what the app is for.
+    @Published var section: AppSection = .freeUp { willSet { placeWillChange() } }
     @Published var locationFilter: LocationFilter = .all { willSet { placeWillChange() } }
     @Published var editing: String?
     @Published var search = ""
@@ -192,12 +193,15 @@ struct FolderRow: Identifiable {
     @Published var trashBytes: Int64?
     /// Reads the Trash's size in the background. Metadata only; the Trash is never emptied or changed.
     func refreshTrash() {
+        guard !readingTrash else { return }
+        readingTrash = true
         let url = URL(fileURLWithPath: home + "/.Trash")
         DispatchQueue.global(qos: .utility).async {
             let bytes = trashSize(url)
-            DispatchQueue.main.async { if bytes != self.trashBytes { self.trashBytes = bytes } }
+            DispatchQueue.main.async { self.readingTrash = false; if bytes != self.trashBytes { self.trashBytes = bytes } }
         }
     }
+    private var readingTrash = false
     /// Minimum spacing between stored capacity readings.
     static let capacityInterval: TimeInterval = 55 * 60
     /// Appends the current capacity reading when the previous one is at least 55 minutes older.
@@ -404,6 +408,11 @@ struct FolderRow: Identifiable {
         categoryFilter = category; search = ""; section = .locations
         locationFilter = filter; selected = nil; inspector = "Overview"
     }
+    /// Free Up Space, set to list what's sat untouched for at least this long.
+    func showFreeUp(quietHours hours: Int? = nil) {
+        if let hours { quietHours = hours }
+        search = ""; categoryFilter = nil; section = .freeUp
+    }
     /// The Overview chart's range and selected span, shared with "Where the space went".
     @Published var chartRange: UsageRange = .week { didSet { chartSpan = nil } }
     @Published var chartSpan: ClosedRange<Date>?
@@ -489,7 +498,12 @@ struct FolderRow: Identifiable {
             let home = self.home
             let containers = Set(Coverage.entries.filter { $0.kind != .folder }.map { $0.path(home: home) })
             for record in records.sorted(by: { $0.finishedAt < $1.finishedAt }) {
-                for item in record.measurements where item.state != .cancelled && !containers.contains(item.profile.path) { saved[item.profile.path] = item }
+                // A quick scheduled check has short limits; a big folder it couldn't finish keeps the size a full scan found.
+                let quick = record.scope.hasPrefix("Priority")
+                for item in record.measurements where item.state != .cancelled && !containers.contains(item.profile.path) {
+                    if quick && item.state != .measured && saved[item.profile.path]?.state == .measured { continue }
+                    saved[item.profile.path] = item
+                }
             }
             // Older scans saved names from earlier naming rules. Show today's names: subfolders named for
             // themselves, projects named for their own folder. Saved files are never changed.
@@ -609,8 +623,10 @@ struct FolderRow: Identifiable {
         let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
         if totalsCache.key != key { totalsCache = (key, [:]) }
         if let cached = totalsCache.value[verdict] { return cached }
+        // Each byte counts once, for the innermost folder: a worktree's rebuildable build folder isn't also Review first.
+        let own = exclusiveBytes(Verdict.allCases.flatMap { verdictGroups[$0] ?? [] })
         let items = verdictGroups[verdict] ?? []
-        let value = (items.count, uniqueAllocatedTotal(items))
+        let value = (items.count, items.reduce(Int64(0)) { $0 + (own[normalized($1.profile.path)] ?? 0) })
         totalsCache.value[verdict] = value
         return value
     }
@@ -752,7 +768,7 @@ struct FolderRow: Identifiable {
         }
     }
     /// Whether a whole folder may go in a Trash command. Never: virtual machines, simulators, chat history, app libraries
-    /// and model libraries (remove those in their own apps), ignored, turned-off or Leave it folders, and the places
+    /// and model libraries (remove those in their own apps), ignored, turned-off or Not for the Trash folders, and the places
     /// Context Cleaner looks in, such as Downloads, ~/GitHub or Codex scratch, unless that place is itself a cache.
     func mayTrashWhole(_ m: FolderMeasurement) -> Bool {
         let path = m.profile.path, category = m.profile.category
@@ -765,14 +781,15 @@ struct FolderRow: Identifiable {
         return adviceFor(m).verdict != .keep
     }
     /// The folders from a Folders selection a single Trash command may move, each once (a folder inside another goes with it).
-    /// Only Safe and Rebuildable folders: nothing is lost. Might hold work folders are copied one at a time from their card,
+    /// Only Safe and Rebuildable folders: nothing is lost. Review first folders are copied one at a time from their card,
     /// or ticked in Free up space once they've sat untouched.
-    func trashable(_ paths: [String]) -> (paths: [String], skipped: Int) {
+    func trashable(_ paths: [String], includeReview: Bool = false) -> (paths: [String], skipped: Int) {
         let known = Dictionary(baseMeasures().map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let allowed: Set<Verdict> = includeReview ? [.safe, .rebuild, .check] : [.safe, .rebuild]
         var ready: [String] = []
         for path in paths.sorted(by: { $0.count < $1.count }) {
             guard let m = known[path], m.state == .measured, !trashedSinceScan.contains(path), mayTrashWhole(m),
-                  [.safe, .rebuild].contains(adviceFor(m).verdict) else { continue }
+                  allowed.contains(adviceFor(m).verdict) else { continue }
             if hasAncestor(in: Set(ready), path) { continue }
             ready.append(path)
         }
@@ -1052,7 +1069,12 @@ struct FolderRow: Identifiable {
         setAppearance(current == .dark ? "Light" : "Dark")
     }
     func checkScheduledPass(now: Date = Date()) {
-        guard let store, !running, !inspecting, !discovering, ScanPlanner.dailyDue(preferences, now: now) else { return }
+        guard !running, !inspecting, !discovering, ScanPlanner.dailyDue(preferences, now: now) else { return }
+        runScheduledCheck(now: now)
+    }
+    /// The scheduled check, now: watched and growing folders first, then those checked longest ago.
+    func runScheduledCheck(now: Date = Date()) {
+        guard let store, !running, !inspecting, !discovering else { return }
         var next = preferences; next.lastScheduledAttempt = now
         do { try store.save(next); preferences = next }
         catch { self.error = "Daily attempt could not be recorded: \(error.localizedDescription)"; return }
@@ -1224,6 +1246,15 @@ struct FolderRow: Identifiable {
             "**\(m.profile.displayName.replacingOccurrences(of: "*", with: ""))** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown") · \(a.short)"
         }
         let safe = verdictGroups[.safe] ?? [], rebuild = verdictGroups[.rebuild] ?? [], check = verdictGroups[.check] ?? [], keep = verdictGroups[.keep] ?? []
+        // What Free Up Space lists now: the quickest win, first.
+        let quick = suggestionList
+        text += "## Free up space now · \(byteLabel(quick.reduce(Int64(0)) { $0 + $1.bytes })) in \(quick.count) \(quick.count == 1 ? "item" : "items") untouched for \(quietHours >= 24 ? "\(quietHours / 24) \(quietHours == 24 ? "day" : "days")" : "\(quietHours) hours") or longer\n\n"
+        for s in quick.prefix(60) { text += "- [ ] **\(s.name.replacingOccurrences(of: "*", with: ""))** · \(byteLabel(s.bytes)) · \(s.cost.title) · \(s.why)\n  `\(s.path)`\n" }
+        if quick.count > 60 { text += "- and \(quick.count - 60) more in the app\n" }
+        let easy = quick.filter { [.safe, .rebuild].contains($0.cost) }.map(\.path)
+        let command = trashCommand(easy)
+        if !easy.isEmpty && command.utf8.count <= trashInlineLimit { text += "\nOne command for the \(easy.count) Safe to remove and Rebuildable items above:\n\n```\n\(command)\n```\n" }
+        text += "\n"
         text += "## 1. Safe to remove · \(byteLabel(uniqueAllocatedTotal(safe))) in \(safe.count) \(safe.count == 1 ? "folder" : "folders")\n\n"
         text += safe.isEmpty ? "Nothing yet. Scan again after a few days of normal work.\n\n" : ""
         for m in safe {
@@ -1243,15 +1274,15 @@ struct FolderRow: Identifiable {
             let a = adviceFor(m)
             text += "- [ ] " + line(m, a) + "\n  `\(m.profile.path)`\n"
         }
-        text += "\n## 4. Might hold work · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nMay hold the only copy of something. Look at each first. Biggest first.\n\n"
+        text += "\n## 4. Review first · \(byteLabel(uniqueAllocatedTotal(check))) in \(check.count) \(check.count == 1 ? "folder" : "folders")\n\nMay hold the only copy of something. Look at each first. Biggest first.\n\n"
         for m in check.prefix(40) {
             let a = adviceFor(m)
             text += "- " + line(m, a) + "\n  \(a.reason)\n" + a.evidence.map { "  \($0)\n" }.joined() + "  `\(m.profile.path)`\n"
         }
         if check.count > 40 { text += "- and \(check.count - 40) more in the app\n" }
         let kept = keptSummary
-        text += "\n## 5. Leave it, or ignored by you · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries and chat history (manage these inside their own apps), and folders you chose to ignore.\n\n"
-        for m in keep + kept.kept { text += "- **\(m.profile.displayName)** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown")\n" }
+        text += "\n## 5. Not for the Trash, or ignored by you · \(byteLabel(uniqueAllocatedTotal(keep) + kept.keptBytes))\n\nApp libraries and chat history (manage these inside their own apps), and folders you chose to ignore.\n\n"
+        for m in (keep + kept.kept).filter({ ($0.allocatedBytes ?? 0) >= 1_048_576 }) { text += "- **\(m.profile.displayName)** · \(m.allocatedBytes.map(byteLabel) ?? "size unknown")\n" }
         return text
     }
     func exportReport() { reportPreview = buildReport() }

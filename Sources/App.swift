@@ -15,6 +15,7 @@ struct MainView: View {
     @State var showInside = false
     @State var showDetails = false
     @State var historyTab = 0
+    @State var showEmptyCleanups = false
     let timer = Timer.publish(every: 300, on: .main, in: .common).autoconnect()
     /// Often enough that anything you moved yourself, in Terminal or Finder, leaves Free up space within seconds.
     let goneTimer = Timer.publish(every: 10, on: .main, in: .common).autoconnect()
@@ -36,7 +37,8 @@ struct MainView: View {
             VStack(spacing: 0) {
                 header
                 scanBanner
-                if model.section == .overview { Dashboard(model: model) }
+                if model.section == .freeUp { FreeUpView(model: model) }
+                else if model.section == .overview { Dashboard(model: model) }
                 else if model.section == .history { history }
                 else {
                     // A fixed proportional split never reports a width larger than the window,
@@ -60,7 +62,7 @@ struct MainView: View {
         .onChange(of: model.selected) { _, _ in model.inspector = "Overview"; showInside = false; showDetails = false }
         .onChange(of: model.inspector) { _, value in if value == "Contents" { showInside = true } }
         .onChange(of: model.search) { _, value in
-            if !value.isEmpty && model.section == .overview { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil }
+            if !value.isEmpty && [.overview, .freeUp, .history].contains(model.section) { model.section = .locations; model.locationFilter = .all; model.categoryFilter = nil }
             model.retainVisibleSelection()
         }
         .onChange(of: model.section) { _, _ in model.retainVisibleSelection() }
@@ -88,6 +90,8 @@ struct MainView: View {
             ToolbarItemGroup {
                 Button { model.exportReport() } label: { Label("Export Cleanup List…", systemImage: "checklist") }
                     .help("Preview a Markdown report of the folders shown here, then save it (Shift-Command-E)")
+                SettingsLink { Label("Settings", systemImage: "gearshape") }
+                    .help("Settings: scheduled checks, permissions and where Context Cleaner looks (Command-,)")
             }
         }
         .searchable(text: $model.search, prompt: "Search folders, apps, projects, tags")
@@ -105,7 +109,9 @@ struct MainView: View {
             model.checkScheduledPass()
         }
         .onReceive(goneTimer) { _ in model.checkVanished() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.checkVanished() }
+        // Coming back from Terminal or Finder is when things have moved: check what's gone, and the Trash.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.checkVanished(); model.refreshTrash() }
+        .task { model.refreshTrash() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.cancellation.cancel(); model.inspectionCancellation.cancel() }
     }
     var header: some View {
@@ -123,7 +129,7 @@ struct MainView: View {
                     Text("\(byteLabel(v.free)) free of \(byteLabel(v.total))").font(.caption).monospacedDigit()
                     ProportionBar(value: Double(v.used) / Double(max(v.total, 1)), tint: .accentColor).frame(width: 160)
                 }.help("Checked \(v.date.formatted(date: .omitted, time: .shortened))")
-            } else { CapsuleLabel(text: "Never deletes files", symbol: "lock.shield") }
+            }
         }.padding(.horizontal, 22).padding(.top, 10).padding(.bottom, 10)
     }
     /// Scope and progress while a scan runs, then a one-line result.
@@ -176,12 +182,13 @@ struct MainView: View {
     @ViewBuilder var filterBar: some View {
         if model.section == .locations {
             // The answer first: how much is safe, how much needs a look, how much to keep. Each tile is a filter.
-            let others: [LocationFilter] = [.inside, .growing, .unscanned, .reviewLater]
+            let others: [LocationFilter] = [.inside, .growing, .unscanned, .reviewLater, .keep]
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     let scanned = Verdict.allCases.reduce(0) { $0 + model.verdictTotal($1).count }
                     VerdictTile(title: "All folders", value: "\(scanned) scanned", detail: "not counting ignored", symbol: "folder.fill", tint: .accentColor, selected: model.locationFilter == .all) { model.locationFilter = .all }
-                    ForEach(Verdict.allCases) { verdict in
+                    // Not for the Trash isn't a tile: nothing in it frees space. It's under More lists.
+                    ForEach([Verdict.safe, .rebuild, .check]) { verdict in
                         let total = model.verdictTotal(verdict)
                         VerdictTile(title: verdict.shortTitle, value: byteLabel(total.bytes), detail: "\(total.count) · \(verdict.hint)", symbol: verdict.symbol, tint: verdict.tint, selected: model.locationFilter == verdict.filter) { model.locationFilter = verdict.filter }
                             .help(verdict.title + ": " + verdict.meaning)
@@ -191,6 +198,14 @@ struct MainView: View {
                     let hidden = model.gone.isEmpty || model.locationFilter == .excluded ? "" : " · \(model.gone.count) \(model.gone.count == 1 ? "folder" : "folders") no longer on disk \(model.gone.count == 1 ? "is" : "are") hidden"
                     Text((model.search.isEmpty ? model.locationFilter.explanation : "\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags") + hidden).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Spacer()
+                    if model.locationFilter == .inside {
+                        Button("List Them in Free Up Space") { model.showFreeUp(quietHours: 168) }.controlSize(.small)
+                            .help("Free Up Space lists each old item on its own, so you can tick them and copy one command")
+                    } else if !model.rows.isEmpty {
+                        // Selecting is how Folders gets a Trash command: the summary on the right has the Copy button.
+                        Button("Select All \(model.rows.count)") { model.selection = Set(model.rows.filter { !$0.gone }.map(\.id)) }.controlSize(.small)
+                            .help("Selects every folder shown. The panel on the right then copies one Move-to-Trash command for them (Shift-Command-C).")
+                    }
                     orderMenu
                     Menu {
                         ForEach(others) { filter in
@@ -254,11 +269,14 @@ struct MainView: View {
                         .allowsHitTesting(false)
                 }
                 if !summary.off.isEmpty {
-                    VerdictTile(title: "Not scanned", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) of your disk · last known size", symbol: "eye.slash", tint: .ignored, selected: false) {}
+                    let newest = summary.off.map(\.observedAt).max()
+                    VerdictTile(title: "Scanning off", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) of your disk · " + (newest.map { "sizes from " + ageText($0) } ?? "sizes from before you turned it off"), symbol: "eye.slash", tint: .ignored, selected: false) {}
                         .allowsHitTesting(false)
                 }
             }
-            Text("Right-click any folder and choose Ignore This Folder (still scanned, never suggested) or Stop Scanning This Folder. Right-click it here to undo.")
+            Text(summary.off.isEmpty
+                 ? "Ignored folders are still scanned but never suggested. Select one and choose Stop Ignoring to get suggestions for it again."
+                 : "Ignored: still scanned, never suggested. Scanning off: not read at all, so the size is the last one seen before you turned scanning off, and Context Cleaner can't tell what inside could go. Select one and choose Turn Scanning Back On to get answers for it.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.padding(.horizontal, 16).padding(.bottom, 8)
     }
@@ -281,15 +299,14 @@ struct MainView: View {
         Table(model.sortedRows(sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
-                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
+                    Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }
                     Text([locationHint(row.id) ?? row.app, row.category, row.status].filter { !$0.isEmpty }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        .help(row.measurement.profile.path)
-                }
+                }.help(row.measurement.profile.path)
             }.width(min: 170, ideal: 240)
             TableColumn("Can I remove it?", value: \.verdictRank) { row in
                 Group {
                     if row.gone { Text("Gone").font(.caption).foregroundStyle(.secondary) }
-                    else if row.policy.excluded { Label("Not scanned", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
+                    else if row.policy.excluded { Label("Scanning off", systemImage: "eye.slash").font(.caption).foregroundStyle(.secondary) }
                     else if row.policy.isKept { Label("Ignored", systemImage: "eye.slash.fill").font(.caption.weight(.semibold)).foregroundStyle(selectedRow(row.id) ? Color.white : Color.ignored) }
                     else if row.measurement.state == .pending { Text("Scan first").font(.caption).foregroundStyle(.secondary) }
                     else {
@@ -312,9 +329,7 @@ struct MainView: View {
                         .foregroundStyle(row.advice.lastUsed == nil ? Color.secondary : Color.primary)
                     // Only say where the size came from when it isn't today's scan.
                     if let source = sizeSourceText(row.measurement), source != "size from today" { Text(source).font(.caption).foregroundStyle(.secondary) }
-                }.help(row.advice.lastUsed == nil && row.measurement.state == .measured && row.measurement.scopeID != xcodeLiveScope
-                       ? "Older scans didn't record when files here last changed. Scan this folder to find out."
-                       : "Last used: the newest change a scan saw inside it, or when Xcode last ran a test device.")
+                }
             }.width(min: 90, ideal: 110)
         }
         .contextMenu(forSelectionType: String.self) { paths in
@@ -376,10 +391,19 @@ struct MainView: View {
                     Text(summary.unmeasured > 0 ? "Added together, counting folders inside others once. \(summary.unmeasured) not scanned yet." : "Added together, counting folders inside others once.").font(.caption).foregroundStyle(.secondary)
                     // The Trash command first, so it's in reach however many folders are selected.
                     let trash = model.trashable(Array(model.selection))
-                    TrashCopyButton(paths: trash.paths, prominent: true)
+                    let withReview = model.trashable(Array(model.selection), includeReview: true)
+                    let review = withReview.paths.count - trash.paths.count
+                    TrashCopyButton(paths: trash.paths, prominent: true, shortcut: true)
                     Text(trash.skipped == 0 ? "One command for every folder selected."
-                         : "For the \(trash.paths.count) Safe and Rebuildable \(trash.paths.count == 1 ? "folder" : "folders"). Leaves out \(trash.skipped): Might hold work folders (copy each from its card, or tick it in Free up space), folders inside others, and places you remove in their own apps.")
+                         : "For the \(trash.paths.count) Safe to remove and Rebuildable \(trash.paths.count == 1 ? "folder" : "folders"): nothing is lost." + (review > 0 ? "" : " Leaves out \(trash.skipped): folders inside others, and places you remove in their own apps."))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    if review > 0 {
+                        VStack(alignment: .leading, spacing: 6) {
+                            TrashCopyButton(paths: withReview.paths, label: "Copy Command Including Review First")
+                            Text("Includes \(review) Review first \(review == 1 ? "folder" : "folders") too. Each may hold something that exists only there, such as files made by hand or a backup, so only include them once you've looked.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(Verdict.check.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
                     Divider()
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
@@ -485,6 +509,16 @@ struct MainView: View {
                         trashPath: model.mayTrashWhole(item) ? path : nil)
         }
         if simulatorRoot { simulatorDeviceList() }
+        if policy.excluded {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Scanning off", systemImage: "eye.slash").font(.headline).foregroundStyle(Color.ignored)
+                Text("You turned scanning off for this folder, so Context Cleaner doesn't read it. " + (item.state == .measured ? "Its size is from \(ageText(item.observedAt)), before that. " : "") + "It can't tell what inside could go until it's scanned again.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                Button("Turn Scanning Back On", systemImage: "eye") { model.policy(path) { $0.excluded = false }; model.scan(selectedOnly: true) }
+                    .disabled(busy).help("Turns scanning back on for this folder and scans it now. It only reads sizes.")
+            }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Color.ignored.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        }
+        InsideBreakdown(model: model, item: item)
         if item.state != .measured && item.state != .pending {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: item.state.problemSymbol).foregroundStyle(Color.attention).accessibilityHidden(true)
@@ -652,6 +686,7 @@ struct MainView: View {
     /// What you cleaned up, and what each scan found.
     var history: some View {
         VStack(spacing: 0) {
+            HistorySummary(model: model).padding(.horizontal, 22).padding(.bottom, 4)
             Picker("History", selection: $historyTab) { Text("Cleanups").tag(0); Text("Scans").tag(1) }
                 .pickerStyle(.segmented).labelsHidden().fixedSize().padding(.vertical, 8)
             if historyTab == 0 { cleanupHistory } else { scanHistory }
@@ -663,18 +698,18 @@ struct MainView: View {
     }
     /// Every Move-to-Trash command you copied, newest first: what was moved, what wasn't, and what was left out and why.
     var cleanupHistory: some View {
-        let list = model.cleanups
+        // Copies that left everything out (it was all gone or changed) moved nothing; they're folded into one line.
+        let empty = model.cleanups.filter { $0.items.count == $0.count(.leftOut) }
+        let list = showEmptyCleanups ? model.cleanups : model.cleanups.filter { $0.items.count > $0.count(.leftOut) }
         let calendar = Calendar.current
         let days = Dictionary(grouping: list, by: { calendar.startOfDay(for: $0.copiedAt) }).sorted { $0.key > $1.key }
-        let week = list.filter { Date().timeIntervalSince($0.copiedAt) < 7 * 86400 }
         return List {
-            if !week.isEmpty {
-                let moved = week.reduce(0) { $0 + $1.count(.moved) }, bytes = week.reduce(Int64(0)) { $0 + $1.bytes(.moved) }
-                Label("In the last 7 days you moved \(moved) \(moved == 1 ? "item" : "items") to the Trash: \(byteLabel(bytes)).", systemImage: "trash")
-                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-            }
             ForEach(days, id: \.key) { day, items in
                 Section(dayTitle(day)) { ForEach(items) { cleanupRow($0) } }
+            }
+            if !empty.isEmpty {
+                Button(showEmptyCleanups ? "Hide the \(empty.count) copies that moved nothing" : "\(empty.count) more \(empty.count == 1 ? "copy" : "copies") moved nothing: everything in them was already gone or had changed. Show them") { showEmptyCleanups.toggle() }
+                    .buttonStyle(.link).font(.callout)
             }
         }.overlay { if list.isEmpty { ContentUnavailableView("No cleanups yet", systemImage: "trash", description: Text("When you copy a Move-to-Trash command, it shows up here: what was moved, what wasn't, and anything left out.")) } }
     }
@@ -797,7 +832,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
             if let error = model.error { Text(error).font(.caption).foregroundStyle(Color.attention).textSelection(.enabled).lineLimit(3) }
-            if let watch = model.trashWatch, !model.trashWatchHidden, model.section != .overview { TrashWatchLine(model: model, watch: watch) }
+            if let watch = model.trashWatch, !model.trashWatchHidden, model.section != .freeUp { TrashWatchLine(model: model, watch: watch) }
             HStack(spacing: 6) {
                 Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking watched and growing folders daily while open." : "Checking watched and growing folders weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
@@ -808,6 +843,111 @@ struct MainView: View {
     }
 }
 struct EditTarget: Identifiable { var id: String }
+/// The About panel: what Context Cleaner is, what it never does, and where to find more.
+func showAboutPanel() {
+    let body = NSMutableAttributedString()
+    let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center; paragraph.paragraphSpacing = 6
+    func add(_ text: String, size: CGFloat = 11, color: NSColor = .labelColor, link: String? = nil) {
+        var attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: size), .foregroundColor: color, .paragraphStyle: paragraph]
+        if let link, let url = URL(string: link) { attributes[.link] = url }
+        body.append(NSAttributedString(string: text, attributes: attributes))
+    }
+    add("Finds the build output, caches, Codex worktrees and scratch folders filling your Mac, says what each one is and whether you'll miss it, and copies one Terminal command that moves what you pick to the Trash.\n")
+    add("It never deletes anything itself. No network, no accounts, no analytics.\n", color: .secondaryLabelColor)
+    add("GitHub", link: "https://github.com/chrissotraidis/contextcleaner"); add("  ·  ")
+    add("What's new", link: "https://github.com/chrissotraidis/contextcleaner/blob/main/docs/CHANGELOG.md"); add("  ·  ")
+    add("Report a problem", link: "https://github.com/chrissotraidis/contextcleaner/issues/new/choose")
+    NSApplication.shared.activate(ignoringOtherApps: true)
+    NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: body])
+}
+/// History at a glance: what you've moved to the Trash, day by day, how many cleanups and scans, and the Trash itself.
+struct HistorySummary: View {
+    @ObservedObject var model: CleanerModel
+    private struct Day: Identifiable { let day: Date; let bytes: Int64; var id: Date { day } }
+    var body: some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        let cleanups = model.cleanups
+        let moved = Dictionary(grouping: cleanups.filter { $0.copiedAt >= start }, by: { calendar.startOfDay(for: $0.copiedAt) }).mapValues { $0.reduce(Int64(0)) { $0 + $1.bytes(.moved) } }
+        let days = (0..<30).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }.map { Day(day: $0, bytes: moved[$0] ?? 0) }
+        let week = cleanups.filter { Date().timeIntervalSince($0.copiedAt) < 7 * 86400 }
+        let allBytes = cleanups.reduce(Int64(0)) { $0 + $1.bytes(.moved) }
+        let monthBytes = days.reduce(Int64(0)) { $0 + $1.bytes }
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
+                stat("Moved to the Trash, last 7 days", byteLabel(week.reduce(Int64(0)) { $0 + $1.bytes(.moved) }), "\(week.reduce(0) { $0 + $1.count(.moved) }) items")
+                stat("All time", byteLabel(allBytes), "\(cleanups.filter { $0.count(.moved) > 0 }.count) cleanups · \(model.records.count) scans")
+                HStack(spacing: 6) {
+                    Image(systemName: "trash").foregroundStyle(.secondary).accessibilityHidden(true)
+                    Text(model.trashBytes.map { "The Trash holds \(byteLabel($0))" } ?? "Space comes back when you empty the Trash").monospacedDigit()
+                    Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.buttonStyle(.link)
+                }.font(.caption).foregroundStyle(.secondary)
+            }.frame(width: 240, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Moved to the Trash each day · \(byteLabel(monthBytes)) in 30 days").font(.caption).foregroundStyle(.secondary)
+                Chart(days) { day in
+                    BarMark(x: .value("Day", day.day, unit: .day), y: .value("Moved", Double(day.bytes) / 1_073_741_824))
+                        .foregroundStyle(Color.stable.gradient)
+                        .accessibilityLabel(day.day.formatted(.dateTime.month().day()))
+                        .accessibilityValue(byteLabel(day.bytes))
+                }
+                .chartYAxis { AxisMarks(position: .leading) { value in AxisGridLine(); AxisValueLabel { if let gib = value.as(Double.self) { Text(byteLabel(Int64(gib * 1_073_741_824))) } } } }
+                .chartXAxis { AxisMarks(values: .stride(by: .day, count: 7)) { _ in AxisGridLine(); AxisValueLabel(format: .dateTime.month(.abbreviated).day()) } }
+                .frame(height: 110)
+            }.frame(maxWidth: .infinity)
+        }.padding(14).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
+    }
+    private func stat(_ title: String, _ value: String, _ detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.title2.weight(.semibold)).monospacedDigit()
+            Text(detail).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+}
+/// What's inside a folder only its app understands, such as a virtual machine or Ollama's models, with a command for each
+/// part that has a safe one. Read when the folder is shown; metadata and small manifests only.
+struct InsideBreakdown: View {
+    @ObservedObject var model: CleanerModel
+    let item: FolderMeasurement
+    @State private var parts: [InsidePart] = []
+    @State private var copied: String?
+    var body: some View {
+        let path = item.profile.path
+        // Always a view, even before the parts are read: an empty Group never starts its task.
+        VStack(alignment: .leading, spacing: 0) {
+            if !parts.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Inside it").font(.headline)
+                    ForEach(parts) { part in
+                        HStack(alignment: .top, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(part.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                                Text(part.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            Text(byteLabel(part.bytes)).font(.callout).monospacedDigit()
+                            if let command = part.command {
+                                Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string); copied = part.id } label: {
+                                    Image(systemName: copied == part.id ? "checkmark" : "doc.on.clipboard")
+                                }.buttonStyle(.borderless).help("Copy: " + command + ". Paste it in Terminal to remove just this model.").accessibilityLabel("Copy remove command for " + part.name)
+                            }
+                        }
+                    }
+                    if parts.contains(where: { $0.command != nil }) {
+                        Text("Each copy button copies the command that removes just that model, for example \(parts.first(where: { $0.command != nil })?.command ?? ""). Download it again any time.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            } else { Color.clear.frame(height: 0) }
+        }
+        .task(id: path) {
+            copied = nil
+            parts = await Task.detached(priority: .utility) { insideParts(path) }.value
+        }
+    }
+}
 struct PolicyEditor: View {
     let path: String
     @State var value: LocationPolicy
@@ -854,6 +994,7 @@ struct PolicyEditor: View {
     var body: some Scene {
         WindowGroup("Context Cleaner") { MainView(model: model) }.defaultSize(width: 1480, height: 920)
             .commands {
+                CommandGroup(replacing: .appInfo) { Button("About Context Cleaner") { showAboutPanel() } }
                 CommandGroup(replacing: .newItem) {}
                 CommandGroup(after: .importExport) {
                     Button("Add Folder to Scan…") { model.addRoot() }.keyboardShortcut("o", modifiers: [.command, .shift])
@@ -921,7 +1062,7 @@ struct ReportPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Export cleanup list").font(.title2.weight(.semibold))
-            Text("A checklist of what you can remove, biggest first: safe folders, old items inside folders, rebuildable folders, and folders that might hold work, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("A checklist of what you can remove, biggest first: safe folders, old items inside folders, rebuildable folders, and folders to review first, each with its path and how to remove it yourself. It's a Markdown file you can keep, print or share. It stays on your Mac unless you share it.").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             let excerpt = text.count > 6000 ? String(text.prefix(6000)) + "\n\n… preview shortened. The saved file has the whole list." : text
             ScrollView { Text(excerpt).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(12) }
                 .background(.background.secondary)

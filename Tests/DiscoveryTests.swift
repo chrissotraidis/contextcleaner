@@ -122,6 +122,13 @@ import Foundation
         watchModel.records = [ScanRecord(id: "issue-test", startedAt: t1, finishedAt: t1, scope: "fixture", complete: false, measurements: [failed, stoppedFolder], discoveryNotes: [])]
         watchModel.section = .needsAttention
         check(watchModel.attentionCount == 1 && watchModel.rows.map(\.id) == [steady.path], "scan issues include access failures but not pending or user-stopped folders")
+        // A quick scheduled check that can't finish a big folder keeps the size a full scan found; a full scan's failure still shows.
+        var tooBig = measure(steady, 0, t1.addingTimeInterval(60)); tooBig.state = .limited; tooBig.allocatedBytes = nil
+        let full = ScanRecord(id: "full", startedAt: t0, finishedAt: t0, scope: "Known and selected locations", complete: true, measurements: [measure(steady, 5_000_000_000, t0)], discoveryNotes: [])
+        watchModel.records = [full, ScanRecord(id: "quick", startedAt: t1, finishedAt: t1.addingTimeInterval(60), scope: "Priority locations (up to 12)", complete: true, measurements: [tooBig], discoveryNotes: [])]
+        check(watchModel.latest.first { $0.profile.path == steady.path }?.allocatedBytes == 5_000_000_000 && watchModel.attentionCount == 0, "a scheduled check that hits its limit keeps the full scan's size")
+        watchModel.records = [full, ScanRecord(id: "full-later", startedAt: t1, finishedAt: t1.addingTimeInterval(60), scope: "Known and selected locations", complete: true, measurements: [tooBig], discoveryNotes: [])]
+        check(watchModel.attentionCount == 1, "a full scan that hits its limit still shows under Couldn't Scan")
         // Hourly capacity readings: a timestamp and two numbers, appended, never removed.
         let capacityModel = CleanerModel(home: home, dataRoot: storage.root)
         let startCount = capacityModel.capacity.count
@@ -190,11 +197,13 @@ import Foundation
         navModel.records = verdictModel.records
         navModel.section = .overview
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        // The app opens on Free Up Space; moving to the Overview is its own step.
+        let startSteps = navModel.backStack.count
         navModel.open(buildProfile.path)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         navModel.selected = libraryProfile.path
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        let afterClicks = navModel.backStack.count
+        let afterClicks = navModel.backStack.count - startSteps
         navModel.goBack()
         check(afterClicks == 1 && navModel.section == .overview && navModel.selected == nil && navModel.forwardStack.count == 1,
               "Back returns to the Overview in one step; clicking between listed rows isn't a separate step")

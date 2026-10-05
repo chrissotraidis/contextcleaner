@@ -132,6 +132,34 @@ import Foundation
             check(output.contains("Moved 0 of 301 items to the Trash.") && output.contains("301 already gone.") && output.contains("line\nbreak"),
                   "\(shell) reads every path from the list, quotes, accents and line breaks included")
         }
+        try insideChecks(base.appendingPathComponent("inside"))
         print("SUCCESS: \(count) detail checks; all fixtures preserved at \(base.path)")
+    }
+    /// 0.20: what's inside a Parallels machine and an Ollama models folder, from fixtures shaped like the real ones.
+    static func insideChecks(_ base: URL) throws {
+        let fm = FileManager.default
+        let pvm = base.appendingPathComponent("Parallels/Windows 11.pvm")
+        try fm.createDirectory(at: pvm.appendingPathComponent("harddisk.hdd"), withIntermediateDirectories: true)
+        try writeNew(Data(repeating: 1, count: 300_000), to: pvm.appendingPathComponent("harddisk.hdd/harddisk.hdd.0.{a}.hds"))
+        try writeNew(Data(repeating: 1, count: 100_000), to: pvm.appendingPathComponent("harddisk.hdd/harddisk.hdd.0.{b}.hds"))
+        try writeNew(Data(repeating: 2, count: 50_000), to: pvm.appendingPathComponent("{c}.mem"))
+        try writeNew(Data(repeating: 3, count: 9_000), to: pvm.appendingPathComponent("parallels.log"))
+        let vm = parallelsParts(pvm.path)
+        check(vm.map(\.name) == ["Disk image and 1 snapshot", "Suspended memory", "Logs"] && vm[0].bytes >= 400_000 && vm[1].bytes >= 50_000, "a Parallels machine is broken into its disk image and snapshots, suspended memory and logs")
+        let models = base.appendingPathComponent(".ollama/models")
+        func manifest(_ path: String, _ layers: [(String, Int64)]) throws {
+            let url = models.appendingPathComponent("manifests/" + path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let json = "{\"config\":{\"digest\":\"sha256:config-\(path.count)-\(layers.count)\",\"size\":10},\"layers\":[" + layers.map { "{\"digest\":\"\($0.0)\",\"size\":\($0.1)}" }.joined(separator: ",") + "]}"
+            try writeNew(Data(json.utf8), to: url)
+        }
+        try manifest("registry.ollama.ai/library/gemma4/31b", [("sha256:a", 30_000_000_000)])
+        try manifest("registry.ollama.ai/someone/qwen/q8_0", [("sha256:b", 20_000_000_000), ("sha256:shared", 200_000_000)])
+        try manifest("registry.ollama.ai/someone/qwen/mlx", [("sha256:d", 5_000_000_000), ("sha256:shared", 200_000_000)])
+        let list = ollamaModels(models.path)
+        check(list.map(\.name) == ["gemma4:31b", "someone/qwen:q8_0", "someone/qwen:mlx"] && list[0].command == "ollama rm gemma4:31b" && list[0].bytes == 30_000_000_010,
+              "Ollama models are named as ollama list names them, biggest first, each with the command that removes just it")
+        check(list[1].detail.contains("shares") && !list[0].detail.contains("shares"), "a layer two models share is marked, since it's only freed when both go")
+        check(insideParts(models.path).count == 3 && insideParts(base.path).isEmpty, "only folders with a known layout are broken down")
     }
 }

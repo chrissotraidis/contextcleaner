@@ -2,7 +2,7 @@
 
 Source of truth for every screen. Grounded in Apple's Human Interface Guidelines for macOS (sidebars, toolbars, charts, color, writing) and the Liquid Glass adoption guidance. When code and this document disagree, fix the code.
 
-> **Current vocabulary (0.18).** The four answers are **Safe to remove**, **Rebuildable**, **Might hold work** and **Leave it**. Folders you set aside are **Ignored**, and **History** holds Cleanups and Scans. Sections below are kept as written for their release, so older ones say Check first, Keep, Kept or Scan History.
+> **Current vocabulary (0.20).** The four answers are **Safe to remove**, **Rebuildable**, **Review first** and **Not for the Trash**. Folders you set aside are **Ignored**: *ignored* (still scanned, never suggested) or *scanning off* (not read; last size seen). **Free Up Space** is the first page and the main action; **History** holds Cleanups and Scans. "Never deletes" is said once, in the sidebar. Sections below are kept as written for their release, so older ones say Check first, Might hold work, Leave it, Keep, Kept or Scan History.
 
 ## 0.9 spec — calm, visual, obvious
 

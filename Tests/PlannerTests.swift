@@ -45,6 +45,11 @@ import Foundation
         check(ScanPlanner.priority(profiles, preferences: recurring, records: [records[0]], now: now).first?.path == profiles[15].path, "legacy Recurring locations receive Watching priority")
         recurring.locations[profiles[15].path]!.isWatched = false
         check(ScanPlanner.priority(profiles, preferences: recurring, records: [records[0]], now: now).first?.path != profiles[15].path, "Stop Watching removes legacy scheduling priority")
+        var nextSchedule = Preferences(); nextSchedule.schedule = "daily"; nextSchedule.lastScheduledAttempt = now
+        check(ScanPlanner.nextCheck(nextSchedule) == now.addingTimeInterval(86400) && ScanPlanner.dailyDue(nextSchedule, now: now.addingTimeInterval(86400)) && !ScanPlanner.dailyDue(nextSchedule, now: now.addingTimeInterval(3600)),
+              "a daily check is due a day after the last one, not before")
+        var weekly = nextSchedule; weekly.schedule = "weekly"
+        check(ScanPlanner.nextCheck(weekly) == now.addingTimeInterval(7 * 86400) && ScanPlanner.nextCheck(Preferences()) == nil, "a weekly check waits a week; none when checks are off")
         print("SUCCESS: \(count) planner checks; no filesystem mutations.")
     }
 }

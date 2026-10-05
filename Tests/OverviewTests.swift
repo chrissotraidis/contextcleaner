@@ -340,7 +340,7 @@ import Foundation
         let backupList = suggestions([generated, phoneBackup, recovery], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now)
         let deviceBackups = backupList.first { $0.name == "device-backups" }, toolchains = backupList.first { $0.name == "toolchains" }
         check(deviceBackups?.cost == .check && deviceBackups?.backup == true && deviceBackups?.why.hasPrefix("Looks like a backup") == true && toolchains?.cost == .rebuild && toolchains?.backup == false,
-              "a backup inside build output is Might hold work and marked; the build next to it stays rebuildable")
+              "a backup inside build output is Review first and marked; the build next to it stays rebuildable")
         check(backupList.first { $0.name.contains("iphone-ballpad-backup") }?.backup == true && !backupList.contains { $0.path == recovery.profile.path },
               "a backup in scratch is marked, and a recovery copy waits three days before it's listed")
         check(suggestions([recovery], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now.addingTimeInterval(3 * 86400)).first?.backup == true, "an old recovery copy is listed, marked as a backup")
@@ -361,7 +361,7 @@ import Foundation
               && worktreeAdvice(cleanTree, .read(kept(branch: nil)), now: now).verdict == .check && worktreeAdvice(cleanTree, .read(kept(changes: nil)), now: now).verdict == .check
               && worktreeAdvice(cleanTree, .read(kept(main: "/nonexistent/repository")), now: now).short == "Repository gone"
               && worktreeAdvice(cleanTree, .unread, now: now).short == "Checking git…" && worktreeAdvice(cleanTree, .noRepository, now: now).verdict == .check,
-              "uncommitted work, files git doesn't keep, unpushed detached commits, a missing repository or no answer from git keep a worktree Might hold work")
+              "uncommitted work, files git doesn't keep, unpushed detached commits, a missing repository or no answer from git keep a worktree Review first")
         let states = [cleanTree.profile.path: kept(), oldTree.profile.path: kept(), dirtyTree.profile.path: kept(changes: 3)]
         let variants = [kept(), kept(changes: 2), kept(changes: nil), kept(ignored: ["ref/"]), kept(branch: nil), kept(main: "/nonexistent/repository"), kept(main: "/")]
         check(variants.allSatisfy { [.safe, .rebuild].contains(worktreeAdvice(cleanTree, .read($0), now: now).verdict) == $0.keepsEverything },
@@ -387,8 +387,27 @@ import Foundation
                                        fileTypes: [], listedChildren: 3, retainedLimit: 512, omittedEntries: 0)
         let tempList = suggestions([temp], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 24 * 3600, now: now)
         check(tempList.map(\.name) == ["trace.ktrace", "build-tmp"] && tempList[0].cost == .safe && tempList[1].cost == .check && tempList[0].why == "Temporary item · untouched 6 days" && tempList[0].owner == tmpRoot,
-              "old temporary items are listed: safe after 3 days, Might hold work before; anything used recently stays out")
+              "old temporary items are listed: safe after 3 days, Review first before; anything used recently stays out")
         check(advice(for: temp, policy: LocationPolicy(), devices: [:], now: now).staleItems.map(\.name) == ["trace.ktrace"], "the temporary folder counts items untouched for 3 days as old")
+        // 0.20: folders that take no space here, and Xcode build folders named after a feature.
+        var cloud = item("/Users/x/Documents/Codex/2026-07-06", .workspace, 0); cloud.fileCount = 120
+        var empty = item("/Users/x/.codex/scratch/vaultpad-out", .workspace, 0); empty.fileCount = 0
+        var tiny = item("/Users/x/.codex/scratch/notes", .workspace, 4096); tiny.fileCount = 2
+        let cloudAdvice = advice(for: cloud, policy: LocationPolicy(), devices: [:], now: now), emptyAdvice = advice(for: empty, policy: LocationPolicy(), devices: [:], now: now)
+        check(cloudAdvice.verdict == .keep && cloudAdvice.short == "In iCloud only" && emptyAdvice.verdict == .safe && emptyAdvice.short == "Empty"
+              && advice(for: tiny, policy: LocationPolicy(), devices: [:], now: now).verdict == .check,
+              "files kept only in iCloud are Not for the Trash, an empty folder is Safe to remove, and a small folder with files still gets looked at")
+        check(!looksIrreplaceable("DerivedData-iPhoneOS-duplicate-save-20260927") && !looksIrreplaceable("derived-audio-recovery-20260927") && looksIrreplaceable("iphone-backup") && looksIrreplaceable("private-ocr-live"),
+              "Xcode build folders named after a save or recovery feature aren't mistaken for backups")
+        var taskWork = aged("/Users/x/.codex/tasks/app/work", .workspace, hours: 1, gib: 20)
+        taskWork.contents = FolderContents(children: [ChildSummary(name: "DerivedData-iPhoneOS-save-flow", directory: true, identity: "1", bytes: 2 * gib, files: 9, modifiedAt: now.addingTimeInterval(-9 * 86400)),
+                                                      ChildSummary(name: "design-loop-3", directory: true, identity: "2", bytes: 3 * gib, files: 9, modifiedAt: now.addingTimeInterval(-9 * 86400))],
+                                           fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        let workList = suggestions([taskWork], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now)
+        check(workList.first { $0.name.hasPrefix("DerivedData") }?.cost == .rebuild && workList.first { $0.name == "design-loop-3" }?.cost == .check,
+              "inside a task's work folder, Xcode build output is Rebuildable and other old runs are Review first")
+        var chats = aged("/Users/x/.codex/sessions", .history, hours: 1, gib: 30); chats.processes = [ProcessEvidence(pid: 1, command: "codex", access: "r", path: "/Users/x/.codex/sessions/a.jsonl")]
+        check(advice(for: chats, policy: LocationPolicy(), devices: [:], now: now).verdict == .keep, "chat history is Not for the Trash even while its app has it open")
         var busyTemp = temp; busyTemp.processes = [ProcessEvidence(pid: 1, command: "xcodebuild", access: "r", path: tmpRoot + "/build-tmp/log.txt")]
         check(suggestions([busyTemp], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 24 * 3600, now: now).map(\.name) == ["trace.ktrace"],
               "apps holding files in the temporary folder leave out only the items they hold")

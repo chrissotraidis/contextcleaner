@@ -2,6 +2,25 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.20.0
+
+Built around the one thing the app is for: getting space back. From the [2026-10-05 review](IMPROVEMENTS.md).
+
+- **Free Up Space has its own page, and the app opens on it.** The list fills the window; the Trash's size sits beside the controls. ⇧⌘C copies the command. The Overview shows one line of what's waiting there.
+- **Folders makes commands too.** **Select All** above any list, then one Move-to-Trash command for the Safe to remove and Rebuildable folders, plus a second button that includes the **Review first** ones you've looked at.
+- **Plainer answers.** *Might hold work* is now **Review first**; *Leave it* is now **Not for the Trash** and isn't a tile (nothing in it frees space). The tile says **Safe to remove**.
+- **Folders that take no space are said to.** A folder whose files are kept only in iCloud is Not for the Trash ("In iCloud only"), since removing it frees nothing here and removes it from iCloud. An empty folder is Safe to remove.
+- **Ignored explains "scanning off".** Its size is the last one seen, with when, and **Turn Scanning Back On** scans it again.
+- **What's inside Parallels and Ollama.** A virtual machine's card shows its disk image, snapshots, suspended memory and logs; Ollama's shows each model with its size and the `ollama rm` command for it.
+- **"Running right now" was wrong.** A virtual machine open at the last scan now says when that was.
+- **Old items** on the Overview open Free Up Space at a week, listing each old item; Xcode build folders named after a feature ("DerivedData-…-save") are no longer taken for backups.
+- **Everything else sizes itself** when you open it.
+- **History** shows what you've moved to the Trash each day for 30 days, totals, and the Trash.
+- **Scheduled checks**: Settings shows the last and next check and has **Check Now**. A quick check that can't finish a big folder no longer replaces the size a full scan found, so it doesn't land in Couldn't Scan.
+- **Settings** has a gear in the toolbar, a Permission section that says whether Full Disk Access is on, and a tidier layout. **About** says what the app is and links to the project. "Never deletes" appears once.
+- **Export Cleanup List** starts with what Free Up Space lists now, and one command for its Safe to remove and Rebuildable items.
+- **Faster lists**: the Folders table draws less per row.
+
 ## 0.19.1
 
 Tightens the last-second check on whole worktrees, found while checking 0.19.0 end to end:

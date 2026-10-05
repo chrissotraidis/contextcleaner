@@ -97,6 +97,13 @@ func keepReadsLocal() {
     _ = setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
     _ = setiopolicy_np(IOPOL_TYPE_VFS_TRIGGER_RESOLVE, IOPOL_SCOPE_PROCESS, IOPOL_VFS_TRIGGER_RESOLVE_OFF)
 }
+/// Whether macOS gave Context Cleaner Full Disk Access. The TCC database can only be opened with it. Opens nothing else.
+func hasFullDiskAccess(home: String = NSHomeDirectory()) -> Bool {
+    let fd = open(home + "/Library/Application Support/com.apple.TCC/TCC.db", O_RDONLY | O_NOFOLLOW)
+    guard fd >= 0 else { return false }
+    close(fd)
+    return true
+}
 
 struct Cancellation: @unchecked Sendable {
     private final class State: @unchecked Sendable { let lock = NSLock(); var stopped = false }

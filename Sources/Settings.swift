@@ -13,30 +13,60 @@ struct SettingsView: View {
 
 struct GeneralSettings: View {
     @ObservedObject var model: CleanerModel
+    @State private var fullDiskAccess = hasFullDiskAccess()
+    @State private var showingAccessHelp = false
     var body: some View {
+        let schedule = model.preferences.effectiveSchedule
+        let busy = model.running || model.inspecting || model.discovering
         Form {
             Section {
-                Picker("Appearance", selection: Binding(get: { model.preferences.appearance ?? "System" }, set: { model.setAppearance($0) })) {
-                    Text("Match System").tag("System"); Text("Light").tag("Light"); Text("Dark").tag("Dark")
-                }.pickerStyle(.segmented)
-            }
-            Section {
-                Picker("Check watched and growing folders", selection: Binding(get: { model.preferences.effectiveSchedule }, set: { value in model.updatePreferences { $0.schedule = value; $0.dailyWhileOpen = value != "off" } })) {
+                Picker(selection: Binding(get: { schedule }, set: { value in model.updatePreferences { $0.schedule = value; $0.dailyWhileOpen = value != "off" } })) {
                     Text("Off").tag("off"); Text("Daily").tag("daily"); Text("Weekly").tag("weekly")
-                }
-                if model.preferences.effectiveSchedule != "off" {
+                } label: { Label("Check folders", systemImage: "calendar.badge.clock") }
+                if schedule != "off" {
                     Stepper("Up to \(model.preferences.effectivePriorityCount) folders each time", value: Binding(get: { model.preferences.effectivePriorityCount }, set: { value in model.updatePreferences { $0.priorityCount = value } }), in: 4...48, step: 4)
                 }
+                LabeledContent("Last check") {
+                    HStack(spacing: 10) {
+                        Text(model.preferences.lastScheduledAttempt.map { $0.formatted(.relative(presentation: .named)) } ?? "Never").foregroundStyle(.secondary)
+                        Button("Check Now") { model.runScheduledCheck() }.disabled(busy)
+                    }
+                }
+                if schedule != "off", let next = ScanPlanner.nextCheck(model.preferences) {
+                    LabeledContent("Next check") { Text(next <= Date() ? "Within 5 minutes" : next.formatted(.relative(presentation: .named))).foregroundStyle(.secondary) }
+                }
             } header: { Text("Scheduled checks") } footer: {
-                Text("Only while Context Cleaner is open. Watched and growing folders go first." + (model.preferences.lastScheduledAttempt.map { " Last check \($0.formatted(.relative(presentation: .named)))." } ?? ""))
+                Text("A quick check of your watched and growing folders first, then the ones checked longest ago, so sizes stay current between full scans. It runs only while Context Cleaner is open, and reads sizes only.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                Label("Context Cleaner never deletes files. You choose what goes to the Trash.", systemImage: "lock.shield")
+                LabeledContent {
+                    HStack(spacing: 10) {
+                        if !fullDiskAccess {
+                            Button("Open Settings") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) } }
+                        }
+                        Button("Check Again") { fullDiskAccess = hasFullDiskAccess(); model.refreshTrash() }
+                    }
+                } label: {
+                    Label { VStack(alignment: .leading, spacing: 2) {
+                        Text(fullDiskAccess ? "Full Disk Access is on" : "Full Disk Access is off")
+                        Text(fullDiskAccess ? "Scans read every place without asking, and the Trash's size shows." : "macOS asks before reading other apps' data and your Documents, and the Trash's size can't be read.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } } icon: { Image(systemName: fullDiskAccess ? "checkmark.shield.fill" : "exclamationmark.shield").foregroundStyle(fullDiskAccess ? Color.stable : Color.caution) }
+                }
+                Button("How It Works…") { showingAccessHelp = true }.buttonStyle(.link)
+            } header: { Text("Permission") } footer: {
+                Text("Optional. Context Cleaner only reads sizes and dates either way. After turning it on in System Settings, quit and reopen Context Cleaner.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section {
+                Picker(selection: Binding(get: { model.preferences.appearance ?? "System" }, set: { model.setAppearance($0) })) {
+                    Text("Match System").tag("System"); Text("Light").tag("Light"); Text("Dark").tag("Dark")
+                } label: { Label("Appearance", systemImage: "circle.lefthalf.filled") }.pickerStyle(.segmented)
             } footer: {
-                Text("\(model.records.count) \(model.records.count == 1 ? "scan" : "scans") and \(model.capacity.count) disk \(model.capacity.count == 1 ? "reading" : "readings") are saved on this Mac. Nothing is ever pruned.").font(.caption).foregroundStyle(.secondary)
+                Text("Context Cleaner never deletes files; you choose what goes to the Trash. \(model.records.count) \(model.records.count == 1 ? "scan" : "scans") and \(model.capacity.count) disk \(model.capacity.count == 1 ? "reading" : "readings") are saved on this Mac.").font(.caption).foregroundStyle(.secondary)
             }
         }.formStyle(.grouped)
+        .sheet(isPresented: $showingAccessHelp) { AccessHelp() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in fullDiskAccess = hasFullDiskAccess() }
     }
 }
 
@@ -69,23 +99,6 @@ struct ScanningSettings: View {
                        symbol: "folder.badge.plus", button: "Look Now") { model.discover() }
             } header: { Text("Scan now") } footer: {
                 Text("Scans only read folder sizes and dates. They never open, change or delete files.").font(.caption).foregroundStyle(.secondary)
-            }
-            Section {
-                HStack(alignment: .center, spacing: 12) {
-                    Image(systemName: "lock.shield").font(.title3).foregroundStyle(Color.accentColor).frame(width: 24).accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("macOS permission").font(.headline)
-                        Text("macOS asks before Context Cleaner reads other apps' data (like iPhone install caches) or your Documents folder. Turning on Full Disk Access for Context Cleaner stops those questions and lets it show how much your Trash holds. It's your choice.")
-                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 12)
-                    VStack(alignment: .trailing, spacing: 6) {
-                        Button("Open Full Disk Access") {
-                            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
-                        }
-                        Button("How It Works…") { showingAccessHelp = true }.buttonStyle(.link).font(.caption)
-                    }
-                }
             }
             Section {
                 DisclosureGroup("Limits for very large folders", isExpanded: $advanced) {
@@ -153,7 +166,7 @@ struct CoverageSettings: View {
                 if query.isEmpty && filter == .all {
                     Section {
                         DisclosureGroup("What's never scanned") {
-                            ForEach(Coverage.notScanned, id: \.self) { Text($0).font(.callout).foregroundStyle(.secondary) }
+                            ForEach(Coverage.notScanned, id: \.self) { Label($0, systemImage: "minus.circle").font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
                         }
                     } footer: { Text("Context Cleaner looks where apps pile up data. It isn't a whole-disk scanner, so its totals never equal your used space.").font(.caption).foregroundStyle(.secondary) }
                 }

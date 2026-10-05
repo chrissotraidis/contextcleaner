@@ -266,8 +266,8 @@ enum Verdict: Int, Comparable, CaseIterable, Identifiable {
         switch self {
         case .safe: return "Safe to remove"
         case .rebuild: return "Rebuildable"
-        case .check: return "Might hold work"
-        case .keep: return "Leave it"
+        case .check: return "Review first"
+        case .keep: return "Not for the Trash"
         }
     }
 }
@@ -397,7 +397,30 @@ func trashTargets(_ paths: [String], exists: (String) -> Bool = { FileManager.de
 /// Such folders are never called rebuildable, never counted as old builds, and Select All leaves them unticked.
 func looksIrreplaceable(_ name: String) -> Bool {
     let n = name.lowercased()
+    // Xcode build folders keep the feature's name ("DerivedData-save-flow", "derived-recovery-ui"); they're build output.
+    if n.hasPrefix("deriveddata") || n.hasPrefix("derived-") || n.hasPrefix("derived_") || n.hasSuffix("-derived") { return false }
     return ["backup", "back-up", "recovery", "save", "private", "signing", "keychain", "secret", "credential", "provisioning"].contains { n.contains($0) }
+}
+/// A name that says it's build output: Xcode's DerivedData under a task's own name, or a build folder. Rebuilt by building.
+func looksLikeBuildOutput(_ name: String) -> Bool {
+    let n = name.lowercased()
+    return rebuildableName(name) || n.hasPrefix("deriveddata") || n.hasPrefix("derived-") || n.hasPrefix("derived_") || n.hasSuffix("-derived") || n.hasSuffix("-deriveddata")
+}
+/// Folders that take no space on this Mac. Files kept only in iCloud (Desktop & Documents) take none here, and removing
+/// them removes them from iCloud too, so they're Not for the Trash. A folder with no files at all is Safe to remove.
+func freesNothing(_ m: FolderMeasurement) -> Advice? {
+    guard m.state == .measured, let bytes = m.allocatedBytes, bytes < 1_048_576, m.processes.isEmpty,
+          ![.simulator, .virtualMachine, .appData, .history].contains(m.profile.category), !isWorktreeFolder(m.profile.path) else { return nil }
+    let synced = ["/Documents/", "/Desktop/"].contains { m.profile.path.contains($0) }
+    if m.fileCount > 0 && synced {
+        var a = Advice(verdict: .keep, reason: "Its \(m.fileCount) \(m.fileCount == 1 ? "file is" : "files are") kept in iCloud, not on this Mac, so it takes no space here. Moving it to the Trash would remove it from iCloud too.", howTo: "Nothing to do: it frees no space on this Mac.", command: nil, lastUsed: m.latestModifiedAt)
+        a.short = "In iCloud only"
+        return a
+    }
+    guard m.fileCount == 0 else { return nil }
+    var a = Advice(verdict: .safe, reason: "An empty folder. Removing it frees no space, but tidies the list.", howTo: "Move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+    a.short = "Empty"
+    return a
 }
 /// Why a folder was left out of a Trash command when it was rechecked.
 enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone" }
@@ -530,6 +553,7 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
         kept.short = "Ignored by you"
         return kept
     }
+    if let free = freesNothing(m) { return free }
     if let worktree, isWorktreeFolder(m.profile.path), m.state == .measured, m.processes.isEmpty { return worktreeAdvice(m, worktree, now: now) }
     var result = projectAdvice(for: m, policy: policy, devices: devices, project: project, now: now)
     // A folder you're still using may hold old items that tools recreate. Point at those instead of the whole folder.
@@ -562,7 +586,7 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
 /// A few words for the Folders list, matching the reason.
 private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActivity?, now: Date) -> String {
     if !a.staleItems.isEmpty { return "\(byteLabel(a.staleBytes)) old inside" }
-    if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return "Open in \(app)" }
+    if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return "Open in \(app) at last scan" }
     let idle = a.lastUsed.map { now.timeIntervalSince($0) / 86400 }
     if a.verdict == .rebuild { return a.lastUsed.map { "Used " + ageText($0, now: now) } ?? "Rebuilt when needed" }
     if let project, [.workspace, .buildOutput].contains(m.profile.category) {
@@ -675,7 +699,8 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     default: break
     }
     let openApps = Array(Set(m.processes.map { friendlyApp($0.command) })).sorted().prefix(2).joined(separator: " and ")
-    if !m.processes.isEmpty && m.profile.category != .virtualMachine {
+    // Chat history and app libraries are Not for the Trash whether or not their app has them open.
+    if !m.processes.isEmpty && ![.virtualMachine, .history, .appData].contains(m.profile.category) {
         return Advice(verdict: .check, reason: "\(openApps) had files open here at the last scan.", howTo: "Quit \(openApps), then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     }
     if policy.expected { return Advice(verdict: .keep, reason: "You said its growth is normal.", howTo: "Right-click it and choose Warn Me When It Grows to get suggestions again.", command: nil, lastUsed: m.latestModifiedAt) }
@@ -720,7 +745,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     case .history:
         return Advice(verdict: .keep, reason: "Your past conversations. Removing them loses them for good.", howTo: "Archive old conversations in the app instead.", command: nil, lastUsed: m.latestModifiedAt)
     case .model:
-        if m.profile.associatedApp == "Ollama" { return Advice(verdict: .check, reason: "Language models you downloaded with Ollama. You can get them again, but they're large.", howTo: "In Terminal, list them with ollama list, then remove one you don't use with ollama rm and its name.", command: "ollama list", lastUsed: m.latestModifiedAt) }
+        if m.profile.associatedApp == "Ollama" { return Advice(verdict: .check, reason: "Language models you downloaded with Ollama. You can get them again, but they're large.", howTo: "Inside it, below, lists each model with its size; its copy button copies the ollama rm command that removes just that one.", command: "ollama list", lastUsed: m.latestModifiedAt) }
         if m.profile.associatedApp == "DiffusionBee" { return Advice(verdict: .check, reason: "DiffusionBee's image models and the pictures it made. Models can be downloaded again; your pictures may be the only copy.", howTo: "Remove models you don't use in DiffusionBee's settings. Save pictures you want to keep first.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "AI models you downloaded. You can get them again, but they're large.", howTo: "Remove models you don't use from inside \(m.profile.associatedApp).", command: nil, lastUsed: m.latestModifiedAt)
     case .appData:
@@ -735,7 +760,8 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
             : app == "Android Emulator" ? "In Android Studio, open Device Manager, then delete the device. That removes its disk and snapshots."
             : app == "Parallels Desktop" ? "In Parallels Desktop's Control Center, delete old snapshots or use Reclaim Disk Space to shrink it. To remove the whole machine, right-click it › Remove."
             : "Remove or shrink it inside \(app)."
-        let running = m.processes.isEmpty ? "" : " It's running right now."
+        // Open files come from the last scan; say when, since the machine may have been shut down or suspended since.
+        let running = m.processes.isEmpty ? "" : " It was running at the last scan, \(ageText(m.observedAt, now: now))."
         return Advice(verdict: .check, reason: "A whole virtual computer in \(app). Removing it deletes everything inside.\(running)", howTo: howTo, command: docker ? "docker system df" : nil, lastUsed: m.latestModifiedAt)
     case .simulator:
         return Advice(verdict: .check, reason: "Simulator data outside a device folder.", howTo: "Manage simulators in Xcode › Window › Devices and Simulators.", command: nil, lastUsed: m.latestModifiedAt)
@@ -976,8 +1002,10 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
             let backup = looksIrreplaceable(child.name)
             // macOS itself clears temporary items nothing has used for 3 days.
             let oldTemporary = temporary && !backup && child.modifiedAt.map { now.timeIntervalSince($0) >= 3 * 86400 } == true
-            let label = backup ? "Looks like a backup" : temporary ? "Temporary item" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
-            let cost: Verdict = oldTemporary ? .safe : rebuildable && !backup ? .rebuild : .check
+            // Inside a scratch or work folder, an item named like build output (DerivedData-…) is rebuilt by building.
+            let buildLike = !rebuildable && !temporary && !backup && looksLikeBuildOutput(child.name)
+            let label = backup ? "Looks like a backup" : temporary ? "Temporary item" : buildLike ? "Old build inside" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
+            let cost: Verdict = oldTemporary ? .safe : (rebuildable || buildLike) && !backup ? .rebuild : .check
             found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: cost,
                                     why: ([label] + [age].compactMap { $0 }).joined(separator: " · "), owner: path, seen: child.modifiedAt, backup: backup))
         }
@@ -1149,6 +1177,91 @@ func sameFiles(_ a: String, _ b: String, limit: Int = 20_000) -> Bool {
     }
     guard let left = listing(a), let right = listing(b) else { return false }
     return left == right
+}
+
+// MARK: - Inside big opaque folders
+
+/// One part of a folder whose contents only make sense to its app: a virtual machine's disk image, or one Ollama model.
+struct InsidePart: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let detail: String
+    let bytes: Int64
+    /// A Terminal command that removes just this part, when there's a safe one. Context Cleaner never runs it.
+    var command: String? = nil
+}
+/// Allocated size of a file, or of everything inside a folder. Metadata only.
+func allocatedSize(_ path: String) -> Int64 {
+    var st = stat()
+    guard lstat(path, &st) == 0 else { return 0 }
+    guard (st.st_mode & S_IFMT) == S_IFDIR, let walker = FileManager.default.enumerator(atPath: path) else { return Int64(st.st_blocks) * 512 }
+    var total = Int64(st.st_blocks) * 512
+    while let relative = walker.nextObject() as? String {
+        var entry = stat()
+        if lstat(path + "/" + relative, &entry) == 0 { total += Int64(entry.st_blocks) * 512 }
+    }
+    return total
+}
+/// What's inside a Parallels virtual machine (.pvm): its disk image and snapshots, suspended memory and logs. Metadata only.
+func parallelsParts(_ pvm: String) -> [InsidePart] {
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: pvm) else { return [] }
+    var parts: [InsidePart] = []
+    var memory: Int64 = 0, logs: Int64 = 0
+    for name in names {
+        let path = pvm + "/" + name, lower = name.lowercased()
+        if lower.hasSuffix(".hdd") {
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+            let layers = files.filter { $0.hasSuffix(".hds") }
+            let snapshots = max(0, layers.count - 1)
+            parts.append(InsidePart(name: "Disk image" + (snapshots > 0 ? " and \(snapshots) \(snapshots == 1 ? "snapshot" : "snapshots")" : ""),
+                                    detail: snapshots > 0 ? "The virtual drive. Each snapshot keeps an extra layer; delete old ones in Parallels › Manage Snapshots."
+                                                          : "The virtual drive. Files you delete inside the machine come back to this Mac only after Parallels › Reclaim Disk Space.",
+                                    bytes: allocatedSize(path)))
+        } else if lower.hasSuffix(".mem") || lower.hasSuffix(".sav") {
+            memory += allocatedSize(path)
+        } else if lower.hasSuffix(".log") {
+            logs += allocatedSize(path)
+        }
+    }
+    if memory > 0 { parts.append(InsidePart(name: "Suspended memory", detail: "Saved when the machine was suspended. Shut it down from inside instead of suspending it, and this goes.", bytes: memory)) }
+    if logs > 0 { parts.append(InsidePart(name: "Logs", detail: "Parallels' own logs.", bytes: logs)) }
+    return parts.sorted { $0.bytes > $1.bytes }
+}
+/// The models in an Ollama models folder, from their manifests: name, size and the command that removes each.
+/// A layer two models share is only freed when both go, so those are marked. Reads small JSON files only.
+func ollamaModels(_ models: String, now: Date = Date()) -> [InsidePart] {
+    let root = models + "/manifests"
+    guard let walker = FileManager.default.enumerator(atPath: root) else { return [] }
+    struct Manifest: Decodable { struct Layer: Decodable { let digest: String; let size: Int64 }; let layers: [Layer]; let config: Layer? }
+    var found: [(name: String, layers: [Manifest.Layer], date: Date?)] = []
+    while let relative = walker.nextObject() as? String {
+        let parts = relative.split(separator: "/").map(String.init)
+        guard parts.count >= 4, !parts.last!.hasPrefix("."), let data = MetadataReader.data(root + "/" + relative, preferences: Preferences()),
+              let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else { continue }
+        // registry/namespace/model/tag; the default registry and "library" are left out of the name, as ollama list shows it.
+        let tag = parts[parts.count - 1], model = parts[parts.count - 2], namespace = parts[parts.count - 3], registry = parts[0]
+        var name = (namespace == "library" ? "" : namespace + "/") + model + ":" + tag
+        if registry != "registry.ollama.ai" { name = registry + "/" + namespace + "/" + model + ":" + tag }
+        let date = try? FileManager.default.attributesOfItem(atPath: root + "/" + relative)[.modificationDate] as? Date
+        found.append((name, manifest.layers + [manifest.config].compactMap { $0 }, date))
+    }
+    var uses: [String: Int] = [:]
+    for model in found { for layer in Set(model.layers.map(\.digest)) { uses[layer, default: 0] += 1 } }
+    return found.map { model in
+        let total = model.layers.reduce(Int64(0)) { $0 + $1.size }
+        let shared = model.layers.filter { (uses[$0.digest] ?? 0) > 1 }.reduce(Int64(0)) { $0 + $1.size }
+        var detail = model.date.map { "Downloaded " + ageText($0, now: now) } ?? "Downloaded model"
+        // Only worth saying when it changes what removing it frees.
+        if shared >= 100 * 1_048_576 { detail += " · shares \(byteLabel(shared)) with another model, freed only when both go" }
+        let quoted = model.name.contains(where: { !$0.isLetter && !$0.isNumber && !":./-_".contains($0) }) ? "'" + model.name + "'" : model.name
+        return InsidePart(name: model.name, detail: detail, bytes: total, command: "ollama rm " + quoted)
+    }.sorted { $0.bytes > $1.bytes }
+}
+/// The parts worth naming inside a folder, when Context Cleaner knows its layout.
+func insideParts(_ path: String) -> [InsidePart] {
+    if path.hasSuffix(".pvm") { return parallelsParts(path) }
+    if path.hasSuffix("/.ollama/models") { return ollamaModels(path) }
+    return []
 }
 
 // MARK: - Codex worktrees

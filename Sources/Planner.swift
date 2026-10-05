@@ -9,6 +9,11 @@ struct ScanPlanner {
         guard let last = preferences.lastScheduledAttempt else { return true }
         return now.timeIntervalSince(last) >= interval
     }
+    /// When the next scheduled check is due, or nil when checks are off. Checks run while the app is open.
+    static func nextCheck(_ preferences: Preferences) -> Date? {
+        guard let interval = scheduledInterval(preferences) else { return nil }
+        return preferences.lastScheduledAttempt.map { $0.addingTimeInterval(interval) } ?? Date()
+    }
     static func discoveryDue(_ preferences: Preferences, now: Date) -> Bool {
         guard let last = preferences.lastDiscovery else { return true }
         return now.timeIntervalSince(last) >= 7 * 86400

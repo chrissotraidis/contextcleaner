@@ -4,10 +4,11 @@ import SwiftUI
 // three reserved status colors, one hue per category, system accent for selection.
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "History"
+    case freeUp = "Free Up Space", overview = "Overview", locations = "Folders", watching = "Watchlist", kept = "Ignored", needsAttention = "Couldn't Scan", history = "History"
     var id: String { rawValue }
     var symbol: String {
         switch self {
+        case .freeUp: return "checklist"
         case .overview: return "square.grid.2x2"
         case .locations: return "folder"
         case .watching: return "eye"
@@ -18,6 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     }
     var subtitle: String {
         switch self {
+        case .freeUp: return "What nothing has touched for a while, biggest first. Tick it, copy one command, paste it in Terminal."
         case .overview: return "How full your disk is, and what's filling it."
         case .locations: return "Every folder Context Cleaner knows, biggest first."
         case .watching: return "Folders you check on, like caches that keep coming back. Scans measure these first."
@@ -31,20 +33,20 @@ enum AppSection: String, CaseIterable, Identifiable {
 }
 
 enum LocationFilter: String, CaseIterable, Identifiable {
-    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Might hold work", keep = "Leave it", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Turned off"
+    case all = "All", safe = "Safe to remove", rebuild = "Rebuildable", check = "Review first", keep = "Not for the Trash", inside = "Old items inside folders", growing = "Growing", unscanned = "Not scanned yet", reviewLater = "Remind me later", excluded = "Scanning off"
     var id: String { rawValue }
     var explanation: String {
         switch self {
-        case .all: return "Safe: not needed again. Rebuildable: the next build recreates it. Might hold work: look first."
+        case .all: return "Safe to remove: not needed again. Rebuildable: the next build recreates it. Review first: may hold something only here."
         case .safe: return "Not needed again: the project is finished or it's sat unused for weeks. Nothing is lost."
         case .rebuild: return "Still in use, but the next build or download recreates it. Nothing is lost; you wait for that build."
         case .check: return "May hold something that exists only here, such as uncommitted work, a backup or test results. Look first."
-        case .keep: return "App libraries and history. Manage these inside their own apps."
+        case .keep: return "Not worth moving to the Trash: app libraries and chat history (manage them in their apps), and folders that take no space on this Mac."
         case .unscanned: return "Found, but not scanned yet. Nothing is wrong."
         case .growing: return "Grew between two scans and not marked as expected."
         case .reviewLater: return "Folders you asked to come back to."
         case .inside: return "Folders holding old builds or downloads that haven't changed in a week or more. Open one to see them."
-        case .excluded: return "Folders you turned off. They aren't scanned."
+        case .excluded: return "Folders you stopped scanning. Their sizes are from before you turned scanning off."
         }
     }
 }
@@ -109,14 +111,14 @@ extension Verdict {
     /// What the answer means, in a few words.
     /// The answer in one or two words, for tight spaces.
     /// The answer on a Folders tile, where the hint underneath says what it means.
-    var shortTitle: String { self == .safe ? "Safe" : title }
+    var shortTitle: String { title }
     /// The difference between the answers, in three words or so, for tiles and legends.
     var hint: String {
         switch self {
         case .safe: return "not needed again"
         case .rebuild: return "rebuilds itself"
-        case .check: return "look first"
-        case .keep: return "its app manages it"
+        case .check: return "look inside first"
+        case .keep: return "app data, or frees nothing"
         }
     }
     var meaning: String {
@@ -124,7 +126,7 @@ extension Verdict {
         case .safe: return "not needed again"
         case .rebuild: return "recreated by the next build"
         case .check: return "may be the only copy; look first"
-        case .keep: return "manage in their apps"
+        case .keep: return "app data, or frees nothing here"
         }
     }
 }
@@ -249,20 +251,25 @@ struct TrashCopyButton: View {
     /// Sizes for items outside the scanned folders, which the app doesn't otherwise know.
     var sizes: [String: Int64] = [:]
     var prominent = false
+    /// Shift-Command-C copies, for the one main Copy button on screen.
+    var shortcut = false
+    /// A different name for the button before it's clicked.
+    var label: String? = nil
     @ObservedObject private var state = TrashCopyState.shared
     var body: some View {
         let mine = !paths.isEmpty && state.paths == paths
         let title: String = {
-            guard mine else { return paths.count > 1 ? "Copy Move-to-Trash Command (\(paths.count))" : "Copy Move-to-Trash Command" }
+            guard mine else { return (label ?? "Copy Move-to-Trash Command") + (paths.count > 1 ? " (\(paths.count))" : "") }
             if state.checking { return "Checking \(paths.count == 1 ? "the folder" : "\(paths.count) items")…" }
             if state.copied == 0 { return "Nothing copied" }
             return paths.count == 1 ? "Copied" : state.copied == paths.count ? "Copied all \(paths.count)" : "Copied \(state.copied) of \(paths.count)"
         }()
         let symbol = mine && !state.checking ? (state.copied > 0 ? "checkmark.circle.fill" : "exclamationmark.circle") : "doc.on.clipboard"
-        let button = Button { requestTrashCopy(paths, bytes: bytes, sizes: sizes) } label: { Label(title, systemImage: symbol).monospacedDigit() }
+        let button = Button { requestTrashCopy(paths, bytes: bytes, sizes: sizes) } label: { Label(title, systemImage: symbol).monospacedDigit().contentTransition(.numericText()) }
             .controlSize(.small).disabled(paths.isEmpty || state.checking)
-            .help("Checks each item is still there, not open in an app and unchanged since the scan, then copies one Terminal command that moves them to the Trash and prints a line for each. Put Back works. Context Cleaner never runs it.")
-        if prominent { button.buttonStyle(.borderedProminent) } else { button }
+            .help("Checks each item is still there, not open in an app and unchanged since the scan, then copies one Terminal command that moves them to the Trash and prints a line for each. Put Back works. Context Cleaner never runs it." + (shortcut ? " Shortcut: Shift-Command-C." : ""))
+            .keyboardShortcut(shortcut ? KeyboardShortcut("c", modifiers: [.command, .shift]) : nil)
+        if prominent { button.buttonStyle(.borderedProminent).controlSize(.regular) } else { button }
     }
 }
 
@@ -342,7 +349,7 @@ struct LocationActions: View {
         Button(policy.isWatched ? "Stop Watching" : "Watch for Growth") { model.policy(path) { $0.isWatched.toggle() } }
             .help("Watched folders are scanned first and listed in Watchlist")
         Button(policy.expected ? "Warn Me When It Grows" : "Its Growth Is Normal") { model.policy(path) { $0.expected.toggle() } }
-            .help(policy.expected ? "Show it under Growing again" : "Stop listing it under Growing; its answer becomes Leave it")
+            .help(policy.expected ? "Show it under Growing again" : "Stop listing it under Growing; its answer becomes Not for the Trash")
         Button("Remind Me Tomorrow") { model.policy(path) { $0.reviewAfter = Date().addingTimeInterval(86400) } }
         Button("Tags & Notes…") { model.editing = path }
         Divider()

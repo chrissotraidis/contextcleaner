@@ -35,8 +35,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Context Cleaner</string>
 <key>CFBundleIconFile</key><string>ContextCleaner</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.21.0</string>
-<key>CFBundleVersion</key><string>47</string>
+<key>CFBundleShortVersionString</key><string>0.21.1</string>
+<key>CFBundleVersion</key><string>48</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
@@ -48,10 +48,10 @@ PLIST
 sign_identity="${CC_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/Developer ID Application/ { print $2; exit }')}"
 [ -n "$sign_identity" ] || sign_identity="$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development/ && !/@/ { print $2; exit }')"
 [ -n "$sign_identity" ] || sign_identity="$(security find-identity -v -p codesigning 2>/dev/null | awk '/Apple Development/ { print $2; exit }')"
-if [ -n "$sign_identity" ] && [ "$sign_identity" != "-" ] && codesign --force --sign "$sign_identity" --timestamp=none "$app" 2>/dev/null; then
+if [ -n "$sign_identity" ] && [ "$sign_identity" != "-" ] && codesign --force --options runtime --sign "$sign_identity" --timestamp=none "$app" 2>/dev/null; then
   echo "Signed with identity $sign_identity"
 else
-  codesign --force --sign - "$app"; echo "Signed ad-hoc"
+  codesign --force --options runtime --sign - "$app"; echo "Signed ad-hoc"
 fi
 codesign --verify --deep --strict "$app"
 package_dir="$stage_dir/Package"
@@ -59,7 +59,7 @@ mkdir "$package_dir"
 ditto "$app" "$package_dir/Context Cleaner.app"
 ln -s /Applications "$package_dir/Applications"
 printf '%s\n' "$stage_dir" > "$release_root/build-stage.txt"
-hdiutil create -volname 'Context Cleaner 0.21.0' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.21.0.dmg"
-hdiutil verify "$release_root/Context-Cleaner-0.21.0.dmg"
-(cd "$release_root" && shasum -a 256 Context-Cleaner-0.21.0.dmg > SHA256SUMS.txt)
+hdiutil create -volname 'Context Cleaner 0.21.1' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.21.1.dmg"
+hdiutil verify "$release_root/Context-Cleaner-0.21.1.dmg"
+(cd "$release_root" && shasum -a 256 Context-Cleaner-0.21.1.dmg > SHA256SUMS.txt)
 printf 'App retained at: %s\n' "$app"

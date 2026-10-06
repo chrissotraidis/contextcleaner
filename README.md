@@ -123,6 +123,12 @@ No. No network code, accounts or analytics. Scans, settings and History are file
 </details>
 
 <details>
+<summary><b>Is it safe to paste its commands?</b></summary>
+
+Each command checks every item again when you copy it, quotes every name so the shell reads it as text, never moves a link, and stops working after an hour. Git is only ever read, with every setting that could run a program switched off. [SECURITY.md](SECURITY.md) has the details.
+</details>
+
+<details>
 <summary><b>Can I stop it suggesting a folder?</b></summary>
 
 Right-click it and choose **Ignore This Folder** (still scanned, never suggested) or **Stop Scanning This Folder** (not read at all; its size is the last one seen). Both show under **Ignored**, where **Turn Scanning Back On** undoes the second.

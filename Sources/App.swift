@@ -583,7 +583,7 @@ struct MainView: View {
                     .help(verdict.verdict.title + ". " + verdict.reason)
                     .accessibilityElement(children: .combine)
                     .contextMenu {
-                        Button("Copy Remove Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("xcrun simctl delete \(device.udid)", forType: .string) }
+                        if let command = simDeleteCommand(device.udid) { Button("Copy Remove Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string) } }
                         Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.home + "/Library/Developer/CoreSimulator/Devices/" + device.udid)]) }
                     }
                 }
@@ -724,7 +724,7 @@ struct MainView: View {
     func cleanupRow(_ cleanup: Cleanup) -> some View {
         let inCommand = cleanup.items.count - cleanup.count(.leftOut)
         let moved = cleanup.count(.moved)
-        let open = Date().timeIntervalSince(cleanup.copiedAt) < 1800
+        let open = Date().timeIntervalSince(cleanup.copiedAt) < CleanerModel.TrashWatch.lifetime
         let headline = inCommand == 0 ? "Nothing copied" : moved == inCommand ? "Moved \(moved == 1 ? "1 item" : "all \(moved)") to the Trash" : "Moved \(moved) of \(inCommand) to the Trash"
         var notes: [String] = []
         if moved < inCommand { notes.append(open ? "\(inCommand - moved) waiting for the command" : "\(inCommand - moved) still in place") }
@@ -844,7 +844,7 @@ struct MainView: View {
                 Text(model.preferences.effectiveSchedule == "off" ? "Scheduled checks are off." : model.preferences.effectiveSchedule == "daily" ? "Checking watched and growing folders daily while open." : "Checking watched and growing folders weekly while open.").font(.caption).foregroundStyle(.secondary)
                 SettingsLink { Text("Change…").font(.caption) }.buttonStyle(.link)
                 Spacer()
-                // The last Trash command, in one line until it's done or half an hour has passed. History keeps every one.
+                // The last Trash command, in one line until it's done or it expires after an hour. History keeps every one.
                 if let watch = model.trashWatch, !watch.expired { TrashWatchStatus(watch: watch) }
                 else { Text("\(model.discovery.profiles.count) folders known · \(model.records.count) scans saved").font(.caption).foregroundStyle(.secondary) }
             }
@@ -1120,7 +1120,7 @@ struct TrashWatchStatus: View {
     /// "Left out 2: 1 changed since the scan, 1 open in an app."
     private var leftOutText: String {
         let groups = Dictionary(grouping: watch.leftOut.values, by: { $0 })
-        let parts = [LeftOut.changed, .open, .gone].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
+        let parts = [LeftOut.changed, .open, .gone, .unsafe].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
         return "Left out \(watch.leftOut.count): " + parts.joined(separator: ", ") + "."
     }
 }

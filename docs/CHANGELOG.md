@@ -2,6 +2,20 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.1
+
+A security and reliability pass. See [SECURITY.md](../SECURITY.md).
+
+- **Git can't be made to run a program.** A folder carrying its own git config could name an fsmonitor or filter program, and reading git status ran it. Every git read now switches those settings off, along with signature checks, hooks and pagers. Without Apple's developer tools, git and simctl aren't run, so macOS's install dialog never appears.
+- **Every copied command quotes every name.** The Ollama and "remove worktree" commands could run a name containing `$(…)` or a quote; now they can't. Simulator commands are offered only for real device IDs.
+- **Commands expire after an hour.** One pasted later from clipboard history moves nothing.
+- **Links are never moved**, at copy time or when the command runs, so what they point to is never touched.
+- **Protected places.** A command never holds your home folder, its top-level folders, ~/Library's own folders, keychains, iCloud Drive, SSH or GPG keys, or names with control or invisible characters.
+- **fish and other shells** get the command wrapped for zsh.
+- **The exported cleanup list no longer holds Trash commands**, which skipped the recheck; copy them in Free Up Space.
+- A worktree's `.git` file is read only when it's a small regular file. A stuck git is stopped at its time limit, then forced.
+- Built with the hardened runtime.
+
 ## 0.21.0
 
 From the [0.20.0 review](IMPROVEMENTS.md#improvements-from-the-0200-review-2026-10-05-evening).

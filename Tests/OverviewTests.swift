@@ -122,7 +122,7 @@ import Foundation
               "a project build folder lists experiment builds untouched for a week, and leaves this week's alone")
         let finishedWorktree = ProjectActivity(root: "/fixture/wt/kartpad-diag", isWorktree: true, mainRepository: "/fixture/kartpad", registered: true, branch: "codex/diag", defaultBranch: "main", lastCommit: now.addingTimeInterval(-20 * 86400), merged: true, uncommitted: 0)
         let finishedAdvice = advice(for: folder("/fixture/wt/kartpad-diag/work", .workspace, lastChanged: 20, project: "kartpad"), policy: LocationPolicy(), devices: [:], project: finishedWorktree, now: now)
-        check(finishedAdvice.reason.contains("looks finished") && finishedAdvice.command == #"git -C "/fixture/kartpad" worktree remove "/fixture/wt/kartpad-diag""# && finishedAdvice.evidence.first?.contains("merged into main") == true,
+        check(finishedAdvice.reason.contains("looks finished") && finishedAdvice.command == "git -C '/fixture/kartpad' worktree remove '/fixture/wt/kartpad-diag'" && finishedAdvice.evidence.first?.contains("merged into main") == true,
               "a finished worktree says so and offers git's own removal, which refuses uncommitted work")
         check(finishedWorktree.summary(now: now) == "Last commit 2 weeks ago on codex/diag · merged into main · nothing uncommitted", "git evidence reads as one plain sentence")
         var keepPolicy = LocationPolicy(); keepPolicy.isKept = true
@@ -176,22 +176,22 @@ import Foundation
         check(advice(for: folder("/fixture/.npm/_cacache", .packageCache, lastChanged: 50), policy: LocationPolicy(expected: true), devices: [:], now: now).verdict == .keep, "your expected mark wins")
         let json = """
         {"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-5":[
-          {"udid":"OLD","name":"iPhone Old","isAvailable":true,"lastUsedAt":"2026-05-01T00:00:00Z","dataPathSize":5000000000},
+          {"udid":"0A1B2C3D-0000-4000-8000-000000000001","name":"iPhone Old","isAvailable":true,"lastUsedAt":"2026-05-01T00:00:00Z","dataPathSize":5000000000},
           {"udid":"NEW","name":"iPhone New","isAvailable":true,"lastUsedAt":"\(ISO8601DateFormatter().string(from: now.addingTimeInterval(-86400)))","dataPathSize":2000000000},
           {"udid":"NEVER","name":"iPad Fresh","isAvailable":true,"dataPathSize":4096}],
           "com.apple.CoreSimulator.SimRuntime.iOS-17-0":[{"udid":"GONE","name":"iPhone 15","isAvailable":false,"lastUsedAt":"2026-09-20T00:00:00Z","dataPathSize":1000}]}}
         """
         let sims = parseSimDevices(Data(json.utf8))
-        check(sims.count == 4 && sims["OLD"]?.runtime == "iOS 26.5" && sims["GONE"]?.available == false, "Xcode's device list is parsed with readable runtimes")
+        check(sims.count == 4 && sims["0A1B2C3D-0000-4000-8000-000000000001"]?.runtime == "iOS 26.5" && sims["GONE"]?.available == false, "Xcode's device list is parsed with readable runtimes")
         func device(_ udid: String) -> Advice { advice(for: folder("/Users/x/Library/Developer/CoreSimulator/Devices/\(udid)", .simulator, lastChanged: nil), policy: LocationPolicy(), devices: sims, now: now) }
-        check(device("OLD").verdict == .safe && device("OLD").reason.contains("iPhone Old") && device("OLD").command == "xcrun simctl delete OLD", "an unused simulator is safe, named, and removed through Xcode")
+        check(device("0A1B2C3D-0000-4000-8000-000000000001").verdict == .safe && device("0A1B2C3D-0000-4000-8000-000000000001").reason.contains("iPhone Old") && device("0A1B2C3D-0000-4000-8000-000000000001").command == "xcrun simctl delete 0A1B2C3D-0000-4000-8000-000000000001", "an unused simulator is safe, named, and removed through Xcode")
         check(device("NEW").verdict == .check, "a simulator used yesterday is check first")
         check(device("GONE").verdict == .safe && device("GONE").reason.contains("iOS 17.0"), "a simulator whose iOS is gone is safe")
         check(device("NEVER").verdict == .safe && device("NEVER").reason.contains("never been started"), "a never-started simulator is safe")
         let simRoot = advice(for: folder("/Users/x/Library/Developer/CoreSimulator/Devices", .simulator, lastChanged: nil), policy: LocationPolicy(), devices: sims, now: now)
         check(simRoot.verdict == .check && simRoot.reason.contains("4 test devices") && simRoot.command == "xcrun simctl delete unavailable", "the Devices folder is never removed whole; it summarizes devices from Xcode")
         check(simSummary(sims, now: now).idle == 3, "idle devices: unused, never started, or unable to run")
-        var pendingDevice = folder("/Users/x/Library/Developer/CoreSimulator/Devices/OLD", .simulator, lastChanged: nil); pendingDevice.state = .pending; pendingDevice.allocatedBytes = nil
+        var pendingDevice = folder("/Users/x/Library/Developer/CoreSimulator/Devices/0A1B2C3D-0000-4000-8000-000000000001", .simulator, lastChanged: nil); pendingDevice.state = .pending; pendingDevice.allocatedBytes = nil
         let liveDevice = withSimulatorFacts(pendingDevice, devices: sims, now: now)
         check(liveDevice.state == .measured && liveDevice.allocatedBytes == 5_000_000_000 && liveDevice.profile.displayName == "iPhone Old · iOS 26.5" && sizeSourceText(liveDevice) == "size from Xcode, now", "a device row uses Xcode's name and current size; no scan needed")
         let staleRoot = withSimulatorFacts(folder("/Users/x/Library/Developer/CoreSimulator/Devices", .simulator, lastChanged: nil), devices: sims, now: now)
@@ -428,6 +428,52 @@ import Foundation
         let mixedAsk = trashConfirmation(count: 2, bytes: 3 * gib, review: 1, reviewBytes: gib)
         check(mixedAsk == "2 items, 3 GiB, including 1 Review first (1 GiB). Each may hold the only copy of something. Copy anyway?", "any Review first item asks, however small the command")
         check(trashConfirmation(count: 2, bytes: 3 * gib, review: 2, reviewBytes: 3 * gib)?.hasPrefix("2 items, 3 GiB, all Review first.") == true, "a command of only Review first items says so")
-        print("SUCCESS: \(count) overview checks; no filesystem mutations.")
+        // Security: commands you paste. Every name is quoted so the shell reads it as text, whatever it holds.
+        func shellEcho(_ shell: String, _ script: String) -> String {
+            let process = Process(), pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: shell); process.arguments = ["-f", "-c", script]
+            process.standardOutput = pipe; process.standardError = pipe
+            try? process.run(); let data = pipe.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+            return String(decoding: data, as: UTF8.self)
+        }
+        let nasty = ["it's", "$(echo ran)", "\u{60}echo ran\u{60}", "a\"b", "back\\slash", "wow!", "two\nlines", "*", "-n"]
+        check(nasty.allSatisfy { shellEcho("/bin/zsh", "printf %s " + shellQuoted($0)) == $0 && shellEcho("/bin/bash", "printf %s " + shellQuoted($0)) == $0 },
+              "quoted names reach zsh and bash exactly as written: quotes, $(…), backticks, backslashes, !, newlines and globs run nothing")
+        let tree = ProjectActivity(root: "/Users/x/.codex/worktrees/$(echo ran)", isWorktree: true, mainRepository: "/Users/x/GitHub/it's", registered: true, branch: nil, defaultBranch: nil, lastCommit: nil, merged: nil, uncommitted: 0)
+        check(tree.removeWorktreeCommand == "git -C '/Users/x/GitHub/it'\\''s' worktree remove '/Users/x/.codex/worktrees/$(echo ran)'", "the worktree command quotes both paths, so $(…) in a name stays text")
+        check(simDeleteCommand("0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9") == "xcrun simctl delete 0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9" && simDeleteCommand("x; touch y") == nil && simDeleteCommand("") == nil,
+              "a simulator command is offered only for a real device ID")
+        check(forShell("( echo hi )", shell: "/bin/zsh") == "( echo hi )" && forShell("( echo 'hi' )", shell: "/opt/homebrew/bin/fish") == "/bin/zsh -c '( echo '\\''hi'\\'' )'"
+              && shellEcho("/bin/zsh", forShell("( echo 'hi' )", shell: "/opt/homebrew/bin/fish")) == "hi\n", "bash and zsh get the command as written; other shells get it run by zsh, unchanged")
+        // Which paths may be in a Trash command at all.
+        let home = "/Users/x", tmp = "/private/var/folders/ab/cd/T"
+        check(pathFitsCommand("/Users/x/.codex/scratch/pm028", home: home, temporary: tmp) && pathFitsCommand("/Users/x/Library/Developer/Xcode/DerivedData", home: home, temporary: tmp)
+              && pathFitsCommand(tmp + "/build-tmp", home: home, temporary: tmp), "ordinary scratch, build and temporary items may be in a command")
+        let refusedPaths = ["/Users/x", "/Users/x/GitHub", "/Users/x/Documents", "/Users/x/Library/Caches", "/Users/x/Library/Keychains/login.keychain-db", "/Users/x/Library/Mobile Documents/com~apple~CloudDocs/a",
+                            "/Users/x/.ssh/id", "/Users/x/.Trash/old", "/Users/y/build", "/", "/Applications/App.app", "/Users/x/a/../b", "/Users/x//a/b", "relative/path", tmp,
+                            "/Users/x/a/new\nline", "/Users/x/a/evil\u{1B}[2J", "/Users/x/a/\u{202E}gnp.exe"]
+        check(refusedPaths.allSatisfy { !pathFitsCommand($0, home: home, temporary: tmp) },
+              "never in a command: home and its top-level folders, ~/Library's own folders, keychains, iCloud Drive, keys, the Trash, other users, outside home, .. or //, and names with control or invisible characters")
+        // The command itself, run for real on things it must leave alone: a link, a missing path, and an expired command.
+        let fixture = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cc-security-" + UUID().uuidString)
+        try? FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
+        let target = fixture.appendingPathComponent("keep me.txt"), link = fixture.appendingPathComponent("link $(echo ran)")
+        try? Data("keep".utf8).write(to: target)
+        try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let soon = Date().addingTimeInterval(600)
+        let linkRun = shellEcho("/bin/zsh", trashCommand([link.path, fixture.path + "/missing"], expires: soon))
+        check(linkRun.contains("NOT moved: \(link.path) (a link; left alone)") && linkRun.contains("Already gone: \(fixture.path)/missing")
+              && FileManager.default.fileExists(atPath: target.path) && (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil && !linkRun.contains("ran\n"),
+              "a link is never moved, so what it points to is never touched; a missing path is reported, not acted on")
+        let expiredRun = shellEcho("/bin/bash", trashCommand([target.path], expires: Date().addingTimeInterval(-1)))
+        check(expiredRun.hasPrefix("This command is over an hour old, so nothing was moved.") && FileManager.default.fileExists(atPath: target.path),
+              "an expired command moves nothing, so one pasted later from clipboard history is harmless")
+        check(trashCommand(["/a"]).hasPrefix("( m=0") && trashCommand(["/a"], expires: soon).contains("-le \(Int(soon.timeIntervalSince1970)) ]"), "the clock check is in every copied command")
+        // git never runs a program a repository's config names.
+        let safety = gitSafetyArguments(filterKeys: ["filter.lfs.clean", "filter.lfs.process", "filter.a.b.smudge"]) ?? []
+        check(safety.contains("core.fsmonitor=false") && safety.contains("log.showSignature=false") && safety.contains("filter.lfs.clean=") && safety.contains("filter.lfs.process=")
+              && safety.contains("filter.a.b.smudge=") && safety.contains("filter.a.b.process=") && gitSafetyArguments(filterKeys: ["filter.x=y.clean"]) == nil,
+              "fsmonitor, signature checks and every filter the config names are switched off; a filter name that can't be emptied safely stops git running")
+        print("SUCCESS: \(count) overview checks; only a temporary fixture is written.")
     }
 }

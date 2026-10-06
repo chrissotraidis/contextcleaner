@@ -271,6 +271,10 @@ enum Verdict: Int, Comparable, CaseIterable, Identifiable {
         }
     }
 }
+/// The command that removes one simulator, only for a real device ID.
+func simDeleteCommand(_ udid: String) -> String? {
+    udid.range(of: "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$", options: .regularExpression) != nil ? "xcrun simctl delete " + udid : nil
+}
 /// A simulator as Xcode reports it (`xcrun simctl list devices -j`). Read-only.
 struct SimDevice: Equatable {
     let udid: String
@@ -356,8 +360,12 @@ struct StaleItem: Equatable, Identifiable {
 ///
 /// Repositories in prune had worktrees in the list: once they're moved, git is told they're gone (git worktree prune
 /// only forgets worktrees whose folders no longer exist), so their branches can be checked out again.
-func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = []) -> String {
-    func quoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+///
+/// With expires, the command first checks the clock and moves nothing once that time has passed, so a command pasted
+/// later from clipboard history can't act on folders that weren't rechecked. A link is never moved: Finder would move
+/// what it points to.
+func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = [], expires: Date? = nil) -> String {
+    let quoted = shellQuoted
     let total = paths.count == 1 ? "1 item" : "\(paths.count) items"
     let finder = "osascript -e 'on run a' -e 'with timeout of 300 seconds' -e 'tell application \"Finder\" to delete (POSIX file (item 1 of a) as alias)' -e 'end timeout' -e 'end run' \"$p\" 2>&1 >/dev/null"
     let gone = "[ ! -e \"$p\" ] && [ ! -L \"$p\" ]"
@@ -365,8 +373,10 @@ func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = []) 
         ?? "for p in " + paths.map(quoted).joined(separator: " ") + "; do "
     let end = list.map { "done 3< " + quoted($0) + "; " } ?? "done; "
     let forget = prune.isEmpty ? "" : "for r in " + prune.map(quoted).joined(separator: " ") + "; do [ -d \"$r\" ] && git -C \"$r\" worktree prune 2>/dev/null; done; "
-    return "( m=0; g=0; f=0; " + loop
+    let clock = expires.map { "[ \"$(date +%s)\" -le \(Int($0.timeIntervalSince1970)) ] || { echo \"This command is over an hour old, so nothing was moved. Copy a fresh one in Context Cleaner.\"; exit 1; }; " } ?? ""
+    return "( " + clock + "m=0; g=0; f=0; " + loop
         + "if " + gone + "; then g=$((g+1)); echo \"Already gone: $p\"; "
+        + "elif [ -L \"$p\" ]; then f=$((f+1)); echo \"NOT moved: $p (a link; left alone)\"; "
         + "elif [ -x /usr/bin/trash ] && /usr/bin/trash \"$p\" 2>/dev/null && " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
         + "else echo \"Asking Finder to move $p (macOS may ask for your password)\"; "
         + "e=$(" + finder + "); "
@@ -375,6 +385,28 @@ func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = []) 
         + "echo \"Moved $m of \(total) to the Trash.\"; "
         + "[ $g -gt 0 ] && echo \"$g already gone.\"; [ $f -gt 0 ] && echo \"$f not moved; the lines above say why.\"; "
         + "echo \"Empty the Trash to get the space back.\" )"
+}
+/// Quotes text for a POSIX shell. Inside single quotes nothing is special; a single quote is written as '\\''.
+func shellQuoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+/// Shells that read the Trash command as written. Others, such as fish, get it wrapped for zsh.
+let posixShells: Set<String> = ["bash", "zsh", "sh", "ksh", "dash"]
+func readsPOSIX(_ shell: String?) -> Bool { shell.map { posixShells.contains(URL(fileURLWithPath: $0).lastPathComponent) } ?? true }
+/// The command as your shell needs it: as written for bash and zsh, run by zsh for any other shell.
+func forShell(_ command: String, shell: String?) -> String { readsPOSIX(shell) ? command : "/bin/zsh -c " + shellQuoted(command) }
+/// Your login shell, from the user database.
+func loginShell() -> String? { getpwuid(getuid()).flatMap { $0.pointee.pw_shell }.map { String(cString: $0) } }
+/// Whether a path may appear in a Trash command at all, whatever its answer. It must be a plain absolute path with no
+/// control or invisible characters, which could garble the terminal or hide what the command shows, and lie inside your
+/// home folder or your temporary folder. Never your home folder's own top-level folders, a folder directly in ~/Library,
+/// your keychains, iCloud Drive, SSH or GPG keys, or the Trash.
+func pathFitsCommand(_ path: String, home: String, temporary: String? = Coverage.temporaryFolder) -> Bool {
+    guard isCleanAbsolutePath(path), !path.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) || [.format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) }) else { return false }
+    if let temporary, path.hasPrefix(temporary + "/") { return true }
+    guard path.hasPrefix(home + "/") else { return false }
+    let parts = path.dropFirst(home.count + 1).split(separator: "/").map(String.init)
+    guard parts.count >= 2, !(parts.count == 2 && parts[0] == "Library") else { return false }
+    let never = [["Library", "Keychains"], ["Library", "Mobile Documents"], ["Library", "CloudStorage"], [".ssh"], [".gnupg"], [".Trash"]]
+    return !never.contains { parts.starts(with: $0) }
 }
 /// Commands longer than this read their paths from a list file, so pasting stays instant.
 let trashInlineLimit = 4000
@@ -423,7 +455,7 @@ func freesNothing(_ m: FolderMeasurement) -> Advice? {
     return a
 }
 /// Why a folder was left out of a Trash command when it was rechecked.
-enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone" }
+enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "A link or a protected place" }
 /// Re-reads folders just before a Trash command is copied. A folder is left out if it's gone, if an app has a file
 /// open in it, or if it or anything directly inside it changed after the scan saw it. Metadata only.
 func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, slack: TimeInterval = 60) -> (ready: [String], leftOut: [String: LeftOut]) {
@@ -449,6 +481,7 @@ func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, s
             let (path, seen) = items[index]
             var st = stat()
             if lstat(path, &st) != 0 { base[index] = .gone }
+            else if (st.st_mode & S_IFMT) == S_IFLNK { base[index] = .unsafe }
             else if held.contains(path) { base[index] = .open }
             else if let seen, newestChange(path, own: st) > seen.addingTimeInterval(slack) { base[index] = .changed }
         }
@@ -686,7 +719,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         guard let device else {
             return Advice(verdict: .check, reason: "Xcode doesn't list this device anymore, so it may be left over.", howTo: "Check Xcode › Window › Devices and Simulators. If it isn't there, it's safe to move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
         }
-        let cmd = "xcrun simctl delete \(udid)"
+        let cmd = simDeleteCommand(udid)
         if !device.available { return Advice(verdict: .safe, reason: "\(device.name) needs \(device.runtime), which isn't installed, so it can't run anymore.", howTo: how, command: cmd, lastUsed: device.lastUsed) }
         guard let used = days(device.lastUsed) else { return Advice(verdict: .safe, reason: "\(device.name) (\(device.runtime)) has never been started.", howTo: how, command: cmd, lastUsed: nil) }
         if used >= 30 { return Advice(verdict: .safe, reason: "\(device.name) (\(device.runtime)) hasn't been used in \(Int(used)) days. Its apps and saves go with it.", howTo: how, command: cmd, lastUsed: device.lastUsed) }
@@ -845,7 +878,7 @@ struct ProjectActivity: Equatable {
     /// The git command that removes a finished worktree the safe way. Git refuses if anything is uncommitted.
     var removeWorktreeCommand: String? {
         guard isWorktree, registered == true, let mainRepository else { return nil }
-        return "git -C \"\(mainRepository)\" worktree remove \"\(root)\""
+        return "git -C " + shellQuoted(mainRepository) + " worktree remove " + shellQuoted(root)
     }
 }
 /// The nearest folder at or above path that holds a .git entry. Metadata only; stops at the home folder.
@@ -859,21 +892,71 @@ func repositoryRoot(for path: String, home: String) -> String? {
     }
     return nil
 }
-/// Runs git read-only with a time limit. Returns trimmed output, or nil on failure.
-func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10, okStatuses: Set<Int32> = [0]) -> String? {
+/// Whether Apple's developer tools are installed. /usr/bin/git and /usr/bin/xcrun are stubs without them, and running
+/// a stub opens macOS's "install the command line developer tools" dialog. xcode-select -p only prints a path.
+let developerToolsInstalled: Bool = {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/xcode-select")
+    process.arguments = ["-p"]
+    process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+    guard (try? process.run()) != nil else { return false }
+    process.waitUntilExit()
+    return process.terminationStatus == 0
+}()
+/// Settings that make git run a program, switched off for every read. A repository's own config (.git/config) can name
+/// programs for git to run: an fsmonitor hook, content filters, a signature checker. A folder you downloaded or copied can
+/// carry such a config, so Context Cleaner never lets git run them. Settings given with -c win over every config file.
+let gitSafetySettings = ["core.fsmonitor=false", "core.hooksPath=/dev/null", "log.showSignature=false", "gpg.program=/usr/bin/false",
+                         "gpg.ssh.program=/usr/bin/false", "gpg.x509.program=/usr/bin/false", "diff.external=", "core.pager=cat"]
+/// The -c arguments for a read: the fixed settings, plus every filter driver the config names, emptied so none runs.
+/// Nil when a driver's name can't be emptied safely; git isn't run then.
+func gitSafetyArguments(filterKeys: [String]) -> [String]? {
+    var arguments = gitSafetySettings.flatMap { ["-c", $0] }
+    var names: Set<String> = []
+    for key in filterKeys {
+        // filter.<name>.<setting>; a name may hold dots, so take everything between the first and the last.
+        guard key.hasPrefix("filter."), let last = key.lastIndex(of: "."), last > key.index(key.startIndex, offsetBy: 6) else { continue }
+        let name = String(key[key.index(key.startIndex, offsetBy: 7)..<last])
+        guard !name.isEmpty, !name.contains("="), !name.contains(where: { $0.isNewline || $0 == "\u{0}" }) else { return nil }
+        names.insert(name)
+    }
+    for name in names.sorted() { for part in ["clean", "smudge", "process"] { arguments += ["-c", "filter.\(name).\(part)="] } }
+    return arguments
+}
+/// Runs git and returns its output, or nil on failure or after the time limit. No settings are added; use gitOutput.
+private func runGit(_ root: String, _ arguments: [String], timeout: TimeInterval, okStatuses: Set<Int32>) -> String? {
+    guard developerToolsInstalled else { return nil }
     let process = Process(), pipe = Pipe()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-    process.arguments = ["-C", root, "--no-optional-locks"] + arguments
-    var environment = ProcessInfo.processInfo.environment; environment["GIT_OPTIONAL_LOCKS"] = "0"; environment["GIT_TERMINAL_PROMPT"] = "0"
+    process.arguments = arguments
+    var environment = ProcessInfo.processInfo.environment
+    environment["GIT_OPTIONAL_LOCKS"] = "0"; environment["GIT_TERMINAL_PROMPT"] = "0"; environment["GIT_ASKPASS"] = "/usr/bin/false"; environment["SSH_ASKPASS"] = "/usr/bin/false"
+    // Nothing set in the app's environment may point git at another repository or config.
+    for key in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_EXTERNAL_DIFF", "GIT_PAGER", "GIT_EXEC_PATH"] { environment[key] = nil }
     process.environment = environment
+    process.standardInput = FileHandle.nullDevice
     process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
     do { try process.run() } catch { return nil }
-    let deadline = DispatchTime.now() + timeout
-    DispatchQueue.global().asyncAfter(deadline: deadline) { if process.isRunning { process.terminate() } }
+    let pid = process.processIdentifier
+    // Asked to stop at the limit, then made to, so a stuck git can never hold a scan.
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 2) { if process.isRunning { kill(pid, SIGKILL) } }
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
-    guard okStatuses.contains(process.terminationStatus) else { return nil }
+    guard process.terminationReason == .exit, okStatuses.contains(process.terminationStatus) else { return nil }
     return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+/// Runs git read-only with a time limit, with every setting that could run a program switched off. Returns trimmed output, or nil on failure.
+func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10, okStatuses: Set<Int32> = [0]) -> String? {
+    // Listing config only reads it. Exit 1 means no filter is set.
+    let base = ["-C", root, "--no-optional-locks"]
+    guard let keys = runGit(root, base + gitSafetySettings.flatMap { ["-c", $0] } + ["config", "--name-only", "--get-regexp", "^filter\\."], timeout: 5, okStatuses: [0, 1]),
+          let safety = gitSafetyArguments(filterKeys: keys.split(whereSeparator: \.isNewline).map(String.init)) else { return nil }
+    return runGit(root, base + safety + arguments, timeout: timeout, okStatuses: okStatuses)
+}
+/// A worktree's .git file ("gitdir: …"). Read only when it's a small regular file, never through a link or from a pipe.
+func gitPointer(_ root: String) -> String? {
+    MetadataReader.data(root + "/.git", preferences: Preferences()).flatMap { $0.count <= 4096 ? String(data: $0, encoding: .utf8) : nil }
 }
 /// Which of these folders git ignores, read-only. Paths outside the project, or a git failure, give no answer.
 func ignoredByGit(_ root: String, paths: [String]) -> [String: Bool] {
@@ -889,7 +972,7 @@ func ignoredByGit(_ root: String, paths: [String]) -> [String: Bool] {
 /// Reads a project's git activity. Read-only.
 func readProjectActivity(_ root: String) -> ProjectActivity {
     var isWorktree = false, mainRepository: String?, registered: Bool?
-    if let pointer = try? String(contentsOfFile: root + "/.git", encoding: .utf8), pointer.hasPrefix("gitdir:") {
+    if let pointer = gitPointer(root), pointer.hasPrefix("gitdir:") {
         isWorktree = true
         let gitdir = pointer.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
         var st = stat()
@@ -1155,7 +1238,7 @@ func readRepoBackup(_ root: String) -> RepoBackup {
     let lastCheckout = gitOutput(root, ["log", "-g", "-1", "--format=%ct"]).flatMap(Double.init)
     let activity = [newestBranch, lastCheckout, lastCommit?.timeIntervalSince1970].compactMap { $0 }.max().map { Date(timeIntervalSince1970: $0) }
     var main: String?
-    if isWorktree, let pointer = try? String(contentsOfFile: root + "/.git", encoding: .utf8), let range = pointer.range(of: "/.git/worktrees/") {
+    if isWorktree, let pointer = gitPointer(root), let range = pointer.range(of: "/.git/worktrees/") {
         main = String(pointer[..<range.lowerBound]).replacingOccurrences(of: "gitdir:", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
     // Codex copies inputs git ignores (ref/, private/, downloaded libraries) into each worktree. A copy that matches
@@ -1275,7 +1358,7 @@ func ollamaModels(_ models: String, now: Date = Date()) -> [InsidePart] {
         var detail = model.date.map { "Downloaded " + ageText($0, now: now) } ?? "Downloaded model"
         // Only worth saying when it changes what removing it frees.
         if shared >= 100 * 1_048_576 { detail += " · shares \(byteLabel(shared)) with another model, freed only when both go" }
-        let quoted = model.name.contains(where: { !$0.isLetter && !$0.isNumber && !":./-_".contains($0) }) ? "'" + model.name + "'" : model.name
+        let quoted = model.name.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || ":./-_".unicodeScalars.contains($0)) }) ? model.name : shellQuoted(model.name)
         return InsidePart(name: model.name, detail: detail, bytes: total, command: "ollama rm " + quoted)
     }.sorted { $0.bytes > $1.bytes }
 }

@@ -99,6 +99,7 @@ struct FolderRow: Identifiable {
     /// Reads Xcode's simulator list in the background. Never changes simulators.
     func loadSimDevices() {
         DispatchQueue.global(qos: .utility).async {
+            guard developerToolsInstalled else { return }
             let process = Process(), pipe = Pipe()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
             process.arguments = ["simctl", "list", "devices", "-j"]
@@ -808,7 +809,9 @@ struct FolderRow: Identifiable {
         var started = Date()
         var movedBytes: Int64 = 0
         var done: Bool { !paths.isEmpty && moved.count == paths.count }
-        var expired: Bool { Date().timeIntervalSince(started) > 1800 }
+        /// How long a copied command works, and how long the app watches for it.
+        static let lifetime: TimeInterval = 3600
+        var expired: Bool { Date().timeIntervalSince(started) > Self.lifetime }
     }
     @Published private(set) var trashWatch: TrashWatch?
     /// Every Trash command you copied, newest first, with what became of each item.
@@ -836,13 +839,16 @@ struct FolderRow: Identifiable {
         var sizes: [String: Int64] = [:]
         for path in paths { sizes[path] = known[path] ?? knownBytes(path) }
         if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
-        let items = paths.map { (path: $0, seen: seenDate($0)) }
+        // Paths that may never be in a command are left out before anything is read.
+        let refused = paths.filter { !pathFitsCommand($0, home: home) }
+        let items = paths.filter { pathFitsCommand($0, home: home) }.map { (path: $0, seen: seenDate($0)) }
         // Worktrees offered because git had everything in them get the same git check again, in full.
         let cleanTrees = paths.filter { isWorktreeFolder($0) && worktrees[$0]?.keepsEverything == true }
         state.start(paths)
         DispatchQueue.global(qos: .userInitiated).async {
             let snapshot = ActivitySnapshot.capture()
             var result = recheck(items, open: snapshot.available ? snapshot.observations : nil)
+            for path in refused { result.leftOut[path] = .unsafe }
             // A clean worktree goes only if git still has everything: a new uncommitted change or a new file git
             // doesn't keep, anywhere inside, leaves it out.
             let trees = cleanTrees.filter { result.ready.contains($0) }
@@ -869,8 +875,14 @@ struct FolderRow: Identifiable {
     }
     private func finishCopy(_ paths: [String], _ result: (ready: [String], leftOut: [String: LeftOut]), sizes: [String: Int64]) {
         let id = UUID().uuidString
+        var result = result
         if !result.ready.isEmpty {
-            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(trashCommandText(trashTargets(result.ready), id: id), forType: .string)
+            if let command = trashCommandText(trashTargets(result.ready), id: id) {
+                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string)
+            } else {
+                for path in result.ready { result.leftOut[path] = .unsafe }
+                result.ready = []
+            }
         }
         TrashCopyState.shared.finish(paths, copied: result.ready.count, leftOut: result.leftOut.count)
         trashSizes = sizes
@@ -886,15 +898,20 @@ struct FolderRow: Identifiable {
         trashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in Task { @MainActor in self?.checkTrashWatch() } }
     }
     /// The command to copy: every path written out when it's short, or read from a saved list when it's long.
-    func trashCommandText(_ targets: [String], id: String) -> String {
-        let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil })).sorted()
-        let inline = trashCommand(targets, prune: prune)
-        guard inline.utf8.count > trashInlineLimit, let store, let list = try? store.saveTrashList(id, targets) else { return inline }
-        return trashCommand(targets, list: list, prune: prune)
+    /// It works for an hour, as long as the app watches for it. Shells other than bash and zsh get it read from a list,
+    /// wrapped for zsh. Nil when it can't be made safely.
+    func trashCommandText(_ targets: [String], id: String, shell: String? = loginShell()) -> String? {
+        let expires = Date().addingTimeInterval(TrashWatch.lifetime)
+        let posix = readsPOSIX(shell)
+        let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil })).filter { posix || !$0.contains("\\") }.sorted()
+        let inline = trashCommand(targets, prune: prune, expires: expires)
+        if posix && inline.utf8.count <= trashInlineLimit { return inline }
+        guard let store, let list = try? store.saveTrashList(id, targets), !list.contains("'"), !list.contains("\\") else { return posix ? inline : nil }
+        return forShell(trashCommand(targets, list: list, prune: prune, expires: expires), shell: shell)
     }
     private func checkTrashWatch() {
         guard let watch = trashWatch else { trashTimer?.invalidate(); return }
-        // Stop watching after half an hour; whatever is still in place is recorded as not moved.
+        // Stop watching once the command has expired; whatever is still in place is recorded as not moved.
         if watch.expired { trashTimer?.invalidate(); saveCleanup(); return }
         let pending = watch.paths.filter { !watch.moved.contains($0) }
         DispatchQueue.global(qos: .utility).async {
@@ -1246,9 +1263,7 @@ struct FolderRow: Identifiable {
         text += "## Free up space now · \(byteLabel(quick.reduce(Int64(0)) { $0 + $1.bytes })) in \(quick.count) \(quick.count == 1 ? "item" : "items") untouched for \(quietHours >= 24 ? "\(quietHours / 24) \(quietHours == 24 ? "day" : "days")" : "\(quietHours) hours") or longer\n\n"
         for s in quick.prefix(60) { text += "- [ ] **\(s.name.replacingOccurrences(of: "*", with: ""))** · \(byteLabel(s.bytes)) · \(s.cost.title) · \(s.why)\n  `\(s.path)`\n" }
         if quick.count > 60 { text += "- and \(quick.count - 60) more in the app\n" }
-        let easy = quick.filter { [.safe, .rebuild].contains($0.cost) }.map(\.path)
-        let command = trashCommand(easy)
-        if !easy.isEmpty && command.utf8.count <= trashInlineLimit { text += "\nOne command for the \(easy.count) Safe to remove and Rebuildable items above:\n\n```\n\(command)\n```\n" }
+        if !quick.isEmpty { text += "\nTo remove them, tick them in Free Up Space and copy one command. It checks each item again first, and works for an hour.\n" }
         text += "\n"
         text += "## 1. Safe to remove · \(byteLabel(uniqueAllocatedTotal(safe))) in \(safe.count) \(safe.count == 1 ? "folder" : "folders")\n\n"
         text += safe.isEmpty ? "Nothing yet. Scan again after a few days of normal work.\n\n" : ""
@@ -1262,7 +1277,7 @@ struct FolderRow: Identifiable {
         for (m, a) in inside {
             text += "- [ ] **\(m.profile.displayName)** · \(byteLabel(a.staleBytes)) in \(a.staleItems.count) \(a.staleItems.count == 1 ? "item" : "items")\n"
             for item in a.staleItems.prefix(8) { text += "  - \(item.name) · \(byteLabel(item.bytes))\(item.modifiedAt.map { " · changed " + ageText($0) } ?? "")\n" }
-            text += "  Move them to the Trash: `\(trashCommand(a.staleItems.map(\.path)))`\n"
+            text += "  Tick them in Free Up Space to copy a command for them.\n"
         }
         text += "\n## 3. Rebuildable · \(byteLabel(uniqueAllocatedTotal(rebuild))) in \(rebuild.count) \(rebuild.count == 1 ? "folder" : "folders")\n\nIn use, but rebuilt or downloaded again if you remove them. Remove between builds.\n\n"
         for m in rebuild.prefix(40) {

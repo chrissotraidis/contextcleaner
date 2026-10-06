@@ -110,6 +110,27 @@ import Foundation
         check(checked.ready == [quiet.path] && checked.leftOut[busy.path] == .changed && checked.leftOut[held.path] == .open && checked.leftOut[base.appendingPathComponent("recheck/gone").path] == .gone,
               "a Trash command leaves out folders changed since the scan, open in an app or already gone; Spotlight reading a file isn't use")
         check(recheck([(quiet.path, Date().addingTimeInterval(-600))], open: []).leftOut[quiet.path] == .changed, "a folder with files newer than the scan reads as changed")
+        // Changes deep inside count, not only those directly inside; Finder's .DS_Store doesn't; no date from the scan is no check.
+        let deep = base.appendingPathComponent("recheck/deep"), level = deep.appendingPathComponent("a/b/c")
+        try fm.createDirectory(at: level, withIntermediateDirectories: true)
+        try writeNew(payload, to: level.appendingPathComponent("old.bin"))
+        let long = Date().addingTimeInterval(-7200)
+        for url in [level.appendingPathComponent("old.bin"), level, level.deletingLastPathComponent(), deep.appendingPathComponent("a"), deep] { try fm.setAttributes([.modificationDate: long], ofItemAtPath: url.path) }
+        let scanned = Date().addingTimeInterval(-3600)
+        check(recheck([(deep.path, scanned)], open: []).ready == [deep.path], "a folder nothing has touched since the scan is ready")
+        try writeNew(payload, to: level.deletingLastPathComponent().appendingPathComponent(".DS_Store"))
+        check(recheck([(deep.path, scanned)], open: []).ready == [deep.path], "Finder writing a .DS_Store three levels down isn't a change")
+        try writeNew(payload, to: level.appendingPathComponent("new.bin"))
+        check(recheck([(deep.path, scanned)], open: []).leftOut[deep.path] == .changed, "a file written three levels down after the scan reads as changed")
+        check(recheck([(quiet.path, nil)], open: []).leftOut[quiet.path] == .changed, "with no date from the scan, nothing is assumed: it reads as changed")
+        // Saved open-file evidence stays small: one line per app and item inside.
+        let simRoot = "/Users/x/Library/Developer/CoreSimulator/Devices"
+        let flood = (0..<5000).map { ProcessEvidence(pid: 100 + $0 % 3, command: "launchd_sim", access: "r", path: simRoot + "/DEV\($0 % 4)/data/file\($0)") }
+        let compact = compactActivity(flood, under: simRoot)
+        check(compact.count == 12 && Set(compact.map(\.path)) == Set((0..<4).map { simRoot + "/DEV\($0)" }) && compactActivity(flood, under: simRoot + "/DEV1").allSatisfy { $0.path == simRoot + "/DEV1/data" },
+              "5,000 open files become one line per app and top-level item, which is all the answers use")
+        check(trashCommand(["/a"], prune: ["/r"]).contains("git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C \"$r\" worktree prune") && trashCommand(["/a"], prune: ["/r"]).contains("[ -d \"$r/.git\" ]"),
+              "telling git a worktree is gone runs no repository program, and only in a real repository")
         // Cleanups are kept as new files; the newest state of each wins.
         let history = try AppendStore(root: base.appendingPathComponent("store"))
         var cleanup = Cleanup(id: "c1", copiedAt: earlier, updatedAt: earlier, items: [.init(path: "/x", bytes: 5, status: .waiting), .init(path: "/y", bytes: 7, status: .leftOut, note: LeftOut.changed.rawValue)])

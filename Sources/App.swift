@@ -1120,7 +1120,7 @@ struct TrashWatchStatus: View {
     /// "Left out 2: 1 changed since the scan, 1 open in an app."
     private var leftOutText: String {
         let groups = Dictionary(grouping: watch.leftOut.values, by: { $0 })
-        let parts = [LeftOut.changed, .open, .gone, .unsafe].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
+        let parts = [LeftOut.changed, .open, .gone, .unsafe, .unchecked].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
         return "Left out \(watch.leftOut.count): " + parts.joined(separator: ", ") + "."
     }
 }

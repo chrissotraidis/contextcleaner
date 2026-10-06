@@ -1018,7 +1018,8 @@ private struct ElsewhereRow: View {
                     Text("\(idle.count) \(idle.count == 1 ? "project is" : "projects are") backed up and unchanged for a month: \(byteLabel(bytes)) with build folders. Nothing in \(idle.count == 1 ? "it" : "them") exists only on this Mac.")
                         .font(.caption).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    TrashCopyButton(paths: idle.map(\.path), sizes: Dictionary(idle.map { ($0.path, $0.totalBytes) }, uniquingKeysWith: { a, _ in a }))
+                    TrashCopyButton(paths: idle.map(\.path), sizes: Dictionary(idle.map { ($0.path, $0.totalBytes) }, uniquingKeysWith: { a, _ in a }),
+                                    seen: Dictionary(idle.compactMap { item in item.modified.map { (item.path, $0) } }, uniquingKeysWith: { a, _ in a }), backedUp: idle.map(\.path))
                 }.padding(8).background(Color.stable.opacity(0.08), in: RoundedRectangle(cornerRadius: 6)).padding(.leading, indent)
             }
             if children.isEmpty {

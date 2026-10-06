@@ -265,6 +265,22 @@ struct DirectoryListing {
         } catch { return DirectoryListing(names: [], complete: false, note: error.localizedDescription) }
     }
 }
+/// The open files inside a folder, one per app and top-level item: enough to say which app has it open, and which items
+/// inside are held. Thousands of files a simulator holds open become a few lines, and every scan saved stays small.
+func compactActivity(_ activity: [ProcessEvidence], under folder: String, limit: Int = 1000) -> [ProcessEvidence] {
+    let root = normalized(folder)
+    var seen: Set<ProcessEvidence> = [], out: [ProcessEvidence] = []
+    for item in activity where containsPath(root, item.path) {
+        var top = root
+        if item.path.count > root.count + 1 {
+            let rest = item.path.dropFirst(root == "/" ? 1 : root.count + 1)
+            top = (root == "/" ? "" : root) + "/" + (rest.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "")
+        }
+        let compact = ProcessEvidence(pid: item.pid, command: item.command, access: item.access, path: top)
+        if seen.insert(compact).inserted { out.append(compact); if out.count >= limit { break } }
+    }
+    return out
+}
 struct TreeMeasure {
     // Cooperative time/entry/depth limits: a slow filesystem call can outlast the deadline.
     // Streaming traversal bounds pending work by depth, rather than directory width.
@@ -275,7 +291,7 @@ struct TreeMeasure {
         func result(_ state: MeasurementState, _ bytes: Int64? = nil, _ logical: Int64? = nil, _ files: Int = 0,
                     _ latest: Date? = nil, diagnostic: String? = nil) -> FolderMeasurement {
             var measurement = FolderMeasurement(profile: profile, observedAt: Date(), state: state, allocatedBytes: bytes, logicalBytes: logical,
-                fileCount: files, latestModifiedAt: latest, processes: activity.filter { containsPath(profile.path, $0.path) },
+                fileCount: files, latestModifiedAt: latest, processes: compactActivity(activity, under: profile.path),
                 activityCheckAvailable: activityAvailable, diagnostic: diagnostic, elapsedSeconds: ProcessInfo.processInfo.systemUptime - started)
             measurement.scopeID = "metadata-v1:" + preferences.locations.filter { $0.value.excluded && containsPath(profile.path, $0.key) }.map { normalized($0.key) }.sorted().joined(separator: "|")
             measurement.contents = state == .measured ? contents : nil

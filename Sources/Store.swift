@@ -52,13 +52,13 @@ final class AppendStore {
         }
     }
     /// Decodes every file in parallel, one decoder per file. Unreadable files are reported and left untouched.
-    private func decodeAll<T: Decodable>(_ directory: String, as type: T.Type, label: String) -> [T] {
+    private func decodeAll<T: Decodable>(_ directory: String, as type: T.Type, label: String, transform: @escaping (T) -> T = { $0 }) -> [T] {
         let urls = files(directory)
         var results = [T?](repeating: nil, count: urls.count)
         results.withUnsafeMutableBufferPointer { slots in
             let base = slots.baseAddress!
             DispatchQueue.concurrentPerform(iterations: urls.count) { index in
-                base[index] = try? JSONDecoder().decode(T.self, from: Data(contentsOf: urls[index]))
+                base[index] = (try? JSONDecoder().decode(T.self, from: Data(contentsOf: urls[index]))).map(transform)
             }
         }
         for (index, value) in results.enumerated() where value == nil { warnings.append("Unreadable \(label) preserved: \(urls[index].lastPathComponent)") }
@@ -68,7 +68,15 @@ final class AppendStore {
         ((try? FileManager.default.contentsOfDirectory(at: root.appendingPathComponent(directory), includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "json" }
     }
     func records() -> [ScanRecord] {
-        decodeAll("scans", as: ScanRecord.self, label: "scan").sorted { $0.finishedAt < $1.finishedAt }
+        // Scans saved before 0.21.2 kept every open file. In memory, one line per app and item inside is all the answers use;
+        // the files themselves are never rewritten.
+        decodeAll("scans", as: ScanRecord.self, label: "scan", transform: { record in
+            var record = record
+            for m in record.measurements.indices where record.measurements[m].processes.count > 50 {
+                record.measurements[m].processes = compactActivity(record.measurements[m].processes, under: record.measurements[m].profile.path)
+            }
+            return record
+        }).sorted { $0.finishedAt < $1.finishedAt }
     }
     func append(_ record: ScanRecord) throws {
         guard record.id.range(of: "^[a-zA-Z0-9-]+$", options: .regularExpression) != nil else { throw StoreError.invalid("record ID") }

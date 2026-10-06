@@ -372,7 +372,7 @@ func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = [], 
     let loop = list.map { "echo \"Moving \(total) listed in \" " + quoted($0) + "; while IFS= read -r -d '' p <&3; do " }
         ?? "for p in " + paths.map(quoted).joined(separator: " ") + "; do "
     let end = list.map { "done 3< " + quoted($0) + "; " } ?? "done; "
-    let forget = prune.isEmpty ? "" : "for r in " + prune.map(quoted).joined(separator: " ") + "; do [ -d \"$r\" ] && git -C \"$r\" worktree prune 2>/dev/null; done; "
+    let forget = prune.isEmpty ? "" : "for r in " + prune.map(quoted).joined(separator: " ") + "; do [ -d \"$r/.git\" ] && [ ! -L \"$r\" ] && git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C \"$r\" worktree prune 2>/dev/null; done; "
     let clock = expires.map { "[ \"$(date +%s)\" -le \(Int($0.timeIntervalSince1970)) ] || { echo \"This command is over an hour old, so nothing was moved. Copy a fresh one in Context Cleaner.\"; exit 1; }; " } ?? ""
     return "( " + clock + "m=0; g=0; f=0; " + loop
         + "if " + gone + "; then g=$((g+1)); echo \"Already gone: $p\"; "
@@ -455,9 +455,9 @@ func freesNothing(_ m: FolderMeasurement) -> Advice? {
     return a
 }
 /// Why a folder was left out of a Trash command when it was rechecked.
-enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "A link or a protected place" }
+enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "A link or a protected place", unchecked = "Open files couldn't be checked" }
 /// Re-reads folders just before a Trash command is copied. A folder is left out if it's gone, if an app has a file
-/// open in it, or if it or anything directly inside it changed after the scan saw it. Metadata only.
+/// open in it, or if it or anything inside it changed after the scan saw it. Metadata only.
 func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, slack: TimeInterval = 60) -> (ready: [String], leftOut: [String: LeftOut]) {
     // Spotlight and Finder open files briefly while indexing or showing a folder; that isn't use.
     let passive: Set<String> = ["mds", "mds_stores", "mdworker", "mdworker_shared", "Finder", "QuickLookUIService", "fseventsd", "revisiond", "bird", "cloudd"]
@@ -483,7 +483,8 @@ func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, s
             if lstat(path, &st) != 0 { base[index] = .gone }
             else if (st.st_mode & S_IFMT) == S_IFLNK { base[index] = .unsafe }
             else if held.contains(path) { base[index] = .open }
-            else if let seen, newestChange(path, own: st) > seen.addingTimeInterval(slack) { base[index] = .changed }
+            // With no date from the scan there's nothing to compare, so it counts as changed.
+            else if seen.map({ newestChange(path, own: st) > $0.addingTimeInterval(slack) }) ?? true { base[index] = .changed }
         }
     }
     var ready: [String] = [], leftOut: [String: LeftOut] = [:]
@@ -492,28 +493,33 @@ func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, s
     }
     return (ready, leftOut)
 }
-/// The newest change to a folder or anything directly inside it. Finder's .DS_Store doesn't count.
-/// A folder with more entries than the limit is judged by its own date, which moves whenever an entry is added or removed.
-func newestChange(_ path: String, own: stat, limit: Int = 2000) -> Date {
-    func date(_ s: stat) -> Date { Date(timeIntervalSince1970: Double(s.st_mtimespec.tv_sec)) }
-    guard (own.st_mode & S_IFMT) == S_IFDIR else { return date(own) }
-    guard let dir = opendir(path) else { return date(own) }
-    defer { closedir(dir) }
-    var newest = Date.distantPast, store: Date?
-    var count = 0
-    while let entry = readdir(dir) {
-        let name = withUnsafeBytes(of: entry.pointee.d_name) { String(decoding: $0.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self) }
-        if name == "." || name == ".." { continue }
+/// The newest change anywhere inside a folder, read in batches like a scan: links, other disks and Finder's .DS_Store
+/// files don't count, and a folder's own date is ignored when a .DS_Store written then explains it. Stops after limit
+/// entries or the time allowance; the folders still open then count by their own dates, which move whenever an entry
+/// is added or removed.
+func newestChange(_ path: String, own: stat, limit: Int = 200_000, seconds: TimeInterval = 4) -> Date {
+    let ownSeconds = Int(own.st_mtimespec.tv_sec)
+    guard (own.st_mode & S_IFMT) == S_IFDIR, let root = try? BulkCursor(path, top: nil) else { return Date(timeIntervalSince1970: Double(ownSeconds)) }
+    struct Level { let cursor: BulkCursor; let mtime: Int; var store: Int? = nil }
+    var stack = [Level(cursor: root, mtime: ownSeconds)], newest = Int.min, count = 0
+    let started = ProcessInfo.processInfo.systemUptime
+    func close(_ level: Level) { if !(level.store.map { $0 >= level.mtime - 2 } ?? false) { newest = max(newest, level.mtime) } }
+    while !stack.isEmpty {
+        let entry = (try? stack[stack.count - 1].cursor.next()) ?? nil
+        guard let entry else { close(stack.removeLast()); continue }
         count += 1
-        if count > limit { return date(own) }
-        var st = stat()
-        guard lstat(path + "/" + name, &st) == 0 else { continue }
-        if name == ".DS_Store" { store = date(st); continue }
-        newest = max(newest, date(st))
+        if count > limit || ProcessInfo.processInfo.systemUptime - started > seconds {
+            for level in stack { newest = max(newest, level.mtime) }
+            break
+        }
+        if entry.name == ".DS_Store" { stack[stack.count - 1].store = entry.modifiedSeconds; continue }
+        if entry.isDirectory, !entry.isLink, !entry.isMountPoint, entry.device == own.st_dev, stack.count < 64,
+           let cursor = try? BulkCursor(stack[stack.count - 1].cursor.path + "/" + entry.name, top: nil) {
+            stack.append(Level(cursor: cursor, mtime: entry.modifiedSeconds)); continue
+        }
+        newest = max(newest, entry.modifiedSeconds)
     }
-    // The folder's own date moves when an entry is added or removed; ignore it when Finder's .DS_Store explains it.
-    if let store, store >= date(own).addingTimeInterval(-2) { return newest }
-    return max(newest, date(own))
+    return newest == Int.min ? .distantPast : Date(timeIntervalSince1970: Double(newest))
 }
 /// Readable names for processes that hold files open.
 func friendlyApp(_ command: String) -> String {

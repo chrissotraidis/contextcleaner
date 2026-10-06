@@ -252,6 +252,9 @@ struct TrashCopyButton: View {
     var bytes: Int64? = nil
     /// Sizes for items outside the scanned folders, which the app doesn't otherwise know.
     var sizes: [String: Int64] = [:]
+    /// For items outside the scanned folders: their newest change, and the checkouts git must still call backed up.
+    var seen: [String: Date] = [:]
+    var backedUp: [String] = []
     var prominent = false
     /// Shift-Command-C copies, for the one main Copy button on screen.
     var shortcut = false
@@ -288,7 +291,7 @@ struct TrashCopyButton: View {
     }
     @ViewBuilder private var confirmButtons: some View {
         Button("Cancel") { asking = nil }.controlSize(.small).keyboardShortcut(.cancelAction)
-        Button("Copy Anyway") { asking = nil; requestTrashCopy(paths, bytes: bytes, sizes: sizes) }
+        Button("Copy Anyway") { asking = nil; requestTrashCopy(paths, bytes: bytes, sizes: sizes, seen: seen, backedUp: backedUp) }
             .buttonStyle(.borderedProminent).controlSize(.small)
     }
     private var copyButton: some View {
@@ -301,7 +304,7 @@ struct TrashCopyButton: View {
         }()
         let symbol = mine && !state.checking ? (state.copied > 0 ? "checkmark.circle.fill" : "exclamationmark.circle") : "doc.on.clipboard"
         let button = Button {
-            if confirm != nil && asking != paths { asking = paths } else { asking = nil; requestTrashCopy(paths, bytes: bytes, sizes: sizes) }
+            if confirm != nil && asking != paths { asking = paths } else { asking = nil; requestTrashCopy(paths, bytes: bytes, sizes: sizes, seen: seen, backedUp: backedUp) }
         } label: { Label(title, systemImage: symbol).monospacedDigit().contentTransition(.numericText()) }
             .controlSize(.small).disabled(paths.isEmpty || state.checking)
             .help("Checks each item is still there, not open in an app and unchanged since the scan, then copies one Terminal command that moves them to the Trash and prints a line for each. Put Back works. Context Cleaner never runs it." + (shortcut ? " Shortcut: Shift-Command-C." : ""))
@@ -336,8 +339,10 @@ func openTerminal(_ app: TerminalApp) {
 
 /// Asks the app to copy a Move-to-Trash command and watch its folders until they're gone.
 extension Notification.Name { static let copyTrash = Notification.Name("ContextCleaner.copyTrash") }
-func requestTrashCopy(_ paths: [String], bytes: Int64? = nil, sizes: [String: Int64] = [:]) {
-    var info: [String: Any] = ["paths": paths, "sizes": sizes]
+/// seen gives the newest change for items the scan doesn't know, and backedUp lists checkouts that must still be backed up
+/// by git when you copy, such as projects from Everything else.
+func requestTrashCopy(_ paths: [String], bytes: Int64? = nil, sizes: [String: Int64] = [:], seen: [String: Date] = [:], backedUp: [String] = []) {
+    var info: [String: Any] = ["paths": paths, "sizes": sizes, "seen": seen, "backedUp": backedUp]
     if let bytes { info["bytes"] = bytes }
     NotificationCenter.default.post(name: .copyTrash, object: nil, userInfo: info)
 }

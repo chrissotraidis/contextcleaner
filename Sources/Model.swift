@@ -470,7 +470,9 @@ struct FolderRow: Identifiable {
             guard let paths = note.userInfo?["paths"] as? [String] else { return }
             let bytes = note.userInfo?["bytes"] as? Int64
             let sizes = note.userInfo?["sizes"] as? [String: Int64] ?? [:]
-            MainActor.assumeIsolated { self?.copyTrash(paths, bytes: bytes, sizes: sizes) }
+            let seen = note.userInfo?["seen"] as? [String: Date] ?? [:]
+            let backedUp = note.userInfo?["backedUp"] as? [String] ?? []
+            MainActor.assumeIsolated { self?.copyTrash(paths, bytes: bytes, sizes: sizes, seen: seen, backedUp: backedUp) }
         }
         loadSimDevices()
         refreshGone()
@@ -833,7 +835,7 @@ struct FolderRow: Identifiable {
     }
     /// Rechecks the folders, then copies one Move-to-Trash command for those that pass, and watches them so you can see it worked.
     /// A folder is left out if it's gone, open in an app, or changed since the scan. Context Cleaner never runs the command.
-    func copyTrash(_ paths: [String], bytes: Int64? = nil, sizes known: [String: Int64] = [:]) {
+    func copyTrash(_ paths: [String], bytes: Int64? = nil, sizes known: [String: Int64] = [:], seen knownSeen: [String: Date] = [:], backedUp: [String] = []) {
         let state = TrashCopyState.shared
         guard !paths.isEmpty, !state.checking else { return }
         var sizes: [String: Int64] = [:]
@@ -841,14 +843,26 @@ struct FolderRow: Identifiable {
         if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
         // Paths that may never be in a command are left out before anything is read.
         let refused = paths.filter { !pathFitsCommand($0, home: home) }
-        let items = paths.filter { pathFitsCommand($0, home: home) }.map { (path: $0, seen: seenDate($0)) }
+        let items = paths.filter { pathFitsCommand($0, home: home) }.map { (path: $0, seen: knownSeen[$0] ?? seenDate($0)) }
         // Worktrees offered because git had everything in them get the same git check again, in full.
         let cleanTrees = paths.filter { isWorktreeFolder($0) && worktrees[$0]?.keepsEverything == true }
         state.start(paths)
         DispatchQueue.global(qos: .userInitiated).async {
             let snapshot = ActivitySnapshot.capture()
             var result = recheck(items, open: snapshot.available ? snapshot.observations : nil)
+            // Without knowing which files apps have open, nothing is copied.
+            if !snapshot.available { for path in result.ready { result.leftOut[path] = .unchecked }; result.ready = [] }
             for path in refused { result.leftOut[path] = .unsafe }
+            // Projects offered as backed up must still be: git is asked again, in full.
+            let projects = backedUp.filter { result.ready.contains($0) }
+            var projectStates = [RepoBackup?](repeating: nil, count: projects.count)
+            projectStates.withUnsafeMutableBufferPointer { slots in
+                let base = slots.baseAddress!
+                DispatchQueue.concurrentPerform(iterations: projects.count) { index in base[index] = readRepoBackup(projects[index]) }
+            }
+            for (index, path) in projects.enumerated() where projectStates[index]?.removable != true {
+                result.ready.removeAll { $0 == path }; result.leftOut[path] = .changed
+            }
             // A clean worktree goes only if git still has everything: a new uncommitted change or a new file git
             // doesn't keep, anywhere inside, leaves it out.
             let trees = cleanTrees.filter { result.ready.contains($0) }
@@ -903,7 +917,9 @@ struct FolderRow: Identifiable {
     func trashCommandText(_ targets: [String], id: String, shell: String? = loginShell()) -> String? {
         let expires = Date().addingTimeInterval(TrashWatch.lifetime)
         let posix = readsPOSIX(shell)
-        let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil })).filter { posix || !$0.contains("\\") }.sorted()
+        // A worktree names its repository in its .git file; only a real repository in your home folder is told it's gone.
+        let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil }))
+            .filter { repo in var st = stat(); return pathFitsCommand(repo, home: home, temporary: nil) && lstat(repo + "/.git", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR && (posix || !repo.contains("\\")) }.sorted()
         let inline = trashCommand(targets, prune: prune, expires: expires)
         if posix && inline.utf8.count <= trashInlineLimit { return inline }
         guard let store, let list = try? store.saveTrashList(id, targets), !list.contains("'"), !list.contains("\\") else { return posix ? inline : nil }

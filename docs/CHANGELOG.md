@@ -2,6 +2,16 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.2
+
+A second security and reliability pass.
+
+- **Changes deep inside count.** Copying checked only a folder's own date and the items directly inside it, so a task still writing three levels down went unnoticed. The check now reads the whole folder, within limits, the way a scan does.
+- **Projects from Everything else are checked again.** Copying a backed-up project now asks git again and compares its date, as Clean worktrees already did.
+- **No open-file check, no command.** If Context Cleaner can't see which files apps have open, it copies nothing and says why. An item with no date from the scan counts as changed.
+- **Telling git a worktree is gone** happens only in a real repository in your home folder, with fsmonitor and hooks off.
+- **Scans are about a tenth the size.** Every open file inside every folder was saved with each scan, about 10 MB a time. Now it's one line per app and item. Older scans are read the same compact way, so the app loads faster and uses less memory; their files aren't rewritten.
+
 ## 0.21.1
 
 A security and reliability pass. See [SECURITY.md](../SECURITY.md).

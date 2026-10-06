@@ -376,7 +376,7 @@ import Foundation
         let own = exclusiveBytes([dirtyTree, dirtyBuild, cleanTree])
         check(own[dirtyTree.profile.path] == 5 * gib && own[dirtyBuild.profile.path] == 45 * gib && own[cleanTree.profile.path] == 40 * gib, "each byte counts once, for the innermost scanned folder that holds it")
         let pruned = trashCommand([oldTree.profile.path], prune: ["/Users/x/GitHub/kartpad"])
-        check(pruned.contains("for r in '/Users/x/GitHub/kartpad'; do [ -d \"$r\" ] && git -C \"$r\" worktree prune") && pruned.range(of: "worktree prune")!.lowerBound > pruned.range(of: "done; ")!.lowerBound
+        check(pruned.contains("for r in '/Users/x/GitHub/kartpad'; do [ -d \"$r/.git\" ] && [ ! -L \"$r\" ] && git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C \"$r\" worktree prune") && pruned.range(of: "worktree prune")!.lowerBound > pruned.range(of: "done; ")!.lowerBound
               && !trashCommand(["/a"]).contains("worktree"), "moving worktrees tells their repository afterwards; other commands don't mention git")
         // 0.19: your temporary folder. Items nothing has used for 3 days are safe, as macOS itself treats them.
         let tmpRoot = Coverage.temporaryFolder ?? "/private/var/folders/xx/T"

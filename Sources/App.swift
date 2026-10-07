@@ -164,7 +164,7 @@ struct MainView: View {
                     }
                     Spacer(minLength: 0)
                     Button("Stop These Questions…") {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+                        openFullDiskAccessSettings()
                     }.controlSize(.small)
                         .help("Opens Privacy & Security › Full Disk Access. Turning Context Cleaner on there lets it read sizes everywhere without asking each time. Your choice; it still never changes files.")
                 }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.caution.opacity(0.10))
@@ -231,7 +231,7 @@ struct MainView: View {
                 Text("\(model.selection.count) selected · \(byteLabel(summary.bytes))").font(.callout.weight(.semibold)).monospacedDigit()
                 Text(summary.unmeasured > 0 ? "folders inside others counted once · \(summary.unmeasured) not scanned" : "folders inside others counted once").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }.controlSize(.small)
+                Button("Show in Finder") { revealInFinder(Array(model.selection)) }.controlSize(.small)
                 Button("Clear") { model.selection = [] }.controlSize(.small)
             }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
         }
@@ -274,7 +274,10 @@ struct MainView: View {
                 }
                 if !summary.off.isEmpty {
                     let newest = summary.off.map(\.observedAt).max()
-                    VerdictTile(title: "Scanning off", value: byteLabel(summary.offBytes), detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) of your disk · " + (newest.map { "sizes from " + ageText($0) } ?? "sizes from before you turned it off"), symbol: "eye.slash", tint: .ignored, selected: false) {}
+                    let when = newest.map { "sizes from " + ageText($0) } ?? "sizes from before you turned it off"
+                    VerdictTile(title: "Scanning off", value: byteLabel(summary.offBytes),
+                                detail: "\(summary.off.count) \(summary.off.count == 1 ? "folder" : "folders") · \(share(summary.offBytes)) of your disk · " + when,
+                                symbol: "eye.slash", tint: .ignored, selected: false) {}
                         .allowsHitTesting(false)
                 }
             }
@@ -349,8 +352,12 @@ struct MainView: View {
         }
         .overlay {
             if model.rows.isEmpty {
-                ContentUnavailableView(model.section == .watching ? "Nothing on your watchlist" : "No matching folders", systemImage: model.section == .watching ? "eye" : "folder",
-                    description: Text(model.section == .watching ? "Right-click any folder and choose Add to Watchlist. Folders that grow a lot are added for you." : "Try another filter, or scan to update the list."))
+                let empty: (title: String, symbol: String, text: String) = switch model.section {
+                case .watching: ("Nothing on your watchlist", "eye", "Right-click any folder and choose Watch for Growth. Folders that grow a lot are added for you.")
+                case .kept: ("Nothing set aside", "eye.slash", "Right-click any folder and choose Ignore This Folder to keep it out of suggestions, or Stop Scanning This Folder to leave it unread.")
+                default: ("No matching folders", "folder", "Try another filter, or scan to update the list.")
+                }
+                ContentUnavailableView(empty.title, systemImage: empty.symbol, description: Text(empty.text))
             }
         }
     }
@@ -386,7 +393,7 @@ struct MainView: View {
         let path = row.id
         switch row.measurement.state {
         case .inaccessible where row.measurement.permissionDenied:
-            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }.controlSize(.small).help("Check the folder's permissions with Get Info")
+            Button("Show in Finder") { revealInFinder([path]) }.controlSize(.small).help("Check the folder's permissions with Get Info")
         case .inaccessible: Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small)
         case .limited: Button("Scan Subfolders") { model.selected = path; model.inspector = "Contents"; model.inspectChildren(row.measurement) }.controlSize(.small).disabled(busy)
         case .missing: Button("Stop Checking") { model.policy(path) { $0.excluded = true } }.controlSize(.small).disabled(model.running || model.inspecting).help("Turns this folder off. You can turn it back on in Settings › Coverage.")
@@ -415,14 +422,20 @@ struct MainView: View {
                     Divider()
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
                     ForEach(byCategory.keys.sorted { $0.rawValue < $1.rawValue }, id: \.self) { category in
-                        HStack { Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true); Text(category.displayName).font(.callout); Spacer(); Text("\(byCategory[category]!.count) · \(byteLabel(uniqueAllocatedTotal(byCategory[category]!)))").font(.callout).monospacedDigit().foregroundStyle(.secondary) }
+                        let items = byCategory[category] ?? []
+                        HStack {
+                            Circle().fill(category.tint).frame(width: 8, height: 8).accessibilityHidden(true)
+                            Text(category.displayName).font(.callout)
+                            Spacer()
+                            Text("\(items.count) · \(byteLabel(uniqueAllocatedTotal(items)))").font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                        }
                     }
                     Divider()
                     ForEach(summary.items.sorted { ($0.allocatedBytes ?? -1) > ($1.allocatedBytes ?? -1) }.prefix(12), id: \.profile.path) { item in
                         HStack { Text(item.profile.displayName).font(.callout).lineLimit(1); Spacer(); Text(item.allocatedBytes.map(byteLabel) ?? "—").font(.callout).monospacedDigit() }
                     }
                     if summary.items.count > 12 { Text("and \(summary.items.count - 12) more").font(.caption).foregroundStyle(.secondary) }
-                    HStack { Button("Show All in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting(model.selection.map { URL(fileURLWithPath: $0) }) }; Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.fixedSize() }
+                    HStack { Button("Show All in Finder", systemImage: "folder") { revealInFinder(Array(model.selection)) }; Menu("More") { SelectionActions(model: model, paths: Array(model.selection).sorted()) }.fixedSize() }
                 } else if let item = model.chosen {
                     folderInspector(item)
                 } else if model.running, let path = model.selected {
@@ -452,7 +465,10 @@ struct MainView: View {
             Text("Each row says why and offers one fix. Nothing is changed until you choose it.").font(.callout).foregroundStyle(.secondary)
         } else {
             Text(byteLabel(uniqueAllocatedTotal(measured))).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
-            Text(model.section == .kept ? "in \(model.keptSummary.kept.count + model.keptSummary.off.count) \(model.keptSummary.kept.count + model.keptSummary.off.count == 1 ? "folder" : "folders") you set aside, last known sizes" : "in \(measured.count) scanned \(measured.count == 1 ? "folder" : "folders")\(pending > 0 ? " · \(pending) not scanned yet" : "")").font(.callout).foregroundStyle(.secondary)
+            let setAside = model.keptSummary.kept.count + model.keptSummary.off.count
+            Text(model.section == .kept ? "in \(setAside) \(setAside == 1 ? "folder" : "folders") you set aside, last known sizes"
+                 : "in \(measured.count) scanned \(measured.count == 1 ? "folder" : "folders")" + (pending > 0 ? " · \(pending) not scanned yet" : ""))
+                .font(.callout).foregroundStyle(.secondary)
             if let biggest, let bytes = biggest.allocatedBytes {
                 Divider()
                 Text("Biggest").font(.headline)
@@ -532,7 +548,7 @@ struct MainView: View {
                 Image(systemName: item.state.problemSymbol).foregroundStyle(Color.attention).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.problem).font(.headline)
-                    Text(item.state == .limited ? "It holds too much to read in the allowed time. Scan its subfolders instead." : item.state == .missing ? "It may have been moved or removed since it was found." : item.permissionDenied ? "Its file permissions don't let you read it. Get Info in Finder shows who can." : item.state == .inaccessible ? "macOS didn't allow Context Cleaner to read it." : "No complete size was saved. Earlier sizes are kept.").font(.callout).foregroundStyle(.secondary)
+                    Text(problemSentence(item)).font(.callout).foregroundStyle(.secondary)
                     if item.state == .inaccessible && !item.permissionDenied { Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small) }
                     if item.state == .limited { Button("Scan Subfolders") { model.inspector = "Contents"; model.inspectChildren(item) }.controlSize(.small).disabled(busy) }
                 }
@@ -555,7 +571,7 @@ struct MainView: View {
         HStack {
             Button("Scan Folder", systemImage: "magnifyingglass") { model.scan(selectedOnly: true) }
                 .buttonStyle(.borderedProminent).disabled(!model.canRescanSelection).help("Scan only this folder. Nothing is changed.")
-            Button("Show in Finder", systemImage: "folder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+            Button("Show in Finder", systemImage: "folder") { revealInFinder([path]) }
         }
         Divider()
         DisclosureGroup("What's inside", isExpanded: $showInside) { if showInside { contents(item).padding(.top, 8) } }.font(.headline)
@@ -583,8 +599,8 @@ struct MainView: View {
                     .help(verdict.verdict.title + ". " + verdict.reason)
                     .accessibilityElement(children: .combine)
                     .contextMenu {
-                        if let command = simDeleteCommand(device.udid) { Button("Copy Remove Command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string) } }
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: model.home + "/Library/Developer/CoreSimulator/Devices/" + device.udid)]) }
+                        if let command = simDeleteCommand(device.udid) { Button("Copy Remove Command") { copyToClipboard(command) } }
+                        Button("Show in Finder") { revealInFinder([model.home + "/Library/Developer/CoreSimulator/Devices/" + device.udid]) }
                     }
                 }
                 Text("Current sizes and last use, straight from Xcode. Remove devices in Xcode › Window › Devices and Simulators.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -851,6 +867,16 @@ struct MainView: View {
         }.padding(.horizontal, 16).padding(.bottom, 10)
     }
 }
+/// Why a scan couldn't read a folder, in a sentence.
+func problemSentence(_ item: FolderMeasurement) -> String {
+    if item.permissionDenied { return "Its file permissions don't let you read it. Get Info in Finder shows who can." }
+    switch item.state {
+    case .limited: return "It holds too much to read in the allowed time. Scan its subfolders instead."
+    case .missing: return "It may have been moved or removed since it was found."
+    case .inaccessible: return "macOS didn't allow Context Cleaner to read it."
+    default: return "No complete size was saved. Earlier sizes are kept."
+    }
+}
 struct EditTarget: Identifiable { var id: String }
 /// The About panel: what Context Cleaner is, what it never does, and where to find more.
 func showAboutPanel() {
@@ -890,7 +916,7 @@ struct HistorySummary: View {
                 HStack(spacing: 6) {
                     Image(systemName: "trash").foregroundStyle(.secondary).accessibilityHidden(true)
                     Text(model.trashBytes.map { "The Trash holds \(byteLabel($0))" } ?? "Space comes back when you empty the Trash").monospacedDigit()
-                    Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.buttonStyle(.link)
+                    Button("Open Trash") { openTrash() }.buttonStyle(.link)
                 }.font(.caption).foregroundStyle(.secondary)
             }.frame(width: 240, alignment: .leading)
             VStack(alignment: .leading, spacing: 6) {
@@ -938,7 +964,7 @@ struct InsideBreakdown: View {
                             Spacer(minLength: 8)
                             Text(byteLabel(part.bytes)).font(.callout).monospacedDigit()
                             if let command = part.command {
-                                Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string); copied = part.id } label: {
+                                Button { copyToClipboard(command); copied = part.id } label: {
                                     Image(systemName: copied == part.id ? "checkmark" : "doc.on.clipboard")
                                 }.buttonStyle(.borderless).help("Copy: " + command + ". Paste it in Terminal to remove just this model.").accessibilityLabel("Copy remove command for " + part.name)
                             }
@@ -1057,7 +1083,7 @@ struct AccessHelp: View {
                 Button("Show This App in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
                 Spacer()
                 Button("Open Privacy Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+                    openFullDiskAccessSettings()
                 }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
@@ -1078,7 +1104,7 @@ struct ReportPreview: View {
             HStack {
                 Text(ByteCountFormatter.string(fromByteCount: Int64(text.utf8.count), countStyle: .file)).font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Button("Copy") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
+                Button("Copy") { copyToClipboard(text) }
                 Button("Cancel") { model.reportPreview = nil }.keyboardShortcut(.cancelAction)
                 Button("Save…") { model.saveReport(text) }.keyboardShortcut(.defaultAction).buttonStyle(.borderedProminent)
             }
@@ -1094,7 +1120,7 @@ struct TrashWatchStatus: View {
         HStack(spacing: 6) {
             Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
             Text(message).lineLimit(1).truncationMode(.tail)
-            if watch.done { Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.buttonStyle(.link) }
+            if watch.done { Button("Open Trash") { openTrash() }.buttonStyle(.link) }
             else if !watch.paths.isEmpty && watch.moved.isEmpty {
                 let terminal = chosenTerminal(terminalID)
                 Button("Open \(terminal.name)") { openTerminal(terminal) }.buttonStyle(.link).help("Opens \(terminal.name). Paste with Command-V and press Return.")

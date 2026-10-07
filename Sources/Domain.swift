@@ -2,10 +2,17 @@ import Foundation
 
 /// Absolute path without "." or ".." parts, repeated slashes or a trailing slash. Stored paths are almost always
 /// already in this form, so they're returned as-is; only unusual ones go through URL standardization.
-/// Results filled in parallel by concurrentPerform: each index writes only its own slot, so no two threads touch the same memory.
-struct ResultSlots<T>: @unchecked Sendable {
-    let base: UnsafeMutablePointer<T>
-    subscript(index: Int) -> T { get { base[index] } nonmutating set { base[index] = newValue } }
+private struct ParallelSlots<R>: @unchecked Sendable { let base: UnsafeMutablePointer<R?> }
+/// Transforms every item on several threads at once and keeps their order. For work that waits on the disk or on git.
+/// Each thread writes only its own slot, so no two threads touch the same memory.
+func parallelMap<T, R>(_ items: [T], _ transform: (T) -> R) -> [R] {
+    guard !items.isEmpty else { return [] }
+    var results = [R?](repeating: nil, count: items.count)
+    results.withUnsafeMutableBufferPointer { buffer in
+        let slots = ParallelSlots(base: buffer.baseAddress!)
+        DispatchQueue.concurrentPerform(iterations: items.count) { slots.base[$0] = transform(items[$0]) }
+    }
+    return results.map { $0! }
 }
 /// Text with control and invisible formatting characters shown as "?".
 func visibleName(_ text: String) -> String {
@@ -217,9 +224,6 @@ struct Preferences: Codable {
     func excluded(_ path: String) -> Bool {
         locations.contains { $0.value.excluded && containsPath($0.key, path) }
     }
-    func exclusionWithin(_ path: String) -> Bool {
-        locations.contains { $0.value.excluded && containsPath(path, $0.key) }
-    }
 }
 struct HistoryPoint: Identifiable {
     var id: String { recordID + path }
@@ -235,7 +239,6 @@ struct GrowthSummary {
     var current: Int64?
     var interval: TimeInterval?
     var delta: Int64? { guard let a = previous, let b = current else { return nil }; return b - a }
-    var bytesPerDay: Double? { guard let d = delta, let t = interval, t > 0 else { return nil }; return Double(d) * 86400 / t }
     var percent: Double? { guard let d = delta, let p = previous, p > 0 else { return nil }; return Double(d) / Double(p) * 100 }
 }
 func historyPoints(_ path: String, records: [ScanRecord]) -> [HistoryPoint] {

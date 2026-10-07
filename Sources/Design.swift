@@ -202,7 +202,7 @@ struct VerdictCard: View {
                     Text(command).font(.system(.caption, design: .monospaced)).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
                         .padding(.horizontal, 8).padding(.vertical, 5).background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 5))
                     Button(copied ? "Copied" : "Copy") {
-                        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string); copied = true
+                        copyToClipboard(command); copied = true
                     }.controlSize(.small).help("Copies the command. Context Cleaner never runs it.")
                 }
             }
@@ -226,7 +226,7 @@ struct VerdictCard: View {
             }
             if items.count > 10 { Text("and \(items.count - 10) more").font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 8) {
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(items.map { URL(fileURLWithPath: $0.path) }) }
+                Button("Show in Finder") { revealInFinder(items.map(\.path)) }
                     .controlSize(.small).help("Selects these items in Finder. Press ⌘⌫ there to move them to the Trash yourself.")
                 TrashCopyButton(paths: items.map(\.path), bytes: advice.staleBytes)
             }
@@ -313,6 +313,17 @@ struct TrashCopyButton: View {
     }
 }
 
+// One place for each small system action, so every button does it the same way.
+/// Puts text on the clipboard, replacing what was there.
+func copyToClipboard(_ text: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string) }
+/// Selects these items in a Finder window.
+func revealInFinder(_ paths: [String]) { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
+/// Opens the Trash in Finder.
+func openTrash() { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }
+/// Opens System Settings at Privacy & Security › Full Disk Access.
+func openFullDiskAccessSettings() {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) }
+}
 /// Terminal apps a copied command can be pasted into. Settings lists the ones installed.
 struct TerminalApp: Identifiable, Equatable { let id: String; let name: String }
 let terminalApps: [TerminalApp] = [
@@ -407,7 +418,7 @@ struct LocationActions: View {
     var body: some View {
         let policy = model.preferences.policy(path)
         let busy = model.running || model.inspecting || model.discovering
-        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }
+        Button("Show in Finder") { revealInFinder([path]) }
         Button("Scan Again") { model.selected = path; model.scan(selectedOnly: true) }.disabled(busy || policy.excluded)
         Divider()
         Button(policy.isKept ? "Stop Ignoring" : "Ignore This Folder") { model.policy(path) { $0.isKept.toggle() } }
@@ -428,7 +439,7 @@ struct SelectionActions: View {
     @ObservedObject var model: CleanerModel
     let paths: [String]
     var body: some View {
-        Button("Reveal \(paths.count) in Finder") { NSWorkspace.shared.activateFileViewerSelecting(paths.map { URL(fileURLWithPath: $0) }) }
+        Button("Reveal \(paths.count) in Finder") { revealInFinder(paths) }
         Button("Watch All") { for path in paths { model.policy(path) { $0.isWatched = true } } }
         Button("Stop Watching All") { for path in paths { model.policy(path) { $0.isWatched = false; $0.autoWatched = nil } } }
         Button("Ignore These Folders") { for path in paths { model.policy(path) { $0.isKept = true } }; model.selection = [] }

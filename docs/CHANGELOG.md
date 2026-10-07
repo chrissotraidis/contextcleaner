@@ -2,6 +2,14 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.4
+
+A tidy-up of the code, with no change to what the app decides.
+
+- **Less code.** Nine unused pieces and an old developer tool that was never built are gone. Six copies of the same parallel loop are one function, which also returns at once for an empty list instead of relying on an unguaranteed pointer. Copying, Show in Finder, Open Trash and the Full Disk Access link each have one function, used by every button.
+- **Easier to read.** The longest lines are split, a five-way nested choice is a plain function, and the two charts share one axis.
+- **Right words when a list is empty.** The Watchlist named a menu item that doesn't exist ("Add to Watchlist"; it's Watch for Growth), and Ignored suggested a filter it doesn't have.
+
 ## 0.21.3
 
 A last pass on first use, full disks and odd names.

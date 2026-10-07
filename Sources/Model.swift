@@ -53,16 +53,6 @@ struct FolderRow: Identifiable {
         if !measurement.processes.isEmpty { return "Open at last scan" }
         return ""
     }
-    /// Status color per docs/DESIGN.md: red cannot-measure, orange growing, accent watching, otherwise secondary.
-    var statusTint: Color {
-        if policy.excluded { return .secondary }
-        if [.pending, .cancelled, .excluded].contains(measurement.state) { return .secondary }
-        if measurement.state != .measured { return .attention }
-        if growing { return .growing }
-        if policy.expected { return .stable }
-        if policy.isWatched { return .accentColor }
-        return .secondary
-    }
 }
 @MainActor final class CleanerModel: ObservableObject {
     @Published var records: [ScanRecord] = [] { didSet { recordsVersion += 1 } }
@@ -173,13 +163,7 @@ struct FolderRow: Identifiable {
             }
             // Whole worktree folders: is everything in them kept by git? A few at a time; git status reads every file.
             let folders = paths.filter(isWorktreeFolder)
-            var backups = [RepoBackup?](repeating: nil, count: folders.count)
-            backups.withUnsafeMutableBufferPointer { slots in
-                let base = slots.baseAddress!
-                DispatchQueue.concurrentPerform(iterations: folders.count) { index in
-                    if let repository = worktreeRepository(folders[index]) { base[index] = readRepoBackup(repository) }
-                }
-            }
+            let backups = parallelMap(folders) { worktreeRepository($0).map(readRepoBackup) }
             var states: [String: RepoBackup] = [:]
             for (index, folder) in folders.enumerated() { if let backup = backups[index] { states[folder] = backup } }
             DispatchQueue.main.async { self.projectRoots = roots; self.projectsRead = true; self.worktrees = states; self.projects = activity }
@@ -311,37 +295,32 @@ struct FolderRow: Identifiable {
         where !outer.contains(where: { containsPath($0.profile.path, item.profile.path) }) { outer.append(item) }
         let skipped: [String: String] = [home + "/Library/CloudStorage": "Cloud storage isn't read, so nothing is downloaded.", home + "/Library/Mobile Documents": "iCloud Drive isn't read, so nothing is downloaded."]
         return { targets, topLevel in
-            var results = [ElsewhereItem?](repeating: nil, count: targets.count)
-            results.withUnsafeMutableBufferPointer { slots in
-                let base = ResultSlots(base: slots.baseAddress!)
-                DispatchQueue.concurrentPerform(iterations: targets.count) { index in
-                    let path = targets[index]
-                    let name = topLevel ? abbreviatedPath(path) : URL(fileURLWithPath: path).lastPathComponent
-                    if let note = skipped[path] { base[index] = ElsewhereItem(path: path, name: name, bytes: nil, note: note); return }
-                    guard !prefs.excluded(path), !token.stopped else { return }
-                    var st = stat()
-                    guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return }
-                    let inside = outer.filter { $0.profile.path.hasPrefix(path + "/") }
-                    let profile = FolderProfile(path: path, name: name, category: .unknown, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: [])
-                    let m = TreeMeasure.measure(profile, preferences: prefs, cancellation: token, activity: [], activityAvailable: false, limits: ScanLimits(seconds: 180, entries: 5_000_000))
-                    var item: ElsewhereItem
-                    switch m.state {
-                    case .measured:
-                        guard (m.allocatedBytes ?? 0) > 0 else { return }
-                        item = ElsewhereItem(path: path, name: topLevel && !inside.isEmpty ? name + " (the rest of it)" : name, bytes: m.allocatedBytes, note: nil)
-                    case .inaccessible: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "macOS didn't allow reading it. Full Disk Access lets Context Cleaner size it.")
-                    case .limited: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed.")
-                    default: return
-                    }
-                    item.isFolder = (st.st_mode & S_IFMT) == S_IFDIR
-                    item.about = elsewhereAbout(path, home: home)
-                    item.scannedInside = inside.reduce(0) { $0 + ($1.allocatedBytes ?? 0) }
-                    item.modified = ([m.latestModifiedAt] + inside.map(\.latestModifiedAt)).compactMap { $0 }.max()
-                    item.scannedModified = inside.compactMap(\.latestModifiedAt).max()
-                    var git = stat()
-                    if item.isFolder, !topLevel, lstat(path + "/.git", &git) == 0 { item.backup = readRepoBackup(path) }
-                    base[index] = item
+            let results = parallelMap(targets) { path -> ElsewhereItem? in
+                let name = topLevel ? abbreviatedPath(path) : URL(fileURLWithPath: path).lastPathComponent
+                if let note = skipped[path] { return ElsewhereItem(path: path, name: name, bytes: nil, note: note) }
+                guard !prefs.excluded(path), !token.stopped else { return nil }
+                var st = stat()
+                guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) != S_IFLNK else { return nil }
+                let inside = outer.filter { $0.profile.path.hasPrefix(path + "/") }
+                let profile = FolderProfile(path: path, name: name, category: .unknown, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: [])
+                let m = TreeMeasure.measure(profile, preferences: prefs, cancellation: token, activity: [], activityAvailable: false, limits: ScanLimits(seconds: 180, entries: 5_000_000))
+                var item: ElsewhereItem
+                switch m.state {
+                case .measured:
+                    guard (m.allocatedBytes ?? 0) > 0 else { return nil }
+                    item = ElsewhereItem(path: path, name: topLevel && !inside.isEmpty ? name + " (the rest of it)" : name, bytes: m.allocatedBytes, note: nil)
+                case .inaccessible: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "macOS didn't allow reading it. Full Disk Access lets Context Cleaner size it.")
+                case .limited: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed.")
+                default: return nil
                 }
+                item.isFolder = (st.st_mode & S_IFMT) == S_IFDIR
+                item.about = elsewhereAbout(path, home: home)
+                item.scannedInside = inside.reduce(0) { $0 + ($1.allocatedBytes ?? 0) }
+                item.modified = ([m.latestModifiedAt] + inside.map(\.latestModifiedAt)).compactMap { $0 }.max()
+                item.scannedModified = inside.compactMap(\.latestModifiedAt).max()
+                var git = stat()
+                if item.isFolder, !topLevel, lstat(path + "/.git", &git) == 0 { item.backup = readRepoBackup(path) }
+                return item
             }
             return results.compactMap { $0 }.sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
         }
@@ -548,7 +527,10 @@ struct FolderRow: Identifiable {
         let pendingCount = discovery.profiles.filter { !known.contains($0.path) && !excluded($0.path) && !fileOnly.contains($0.path) }.count
         let watching = preferences.locations.filter { ($0.value.isWatched) && !excluded($0.key) }.count
         let safe = verdictGroups[.safe] ?? []
-        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes }, measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) }, growthCount: growthCount, watchingCount: watching, attentionCount: attention.count, pendingCount: pendingCount, safe: safe, safeBytes: uniqueAllocatedTotal(safe))
+        let snapshot = OverviewSnapshot(groups: groups, total: groups.reduce(0) { $0 + $1.bytes },
+                                        measuredBySize: measured.sorted { ($0.allocatedBytes ?? 0) > ($1.allocatedBytes ?? 0) },
+                                        growthCount: growthCount, watchingCount: watching, attentionCount: attention.count,
+                                        pendingCount: pendingCount, safe: safe, safeBytes: uniqueAllocatedTotal(safe))
         overviewCache = (key, nextReviewDeadline, snapshot)
         return snapshot
     }
@@ -674,17 +656,6 @@ struct FolderRow: Identifiable {
         coverageCache = (key, value)
         return value
     }
-    /// Old items inside folders you're still using: how many folders hold them and how much space they take.
-    private var insideCache: (key: String, value: (folders: Int, bytes: Int64, biggest: String?)) = ("", (0, 0, nil))
-    var unusedInside: (folders: Int, bytes: Int64, biggest: String?) {
-        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
-        if insideCache.key == key { return insideCache.value }
-        let found = (verdictGroups[.check] ?? []).map { ($0, adviceFor($0)) }.filter { !$0.1.staleItems.isEmpty }.sorted { $0.1.staleBytes > $1.1.staleBytes }
-        let value = (found.count, found.reduce(Int64(0)) { $0 + $1.1.staleBytes }, found.first?.0.profile.displayName)
-        insideCache = (key, value)
-        return value
-    }
-    /// Scanned size of a Coverage group, counting only places that are turned on (the ones a scan reads).
     /// What you could get back, by answer. Old items inside folders are counted apart from their folder's answer.
     struct Reclaim {
         var safe: (count: Int, bytes: Int64) = (0, 0)
@@ -855,24 +826,14 @@ struct FolderRow: Identifiable {
             for path in refused { result.leftOut[path] = .unsafe }
             // Projects offered as backed up must still be: git is asked again, in full.
             let projects = backedUp.filter { result.ready.contains($0) }
-            var projectStates = [RepoBackup?](repeating: nil, count: projects.count)
-            projectStates.withUnsafeMutableBufferPointer { slots in
-                let base = slots.baseAddress!
-                DispatchQueue.concurrentPerform(iterations: projects.count) { index in base[index] = readRepoBackup(projects[index]) }
-            }
-            for (index, path) in projects.enumerated() where projectStates[index]?.removable != true {
+            let projectStates = parallelMap(projects, readRepoBackup)
+            for (index, path) in projects.enumerated() where !projectStates[index].removable {
                 result.ready.removeAll { $0 == path }; result.leftOut[path] = .changed
             }
             // A clean worktree goes only if git still has everything: a new uncommitted change or a new file git
             // doesn't keep, anywhere inside, leaves it out.
             let trees = cleanTrees.filter { result.ready.contains($0) }
-            var fresh = [RepoBackup?](repeating: nil, count: trees.count)
-            fresh.withUnsafeMutableBufferPointer { slots in
-                let base = slots.baseAddress!
-                DispatchQueue.concurrentPerform(iterations: trees.count) { index in
-                    base[index] = worktreeRepository(trees[index]).map(readRepoBackup)
-                }
-            }
+            let fresh = parallelMap(trees) { worktreeRepository($0).map(readRepoBackup) }
             for (index, path) in trees.enumerated() where fresh[index]?.keepsEverything != true {
                 result.ready.removeAll { $0 == path }; result.leftOut[path] = .changed
             }
@@ -892,7 +853,7 @@ struct FolderRow: Identifiable {
         var result = result
         if !result.ready.isEmpty {
             if let command = trashCommandText(trashTargets(result.ready), id: id) {
-                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(command, forType: .string)
+                copyToClipboard(command)
             } else {
                 for path in result.ready { result.leftOut[path] = .unsafe }
                 result.ready = []
@@ -969,7 +930,6 @@ struct FolderRow: Identifiable {
     /// Where used space went since from, by place; plus the disk's own change over the same span.
     struct SpaceWent {
         var from: Date; var to: Date; var diskChange: Int64?; var places: [SpaceChange]
-        var explained: Int64 { places.reduce(0) { $0 + $1.bytes } }
         /// Days the span covers, at least an hour's worth, for rates.
         var days: Double { max(to.timeIntervalSince(from), 3600) / 86400 }
     }
@@ -988,29 +948,9 @@ struct FolderRow: Identifiable {
         wentCache = (key, value)
         return value
     }
+    /// Scanned size of a Coverage group, counting only places that are turned on (the ones a scan reads).
     func groupSize(_ group: CoverageGroup) -> Int64 {
         Coverage.entries.filter { $0.group == group && !isExcluded($0.path(home: home)) }.reduce(0) { $0 + (coverageSizes[$1.id] ?? 0) }
-    }
-    /// A span of time since last use, with the scanned space in it by answer.
-    struct IdleBucket: Identifiable { let id: Int; let title: String; var bytes: [Verdict: Int64] = [:]; var total: Int64 { bytes.values.reduce(0, +) } }
-    private var idleCache: (key: String, value: [IdleBucket]) = ("", [])
-    /// Scanned space by how long it has gone unused, split by answer. Folders inside others count once.
-    var idleBuckets: [IdleBucket] {
-        let key = derivedKey + "|\(preferencesVersion)|\(discoveryVersion)"
-        if idleCache.key == key { return idleCache.value }
-        let titles = ["This week", "This month", "1–3 months", "3+ months", "Unknown"]
-        var items: [[Verdict: [FolderMeasurement]]] = Array(repeating: [:], count: titles.count)
-        let now = Date()
-        for (verdict, group) in verdictGroups {
-            for item in group {
-                let days = adviceFor(item).lastUsed.map { now.timeIntervalSince($0) / 86400 }
-                let index = days.map { $0 < 7 ? 0 : $0 < 30 ? 1 : $0 < 90 ? 2 : 3 } ?? 4
-                items[index][verdict, default: []].append(item)
-            }
-        }
-        let value = titles.enumerated().map { index, title in IdleBucket(id: index, title: title, bytes: items[index].mapValues { uniqueAllocatedTotal($0) }) }
-        idleCache = (key, value)
-        return value
     }
     /// Folders you keep or turned off, with their last known sizes: the Kept view's totals.
     struct KeptSummary { var kept: [FolderMeasurement] = []; var keptBytes: Int64 = 0; var off: [FolderMeasurement] = []; var offBytes: Int64 = 0 }
@@ -1062,7 +1002,6 @@ struct FolderRow: Identifiable {
         let saved = (latest.filter { $0.profile.path == selected } + [inspected[selected]].compactMap { $0 }).max { $0.observedAt < $1.observedAt } ?? rows.first(where: { $0.id == selected })?.measurement
         return saved.map { withSimulatorFacts($0, devices: simDevices) }
     }
-    var lastScan: ScanRecord? { records.last }
     func policy(_ path: String, _ change: (inout LocationPolicy) -> Void) {
         guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return }
         var next = preferences, p = next.policy(path); change(&p); next.locations[normalized(path)] = p
@@ -1075,7 +1014,6 @@ struct FolderRow: Identifiable {
         do { try store.save(next); preferences = next }
         catch { self.error = "Appearance could not be saved: \(error.localizedDescription)" }
     }
-    func setDaily(_ value: Bool) { updatePreferences { $0.dailyWhileOpen = value; $0.schedule = value ? "daily" : "off" } }
     /// Single save path for every preference change; each save appends a new event.
     func updatePreferences(_ change: (inout Preferences) -> Void) {
         guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return }

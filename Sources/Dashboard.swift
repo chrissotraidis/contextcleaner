@@ -58,34 +58,17 @@ struct ProportionBar: View {
         }.frame(height: 7).accessibilityHidden(true)
     }
 }
-/// A tiny trend line drawn as a path, so long tables stay fast.
-struct Sparkline: View {
-    let values: [Double]
-    var tint: Color = .secondary
-    var body: some View {
-        GeometryReader { geo in
-            if values.count > 1, let low = values.min(), let high = values.max() {
-                let flat = high - low < max(high * 0.0005, 1)
-                Path { path in
-                    for (index, value) in values.enumerated() {
-                        let x = geo.size.width * CGFloat(index) / CGFloat(values.count - 1)
-                        let y = flat ? geo.size.height / 2 : geo.size.height * (1 - CGFloat((value - low) / (high - low)))
-                        if index == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
-                    }
-                }.stroke(tint, style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-            }
-        }.frame(width: 64, height: 18).accessibilityHidden(true)
-    }
-}
-extension Array where Element == Double {
-    /// Orange when the latest value is noticeably above the first, otherwise quiet.
-    var trendTint: Color {
-        guard let first, let last, count > 1 else { return .secondary }
-        return last - first > Swift.max(first * 0.01, 1_048_576) ? .growing : .secondary
-    }
-}
 let gibibyte = 1_073_741_824.0
 extension View {
+    /// A chart's left axis in bytes, from values plotted in GiB: three quiet grid lines, each labelled.
+    func byteAxis(_ label: @escaping (Int64) -> String) -> some View {
+        chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18))
+                AxisValueLabel { if let v = value.as(Double.self) { Text(label(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } }
+            }
+        }
+    }
     /// Reports the date under the pointer while hovering a chart's plot area.
     func chartHover(_ date: Binding<Date?>) -> some View {
         chartOverlay { proxy in
@@ -149,7 +132,7 @@ struct FolderTrend: View {
                     if let picked { RuleMark(x: .value("Selected", picked.date)).foregroundStyle(.secondary).lineStyle(StrokeStyle(dash: [3])) }
                 }
                 .chartYScale(domain: 0...max(top * 1.1, 0.001))
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(byteLabel(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
+                .byteAxis(byteLabel)
                 .chartXAxis {
                     // Within two days, dates alone repeat; show the day and hour instead.
                     let short = (series.last?.date.timeIntervalSince(first.date) ?? 0) < 2 * 86400
@@ -344,7 +327,7 @@ struct UsageChart: View {
                 }
                 .chartXScale(domain: domain)
                 .chartXAxis { AxisMarks(values: .stride(by: xStride(domain).0, count: xStride(domain).1)) { _ in AxisValueLabel(format: xFormat(domain)).font(.caption).foregroundStyle(Color.secondary) } }
-                .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5)).foregroundStyle(Color.secondary.opacity(0.18)); AxisValueLabel { if let v = value.as(Double.self) { Text(signedBytes(Int64(v * gibibyte))).font(.caption).foregroundStyle(.secondary) } } } }
+                .byteAxis(signedBytes)
                 .chartHover($hover)
                 .chartOverlay { proxy in interactionLayer(proxy) }
                 .accessibilityLabel("Change in space used per \(range.bucketName). Blue bars above the line used space, green bars below it freed space.")
@@ -837,7 +820,7 @@ struct StartPanel: View {
         HStack(spacing: 6) {
             Image(systemName: "trash").foregroundStyle(.secondary).accessibilityHidden(true)
             Text(model.trashBytes.map { "Trash holds \(byteLabel($0))" } ?? "Space comes back when you empty the Trash").monospacedDigit()
-            Button("Open Trash") { NSWorkspace.shared.open(URL(fileURLWithPath: homeDirectory + "/.Trash")) }.buttonStyle(.link)
+            Button("Open Trash") { openTrash() }.buttonStyle(.link)
                 .help("Opens the Trash in Finder. Space comes back when you empty it; Context Cleaner never does.")
         }.font(.caption).foregroundStyle(.secondary).fixedSize()
     }
@@ -906,7 +889,13 @@ struct ElsewhereView: View {
             Text("Space outside the places Context Cleaner scans: macOS and its system data, your apps, Photos, Mail and Messages, local snapshots, and your own folders. It's sized each time you open this, biggest first; open any row to see what's in it. Projects say whether they're backed up.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if model.lookingElsewhere {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Sizing your home folder, Library and Applications. It reads sizes only and can take a few minutes. If macOS asks about other apps' data, sizing waits for your answer.").font(.callout).fixedSize(horizontal: false, vertical: true); Spacer(); Button("Stop") { model.stopLookingElsewhere() } }
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Sizing your home folder, Library and Applications. It reads sizes only and can take a few minutes. If macOS asks about other apps' data, sizing waits for your answer.")
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Stop") { model.stopLookingElsewhere() }
+                }
             } else if model.elsewhere.isEmpty {
                 HStack {
                     Button("Look Inside", systemImage: "magnifyingglass") { model.lookElsewhere() }.buttonStyle(.borderedProminent)
@@ -974,7 +963,7 @@ private struct ElsewhereRow: View {
                     SizeBar(fraction: Double(bytes) / largest)
                     Text(byteLabel(bytes)).font(.callout).monospacedDigit().frame(width: 84, alignment: .trailing)
                 }
-                Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) } label: { Image(systemName: "folder") }
+                Button { revealInFinder([item.path]) } label: { Image(systemName: "folder") }
                     .buttonStyle(.borderless).help("Show in Finder").accessibilityLabel("Show in Finder")
             }
             .padding(.leading, CGFloat(depth) * 18)

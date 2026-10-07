@@ -45,7 +45,7 @@ struct GeneralSettings: View {
                 LabeledContent {
                     HStack(spacing: 10) {
                         if !fullDiskAccess {
-                            Button("Open Settings") { if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") { NSWorkspace.shared.open(url) } }
+                            Button("Open Settings") { openFullDiskAccessSettings() }
                         }
                         Button("Check Again") { fullDiskAccess = hasFullDiskAccess(); model.refreshTrash() }
                     }
@@ -256,7 +256,7 @@ struct CoverageSettings: View {
                         Image(systemName: "folder").foregroundStyle(.secondary).frame(width: 18).padding(.leading, 22)
                         Text(model.displayName(path)).font(.callout).lineLimit(1).help(path)
                         Spacer()
-                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) }.controlSize(.small)
+                        Button("Show in Finder") { revealInFinder([path]) }.controlSize(.small)
                         Toggle(model.displayName(path), isOn: Binding(get: { !model.preferences.excluded(path) }, set: { on in model.policy(path) { $0.excluded = !on } })).toggleStyle(.switch).labelsHidden().controlSize(.small).disabled(busy)
                     }
                 }

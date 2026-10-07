@@ -90,8 +90,16 @@ struct ScanEngine {
         }
         let measurements = results.keys.sorted().map { results[$0]! }
         let free = ((try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory())[.systemFreeSize]) as? NSNumber)?.int64Value
+        let needsAttention = measurements.contains { [.limited, .inaccessible, .failed].contains($0.state) }
+        let stopReason: String? = cancellation.stopped ? "Cancelled by you"
+            : measurements.count < profiles.count ? "Pass time allowance reached"
+            : needsAttention ? "Some locations need attention" : nil
         return ScanRecord(id: UUID().uuidString, startedAt: start, finishedAt: Date(), scope: scope,
-            complete: !cancellation.stopped && measurements.count == profiles.count && !measurements.contains(where: { [.limited, .cancelled, .inaccessible, .failed].contains($0.state) }), freeBytes: free, measurements: measurements,
-            discoveryNotes: notes + [activity.note, "Allowance: up to \(Int(limits.seconds)) seconds and \(limits.entries.formatted()) entries per location; \(Int(totalSeconds)) seconds per pass. Limits are checked between filesystem calls.", "Visited \(measurements.count) of \(profiles.count) selected locations. Unvisited locations retain their previous observations."], legacySource: nil, requestedCount: profiles.count, stopReason: cancellation.stopped ? "Cancelled by you" : measurements.count < profiles.count ? "Pass time allowance reached" : measurements.contains(where: { [.limited, .inaccessible, .failed].contains($0.state) }) ? "Some locations need attention" : nil)
+            complete: !cancellation.stopped && measurements.count == profiles.count && !measurements.contains(where: { [.limited, .cancelled, .inaccessible, .failed].contains($0.state) }),
+            freeBytes: free, measurements: measurements,
+            discoveryNotes: notes + [activity.note,
+                "Allowance: up to \(Int(limits.seconds)) seconds and \(limits.entries.formatted()) entries per location; \(Int(totalSeconds)) seconds per pass. Limits are checked between filesystem calls.",
+                "Visited \(measurements.count) of \(profiles.count) selected locations. Unvisited locations retain their previous observations."],
+            legacySource: nil, requestedCount: profiles.count, stopReason: stopReason)
     }
 }

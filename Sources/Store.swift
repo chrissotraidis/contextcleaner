@@ -67,13 +67,7 @@ final class AppendStore {
     /// Decodes every file in parallel, one decoder per file. Unreadable files are reported and left untouched.
     private func decodeAll<T: Decodable>(_ directory: String, as type: T.Type, label: String, transform: @escaping (T) -> T = { $0 }) -> [T] {
         let urls = files(directory)
-        var results = [T?](repeating: nil, count: urls.count)
-        results.withUnsafeMutableBufferPointer { slots in
-            let base = slots.baseAddress!
-            DispatchQueue.concurrentPerform(iterations: urls.count) { index in
-                base[index] = (try? JSONDecoder().decode(T.self, from: Data(contentsOf: urls[index]))).map(transform)
-            }
-        }
+        let results = parallelMap(urls) { url in (try? JSONDecoder().decode(T.self, from: Data(contentsOf: url))).map(transform) }
         for (index, value) in results.enumerated() where value == nil { warnings.append("Unreadable \(label) preserved: \(urls[index].lastPathComponent)") }
         return results.compactMap { $0 }
     }

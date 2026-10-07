@@ -476,18 +476,14 @@ func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, s
         }
     }
     // Folders are read in parallel; reading metadata from disk is what takes the time.
-    var verdicts = [LeftOut?](repeating: nil, count: items.count)
-    verdicts.withUnsafeMutableBufferPointer { slots in
-        let base = slots.baseAddress!
-        DispatchQueue.concurrentPerform(iterations: items.count) { index in
-            let (path, seen) = items[index]
-            var st = stat()
-            if lstat(path, &st) != 0 { base[index] = .gone }
-            else if (st.st_mode & S_IFMT) == S_IFLNK { base[index] = .unsafe }
-            else if held.contains(path) { base[index] = .open }
-            // With no date from the scan there's nothing to compare, so it counts as changed.
-            else if seen.map({ newestChange(path, own: st) > $0.addingTimeInterval(slack) }) ?? true { base[index] = .changed }
-        }
+    let verdicts = parallelMap(items) { item -> LeftOut? in
+        var st = stat()
+        if lstat(item.path, &st) != 0 { return .gone }
+        if (st.st_mode & S_IFMT) == S_IFLNK { return .unsafe }
+        if held.contains(item.path) { return .open }
+        // With no date from the scan there's nothing to compare, so it counts as changed.
+        if item.seen.map({ newestChange(item.path, own: st) > $0.addingTimeInterval(slack) }) ?? true { return .changed }
+        return nil
     }
     var ready: [String] = [], leftOut: [String: LeftOut] = [:]
     for (index, item) in items.enumerated() {

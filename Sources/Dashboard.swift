@@ -837,9 +837,7 @@ struct StartPanel: View {
         }.buttonStyle(.plain).help(value == nil ? "Everything in the list" : value! ? "Safe to remove and Rebuildable: removing them loses nothing" : Verdict.check.title + ": " + LocationFilter.check.explanation)
     }
     private func row(_ s: Suggestion, in shown: [Suggestion]) -> some View {
-        // The value is read here, not inside the binding, so the row redraws when it changes.
-        let isTicked = model.selectedSuggestions.contains(s.path)
-        let ticked = Binding(get: { isTicked }, set: { on in
+        SuggestionRow(model: model, suggestion: s, ticked: model.selectedSuggestions.contains(s.path)) { on in
             // Shift-click ticks or unticks every row between the last one you clicked and this one.
             var paths = [s.path]
             if NSEvent.modifierFlags.contains(.shift), let anchor, let a = shown.firstIndex(where: { $0.path == anchor }), let b = shown.firstIndex(where: { $0.path == s.path }) {
@@ -847,9 +845,20 @@ struct StartPanel: View {
             }
             if on { model.selectedSuggestions.formUnion(paths) } else { model.selectedSuggestions.subtract(paths) }
             anchor = s.path
-        })
-        return HStack(spacing: 10) {
-            Toggle(s.name, isOn: ticked).toggleStyle(.checkbox).labelsHidden()
+        }
+    }
+}
+/// One item in Free Up Space. Whether it's ticked is passed in as a value, so the tick box redraws whenever the
+/// selection changes, however it changed: the row itself, a group's tick box, Select All or Clear.
+private struct SuggestionRow: View {
+    @ObservedObject var model: CleanerModel
+    let suggestion: Suggestion
+    let ticked: Bool
+    let toggle: (Bool) -> Void
+    var body: some View {
+        let s = suggestion
+        HStack(spacing: 10) {
+            Toggle(s.name, isOn: Binding(get: { ticked }, set: toggle)).toggleStyle(.checkbox).labelsHidden()
             RoundedRectangle(cornerRadius: 2).fill(s.cost.tint).frame(width: 4, height: 30).accessibilityHidden(true)
             Button { model.open(s.owner ?? s.path) } label: {
                 HStack(spacing: 10) {

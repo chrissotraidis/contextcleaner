@@ -2,6 +2,11 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.5
+
+- **Tick boxes keep up in Free Up Space.** Ticking a group, Select All or Clear changed the selection, but the boxes on the rows below could stay as they were until you scrolled. Each row now redraws whenever the selection changes, however it changed.
+- A new 42-second video shows the current app on made-up demo folders.
+
 ## 0.21.4
 
 A tidy-up of the code, with no change to what the app decides.

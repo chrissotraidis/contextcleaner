@@ -24,7 +24,7 @@
 
 <p align="center">
   <a href="https://github.com/chrissotraidis/contextcleaner/releases/latest"><b>Download</b></a> ·
-  <a href="https://github.com/chrissotraidis/contextcleaner/releases/latest/download/Context-Cleaner-demo.mp4">Watch the 55-second demo</a> ·
+  <a href="https://github.com/chrissotraidis/contextcleaner/releases/latest/download/Context-Cleaner-demo.mp4">Watch the 42-second video</a> ·
   <a href="docs/CHANGELOG.md">What's new</a> ·
   <a href="#faq">FAQ</a>
 </p>

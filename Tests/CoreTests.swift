@@ -21,6 +21,7 @@ import Darwin
         let original = try Data(contentsOf: excluded.appendingPathComponent("unique"))
         do { try writeNew(Data("replace".utf8), to: excluded.appendingPathComponent("unique")); preconditionFailure("Existing files must not be replaced") }
         catch StoreError.exists { }
+        check(!((try? fm.contentsOfDirectory(atPath: excluded.path)) ?? []).contains { $0.hasSuffix(".partial") }, "a refused write leaves no temporary file behind; saves land whole or not at all")
         check(try! Data(contentsOf: excluded.appendingPathComponent("unique")) == original, "existing file remains byte-identical")
         var prefs = Preferences(); prefs.locations[excluded.path] = LocationPolicy(excluded: true)
         try store.save(prefs)

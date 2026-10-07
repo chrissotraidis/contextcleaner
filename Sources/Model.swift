@@ -313,7 +313,7 @@ struct FolderRow: Identifiable {
         return { targets, topLevel in
             var results = [ElsewhereItem?](repeating: nil, count: targets.count)
             results.withUnsafeMutableBufferPointer { slots in
-                let base = slots.baseAddress!
+                let base = ResultSlots(base: slots.baseAddress!)
                 DispatchQueue.concurrentPerform(iterations: targets.count) { index in
                     let path = targets[index]
                     let name = topLevel ? abbreviatedPath(path) : URL(fileURLWithPath: path).lastPathComponent
@@ -1160,7 +1160,7 @@ struct FolderRow: Identifiable {
         let saved = latest.map(\.profile).filter { !gone.contains($0.path) && !fileOnly.contains($0.path) && !preferences.excluded($0.path) }
         running = true; partial = []; completed = 0; targetCount = 0
         progress = selectedOnly ? "Checking selected location…" : "Discovering locations; macOS may request access…"
-        let scope = selectedOnly ? "Selected folder" : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to \(preferences.effectivePriorityCount))" : "Known and selected locations"
+        let scope = selectedOnly ? "Selected folder" : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to \(preferences.effectivePriorityCount))" : fullScanScope
         // A scan you start runs at normal priority; background checks stay low so they never slow your Mac.
         DispatchQueue.global(qos: priorityOnly ? .utility : .userInitiated).async {
             let found: Discovery

@@ -470,7 +470,7 @@ struct CapacityRing: View {
 struct StatusLine: View {
     @ObservedObject var model: CleanerModel
     var body: some View {
-        let full = model.records.last(where: { $0.measurements.count >= 20 })
+        let full = model.records.last(where: { $0.scope == fullScanScope || $0.measurements.count >= 20 })
         let stale = full.map { Date().timeIntervalSince($0.finishedAt) > 86400 } ?? true
         let overview = model.overview
         HStack(spacing: 6) {

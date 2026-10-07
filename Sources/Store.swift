@@ -11,21 +11,34 @@ enum StoreError: Error, LocalizedError {
     }
 }
 func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
-// Sole data-writing primitive. New files only. Never replace, truncate, rename, trash or unlink.
+// Sole data-writing primitive. New files only: it never replaces, truncates or removes a saved file.
+// The data goes to a hidden temporary file first and is moved into place only once it's complete and on disk, and the
+// move refuses an existing name. A full disk or a crash leaves no half-written file to trip over at the next launch;
+// a temporary file that couldn't be finished is removed, and nothing else ever is.
 func writeNew(_ data: Data, to url: URL) throws {
-    let fd = Darwin.open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
-    guard fd >= 0 else { if errno == EEXIST { throw StoreError.exists(url.path) }; throw StoreError.io(url.path) }
-    defer { Darwin.close(fd) }
-    try data.withUnsafeBytes { raw in
-        guard let base = raw.baseAddress else { return }
-        var offset = 0
-        while offset < data.count {
-            let n = Darwin.write(fd, base.advanced(by: offset), data.count - offset)
-            if n < 0 && errno == EINTR { continue }
-            guard n > 0 else { throw StoreError.io(url.path) }; offset += n
+    let temporary = url.deletingLastPathComponent().appendingPathComponent("." + url.lastPathComponent + "." + UUID().uuidString + ".partial").path
+    let fd = Darwin.open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+    guard fd >= 0 else { throw StoreError.io(url.path) }
+    var finished = false
+    defer { if !finished { Darwin.unlink(temporary) } }
+    do {
+        defer { Darwin.close(fd) }
+        try data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            var offset = 0
+            while offset < data.count {
+                let n = Darwin.write(fd, base.advanced(by: offset), data.count - offset)
+                if n < 0 && errno == EINTR { continue }
+                guard n > 0 else { throw StoreError.io(url.path) }; offset += n
+            }
         }
+        guard fsync(fd) == 0 else { throw StoreError.io(url.path) }
     }
-    guard fsync(fd) == 0 else { throw StoreError.io(url.path) }
+    guard renamex_np(temporary, url.path, UInt32(RENAME_EXCL)) == 0 else {
+        if errno == EEXIST { throw StoreError.exists(url.path) }
+        throw StoreError.io(url.path)
+    }
+    finished = true
 }
 struct DiscoveryEvent: Codable { var date: Date; var id: String; var value: Discovery }
 struct PreferencesEvent: Codable { var date: Date; var id: String; var value: Preferences }

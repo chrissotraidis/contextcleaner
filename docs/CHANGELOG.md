@@ -2,6 +2,16 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.3
+
+A last pass on first use, full disks and odd names.
+
+- **Saves land whole or not at all.** On a full disk, a save could leave a half-written file, and the app then warned about an unreadable scan at every launch. Each save now goes to a temporary file first and is moved into place only when complete, still never replacing anything.
+- **"No scan yet" after a scan.** A Mac with fewer than 20 scanned folders never counted a scan as full. A full scan is now known by what it covered.
+- **Names show in full.** A folder name with a newline or an invisible character showed cut off; such characters now show as "?". These names are still never put in a command.
+- **Plainer reasons** for items left out: "not allowed in a command" and "not checked for open files".
+- The scan sheet no longer draws a size bar before anything is measured. No compiler warnings.
+
 ## 0.21.2
 
 A second security and reliability pass.

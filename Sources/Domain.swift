@@ -2,6 +2,18 @@ import Foundation
 
 /// Absolute path without "." or ".." parts, repeated slashes or a trailing slash. Stored paths are almost always
 /// already in this form, so they're returned as-is; only unusual ones go through URL standardization.
+/// Results filled in parallel by concurrentPerform: each index writes only its own slot, so no two threads touch the same memory.
+struct ResultSlots<T>: @unchecked Sendable {
+    let base: UnsafeMutablePointer<T>
+    subscript(index: Int) -> T { get { base[index] } nonmutating set { base[index] = newValue } }
+}
+/// Text with control and invisible formatting characters shown as "?".
+func visibleName(_ text: String) -> String {
+    guard text.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) || $0.properties.generalCategory == .format }) else { return text }
+    return String(String.UnicodeScalarView(text.unicodeScalars.map { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) || $0.properties.generalCategory == .format ? "?" : $0 }))
+}
+/// A full scan: every known and selected place, however many folders that is.
+let fullScanScope = "Known and selected locations"
 func normalized(_ path: String) -> String {
     isCleanAbsolutePath(path) ? path : URL(fileURLWithPath: path).standardizedFileURL.path
 }
@@ -105,9 +117,12 @@ struct Evidence: Codable, Hashable, Identifiable {
     var source: String
 }
 struct FolderProfile: Codable, Identifiable {
+    /// The name as shown. Control and invisible characters, such as a newline in a folder name, are shown as "?" so
+    /// every name reads in full on one line.
     var displayName: String {
-        if ["build", "work", "generated"].contains(name), let project { return project + " · " + name }
-        return name
+        let shown = visibleName(name)
+        if ["build", "work", "generated"].contains(shown), let project { return visibleName(project) + " · " + shown }
+        return shown
     }
     var id: String { path }
     var path: String

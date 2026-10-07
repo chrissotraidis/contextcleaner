@@ -97,7 +97,7 @@ struct ScanningSettings: View {
         }.padding(.vertical, 2)
     }
     var body: some View {
-        let lastFull = model.records.last(where: { $0.measurements.count >= 20 })
+        let lastFull = model.records.last(where: { $0.scope == fullScanScope || $0.measurements.count >= 20 })
         let watched = model.preferences.locations.filter { $0.value.isWatched && !model.preferences.excluded($0.key) }.count
         Form {
             Section {
@@ -293,7 +293,7 @@ struct ScanPlanView: View {
         let sizes = model.coverageSizes
         let groups = CoverageGroup.allCases.filter { g in included.contains { $0.group == g } }.sorted { model.groupSize($0) > model.groupSize($1) }
         let largest = Double(max(groups.map { model.groupSize($0) }.max() ?? 1, 1))
-        let lastFull = model.records.last(where: { $0.measurements.count >= 20 })
+        let lastFull = model.records.last(where: { $0.scope == fullScanScope || $0.measurements.count >= 20 })
         let watched = model.preferences.locations.filter { $0.value.isWatched && !model.preferences.excluded($0.key) }.count
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline) {
@@ -317,9 +317,11 @@ struct ScanPlanView: View {
                                 Spacer()
                                 Text(size > 0 ? byteLabel(size) : "not measured yet").font(.callout).monospacedDigit().foregroundStyle(.secondary)
                             }
-                            GeometryReader { geo in
-                                RoundedRectangle(cornerRadius: 2).fill(Color.accentColor.opacity(0.55)).frame(width: max(2, geo.size.width * Double(size) / largest))
-                            }.frame(height: 4)
+                            if size > 0 {
+                                GeometryReader { geo in
+                                    RoundedRectangle(cornerRadius: 2).fill(Color.accentColor.opacity(0.55)).frame(width: max(2, geo.size.width * Double(size) / largest))
+                                }.frame(height: 4)
+                            }
                             Text(writers.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }.accessibilityElement(children: .combine)

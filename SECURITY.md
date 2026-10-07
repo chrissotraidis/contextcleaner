@@ -15,7 +15,7 @@ Context Cleaner reads folder sizes and dates, and copies Terminal commands you r
 | Something changed between the scan and the copy | Each item is checked again when you copy: anything gone, open in an app, or changed anywhere inside since the scan is left out. Items with no date from the scan count as changed. If open files can't be checked, nothing is copied. Clean worktrees, and projects from Everything else, get git's full test again |
 | Reading files it shouldn't | Only metadata. The few small files it reads (git pointers, manifests, plists) must be regular files under 1 MiB, never through a link, never a pipe. iCloud placeholders aren't downloaded |
 | Telling git a worktree is gone | Only in a real repository inside your home folder, with git's fsmonitor and hooks off |
-| Its own data | New files only, created with `O_EXCL` and `O_NOFOLLOW`, readable by you alone, under `~/Library/Application Support/Context Cleaner`. Open files are saved one line per app and item, so each scan stays small |
+| Its own data | New files only, written whole to a temporary file and then moved into place without replacing anything, so a full disk or a crash never leaves a half-written file. Created with `O_EXCL` and `O_NOFOLLOW`, readable by you alone, under `~/Library/Application Support/Context Cleaner`. Open files are saved one line per app and item, so each scan stays small |
 | Code injected into the app | Built with the hardened runtime |
 
 The commands use macOS's `trash` tool, or Finder as a fallback, so everything goes to the Trash and Put Back works.

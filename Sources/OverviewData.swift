@@ -455,7 +455,9 @@ func freesNothing(_ m: FolderMeasurement) -> Advice? {
     return a
 }
 /// Why a folder was left out of a Trash command when it was rechecked.
-enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "A link or a protected place", unchecked = "Open files couldn't be checked" }
+/// Each reads after a count: "2 changed since the scan". Not allowed: a link, a protected place or a name with control
+/// characters. Not checked: macOS didn't let Context Cleaner see which files apps have open, so nothing was copied.
+enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "Not allowed in a command", unchecked = "Not checked for open files" }
 /// Re-reads folders just before a Trash command is copied. A folder is left out if it's gone, if an app has a file
 /// open in it, or if it or anything inside it changed after the scan saw it. Metadata only.
 func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, slack: TimeInterval = 60) -> (ready: [String], leftOut: [String: LeftOut]) {
@@ -1127,7 +1129,7 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
 // MARK: - Everything else
 
 /// One place outside the scanned folders, measured on request. Never saved, never part of any answer.
-struct ElsewhereItem: Identifiable {
+struct ElsewhereItem: Identifiable, Sendable {
     var id: String { path }
     let path: String
     let name: String
@@ -1152,7 +1154,7 @@ struct ElsewhereItem: Identifiable {
 /// Whether a git checkout is backed up, read without network: every local commit is on a remote
 /// (as of the last fetch), and nothing is uncommitted or stashed. Ignored files are listed apart,
 /// because git never keeps them anywhere.
-struct RepoBackup: Equatable {
+struct RepoBackup: Equatable, Sendable {
     var hasRemote: Bool
     var unpushed: Int?
     var changes: Int?

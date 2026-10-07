@@ -474,6 +474,10 @@ import Foundation
         check(safety.contains("core.fsmonitor=false") && safety.contains("log.showSignature=false") && safety.contains("filter.lfs.clean=") && safety.contains("filter.lfs.process=")
               && safety.contains("filter.a.b.smudge=") && safety.contains("filter.a.b.process=") && gitSafetyArguments(filterKeys: ["filter.x=y.clean"]) == nil,
               "fsmonitor, signature checks and every filter the config names are switched off; a filter name that can't be emptied safely stops git running")
+        check(visibleName("two\nlines") == "two?lines" && visibleName("日本語 プロジェクト") == "日本語 プロジェクト" && visibleName("a\u{202E}b") == "a?b"
+              && FolderProfile(path: "/x/two\nlines", name: "two\nlines", category: .workspace, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: []).displayName == "two?lines",
+              "names show in full on one line: control and invisible characters become ?, every other script is kept")
+        check(fullScanScope == "Known and selected locations", "a full scan is known by what it covered, however few folders a Mac has")
         print("SUCCESS: \(count) overview checks; only a temporary fixture is written.")
     }
 }

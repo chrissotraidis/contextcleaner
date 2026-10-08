@@ -15,6 +15,7 @@
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-0A84FF?logo=apple">
   <img alt="Native SwiftUI" src="https://img.shields.io/badge/SwiftUI-native-FF9F0A?logo=swift&logoColor=white">
   <img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-8E8E93">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8E8E93"></a>
   <img alt="Knows Codex worktrees and scratch" src="https://img.shields.io/badge/Codex-worktrees%20%26%20scratch-5E5CE6">
   <img alt="Never deletes files" src="https://img.shields.io/badge/deletes%20files-never-30D158">
   <img alt="No network access" src="https://img.shields.io/badge/network-none-30D158">
@@ -150,4 +151,4 @@ More: [changelog](docs/CHANGELOG.md) · [design notes](docs/DESIGN.md) · [valid
 
 Questions or bugs: [Discord](https://discord.gg/xwHfUD2bxW) or [open an issue](https://github.com/chrissotraidis/contextcleaner/issues/new/choose). Check screenshots for private paths before posting.
 
-No open-source license has been chosen yet, so the code isn't licensed for reuse. Context Cleaner is independent and not affiliated with OpenAI, Apple or any tool it looks at.
+Context Cleaner is free and open source under the [MIT license](LICENSE). It's independent and not affiliated with OpenAI, Apple or any tool it looks at.

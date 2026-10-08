@@ -141,7 +141,7 @@ No dependencies; needs Xcode on Apple silicon.
 ```sh
 git clone https://github.com/chrissotraidis/contextcleaner.git && cd contextcleaner
 bash build-version.sh /absolute/path/to/new-output      # app, DMG and SHA-256
-bash test-preserving.sh /absolute/path/to/new-tests     # 340 checks, fixtures only
+bash test-preserving.sh /absolute/path/to/new-tests     # 368 checks, fixtures only
 ```
 
 More: [changelog](docs/CHANGELOG.md) · [design notes](docs/DESIGN.md) · [validation records](docs/validation)

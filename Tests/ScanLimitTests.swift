@@ -95,6 +95,21 @@ import Darwin
               "only Operation not permitted is called macOS blocked access and offered Full Disk Access; other read errors say part couldn't be read")
         check(!listingResult.complete && listingResult.names.isEmpty, "permission-denied listing is explicitly incomplete")
         check(try Data(contentsOf: denied.appendingPathComponent("keep.txt")) == Data("Preserve even during denied access test".utf8), "permission fixture is restored with its original payload")
+        // sameFiles answers yes only when every part of both was read and matches, empty folders included.
+        let left = root.appendingPathComponent("same-left/inputs"), right = root.appendingPathComponent("same-right/inputs")
+        for side in [left, right] {
+            try FileManager.default.createDirectory(at: side.appendingPathComponent("deep"), withIntermediateDirectories: true)
+            try writeNew(Data("same".utf8), to: side.appendingPathComponent("deep/a.txt"))
+        }
+        let matched = sameFiles(left.path, right.path)
+        try FileManager.default.createDirectory(at: left.appendingPathComponent("only-here"), withIntermediateDirectories: false)
+        let extraFolder = sameFiles(left.path, right.path)
+        try FileManager.default.createDirectory(at: right.appendingPathComponent("only-here"), withIntermediateDirectories: false)
+        guard chmod(right.appendingPathComponent("deep").path, 0) == 0 else { preconditionFailure("Cannot prepare own permission fixture") }
+        let unreadable = sameFiles(left.path, right.path)
+        guard chmod(right.appendingPathComponent("deep").path, 0o700) == 0 else { preconditionFailure("Cannot restore own fixture permissions") }
+        check(matched && !extraFolder && !unreadable && sameFiles(left.path, right.path),
+              "copies match only when fully read: an extra empty folder or an unreadable folder means not the same")
         print("SUCCESS: \(count) bounded-scan checks. Preserved fixture: \(root.path)")
     }
 }

@@ -2,6 +2,15 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.7
+
+A check of every place Context Cleaner reads folders or asks git, for the same kind of mistake as 0.21.6: an error read as "nothing there".
+
+- **Git not answering means unknown.** If git timed out listing a repository's stashes or worktrees, they counted as none, so a stash could go unnoticed or a repository other worktrees use could look removable. Either now makes it "Backup unknown".
+- **Unreadable means changed.** The check before a Trash command treated a folder it couldn't read inside as unchanged. It now leaves that folder out. A part kept only in iCloud can't change on this Mac and still passes.
+- **Copies must match completely.** The test that a worktree's ignored inputs are copies of the main repository's counted a folder it couldn't read as matching, and ignored empty folders. Both now mean not the same.
+- **Folders removed mid-scan.** A folder a task deletes while it's read is skipped, and if the whole folder goes, it's gone, not unreadable.
+
 ## 0.21.6
 
 - **iCloud folders no longer look blocked.** With iCloud Drive's Desktop & Documents on, macOS keeps old items only in iCloud. Context Cleaner never downloads them, and a folder holding one showed under Couldn't Scan as "macOS blocked access", where Full Disk Access can't help. Those folders are now measured, and the iCloud-only part is noted in Details. It takes no space on this Mac.

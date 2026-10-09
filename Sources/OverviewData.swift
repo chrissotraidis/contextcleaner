@@ -506,7 +506,11 @@ func newestChange(_ path: String, own: stat, limit: Int = 200_000, seconds: Time
     let started = ProcessInfo.processInfo.systemUptime
     func close(_ level: Level) { if !(level.store.map { $0 >= level.mtime - 2 } ?? false) { newest = max(newest, level.mtime) } }
     while !stack.isEmpty {
-        let entry = (try? stack[stack.count - 1].cursor.next()) ?? nil
+        let entry: BulkCursor.Entry?
+        do { entry = try stack[stack.count - 1].cursor.next() }
+        // A folder kept only in iCloud can't have changed on this Mac; anything else unreadable counts as changed.
+        catch let error as POSIXError where error.code == .EDEADLK { entry = nil }
+        catch { return .distantFuture }
         guard let entry else { close(stack.removeLast()); continue }
         count += 1
         if count > limit || ProcessInfo.processInfo.systemUptime - started > seconds {
@@ -1236,10 +1240,13 @@ func readRepoBackup(_ root: String) -> RepoBackup {
     let unpushed = gitOutput(root, ["rev-list", "--count"] + scope + ["--not", "--remotes"]).flatMap { Int($0) }
     // "matching" lists ignored folders without walking into them: fast even on huge build trees.
     let status = gitOutput(root, ["status", "--porcelain", "--ignored=matching", "--untracked-files=normal"], timeout: 20).map(parseRepoStatus)
-    let stashes = isWorktree ? 0 : gitOutput(root, ["stash", "list"]).map { $0.isEmpty ? 0 : $0.split(separator: "\n").count } ?? 0
+    // A worktree has no stashes or worktrees of its own. For a repository, git not answering means unknown, never none.
+    let stashList = isWorktree ? "" : gitOutput(root, ["stash", "list"])
+    let worktreeList = isWorktree ? "" : gitOutput(root, ["worktree", "list", "--porcelain"])
+    let stashes = stashList.map { $0.isEmpty ? 0 : $0.split(separator: "\n").count } ?? 0
     let lastCommit = gitOutput(root, ["log", "-1", "--format=%ct"]).flatMap(Double.init).map { Date(timeIntervalSince1970: $0) }
     let branch = isWorktree ? gitOutput(root, ["symbolic-ref", "--short", "-q", "HEAD"]).flatMap { $0.isEmpty ? nil : $0 } : nil
-    let worktrees = isWorktree ? 0 : max(0, (gitOutput(root, ["worktree", "list", "--porcelain"]) ?? "").components(separatedBy: "\nworktree ").count - 1)
+    let worktrees = max(0, (worktreeList ?? "").components(separatedBy: "\nworktree ").count - 1)
     // A worktree's own HEAD and checkouts only; the repository's newest commit is anywhere in its family.
     let newestBranch = isWorktree ? nil : gitOutput(root, ["for-each-ref", "--sort=-committerdate", "--count=1", "--format=%(committerdate:unix)", "refs/heads"]).flatMap(Double.init)
     let lastCheckout = gitOutput(root, ["log", "-g", "-1", "--format=%ct"]).flatMap(Double.init)
@@ -1258,11 +1265,13 @@ func readRepoBackup(_ root: String) -> RepoBackup {
         }
         unkept.removeAll { copied.contains($0) }
     }
-    return RepoBackup(hasRemote: !remotes.isEmpty, unpushed: unpushed, changes: status?.changes, stashes: stashes, unkeptIgnored: unkept, lastCommit: lastCommit,
+    // Unknown changes make the whole answer "Backup unknown", so a missing stash or worktree count can't read as none.
+    let changes = stashList == nil || worktreeList == nil ? nil : status?.changes
+    return RepoBackup(hasRemote: !remotes.isEmpty, unpushed: unpushed, changes: changes, stashes: stashes, unkeptIgnored: unkept, lastCommit: lastCommit,
                       isWorktree: isWorktree, branch: branch, worktrees: worktrees, lastActivity: activity, mainRepository: main, copiedIgnored: copied)
 }
 /// Whether two files or folders hold the same files with the same sizes. Metadata only; Finder's .DS_Store files don't count.
-/// Gives up, answering no, past the file limit or if either can't be read.
+/// Gives up, answering no, past the file limit or if any part of either can't be read (an iCloud-only folder included).
 func sameFiles(_ a: String, _ b: String, limit: Int = 20_000) -> Bool {
     func listing(_ root: String) -> [String: Int64]? {
         var st = stat()
@@ -1272,17 +1281,20 @@ func sameFiles(_ a: String, _ b: String, limit: Int = 20_000) -> Bool {
         case S_IFDIR: break
         default: return nil
         }
-        guard let walker = FileManager.default.enumerator(atPath: root) else { return nil }
-        var files: [String: Int64] = [:]
-        while let relative = walker.nextObject() as? String {
-            guard files.count < limit else { return nil }
-            if relative.hasSuffix(".DS_Store") { continue }
-            var entry = stat()
-            guard lstat(root + "/" + relative, &entry) == 0 else { return nil }
-            switch entry.st_mode & S_IFMT {
-            case S_IFREG: files[relative] = Int64(entry.st_size)
-            case S_IFDIR: continue
-            default: files[relative] = -1
+        // Folders count too (-2), so an empty folder doesn't match a missing one.
+        var files: [String: Int64] = [:], pending = [""]
+        while let folder = pending.popLast() {
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.isEmpty ? root : root + "/" + folder) else { return nil }
+            for name in names where !name.hasSuffix(".DS_Store") {
+                guard files.count < limit else { return nil }
+                let relative = folder.isEmpty ? name : folder + "/" + name
+                var entry = stat()
+                guard lstat(root + "/" + relative, &entry) == 0 else { return nil }
+                switch entry.st_mode & S_IFMT {
+                case S_IFREG: files[relative] = Int64(entry.st_size)
+                case S_IFDIR: files[relative] = -2; pending.append(relative)
+                default: files[relative] = -1
+                }
             }
         }
         return files

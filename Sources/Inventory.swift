@@ -262,7 +262,10 @@ struct DirectoryListing {
                 if !preferences.excluded(path + "/" + name) { names.append(name) }
             }
             return DirectoryListing(names: names.sorted(), complete: true, note: nil)
-        } catch { return DirectoryListing(names: [], complete: false, note: error.localizedDescription) }
+        }
+        // Kept only in iCloud (not downloaded), or removed a moment ago: there's nothing here to list.
+        catch let error as POSIXError where error.code == .EDEADLK || error.code == .ENOENT { return DirectoryListing(names: [], complete: true, note: nil) }
+        catch { return DirectoryListing(names: [], complete: false, note: error.localizedDescription) }
     }
 }
 /// The open files inside a folder, one per app and top-level item: enough to say which app has it open, and which items
@@ -347,6 +350,7 @@ struct TreeMeasure {
                 guard let next = try cursor.next() else { stack.removeLast(); continue }
                 entry = next
             } catch let error as POSIXError where error.code == .EDEADLK { cloudOnly += 1; stack.removeLast(); continue }
+            catch let error as POSIXError where error.code == .ENOENT { stack.removeLast(); continue }   // removed while being read
             catch { if failures.count < 3 { failures.append(cursor.path + ": " + error.localizedDescription) }; stack.removeLast(); continue }
             let name = entry.name
             let atRoot = cursor.top == nil
@@ -395,6 +399,9 @@ struct TreeMeasure {
             if entries % 4000 == 0 { Thread.sleep(forTimeInterval: 0.002) }
         }
         if !failures.isEmpty { return result(.inaccessible, diagnostic: "Incomplete measurement; partial sizes withheld. " + failures.joined(separator: "\n")) }
+        // A task can remove the whole folder while it's read; then it's gone, not a size.
+        var after = stat()
+        if lstat(profile.path, &after) != 0 && errno == ENOENT { return result(.missing, diagnostic: "Removed while it was being scanned.") }
         contents = FolderContents(children: Array(childMap.values.map(\.summary).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }.prefix(512)), fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted + cloudOnly)
         let latest = latestSeconds == Int.min ? nil : Date(timeIntervalSince1970: Double(latestSeconds))
         var notes: [String] = []

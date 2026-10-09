@@ -2,6 +2,14 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.8
+
+A full audit of the fallbacks in every file that decides: each place a failed read or missing answer turns into a default was checked for whether that default could make something look removable. Three could.
+
+- **The check before copying** counted only a folder's own date when it couldn't open the folder, or one inside it. Either now counts as changed. Parts kept only in iCloud, or removed a moment ago, still pass.
+- **A worktree whose repository git can't name** was treated as keeping everything. It's now Review first, "Repository unknown".
+- **A worktree's link to its repository** that couldn't be checked counted as gone. Only a link that's really missing does now.
+
 ## 0.21.7
 
 A check of every place Context Cleaner reads folders or asks git, for the same kind of mistake as 0.21.6: an error read as "nothing there".

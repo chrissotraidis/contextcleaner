@@ -347,7 +347,7 @@ import Foundation
         check(staleChildren(generated, now: now, days: 1).map(\.name) == ["toolchains"], "a folder's old items never include its backups")
         check(dayList.allSatisfy { $0.seen != nil }, "each suggestion keeps the newest change the scan saw, for the recheck before copying")
         // 0.19: whole Codex worktrees, judged by git.
-        func kept(changes: Int? = 0, ignored: [String] = [], branch: String? = "codex/fix", main: String? = nil) -> RepoBackup {
+        func kept(changes: Int? = 0, ignored: [String] = [], branch: String? = "codex/fix", main: String? = "/") -> RepoBackup {
             RepoBackup(hasRemote: true, unpushed: 2, changes: changes, stashes: 0, unkeptIgnored: ignored, lastCommit: nil, isWorktree: true, branch: branch, worktrees: 0, lastActivity: nil, mainRepository: main)
         }
         let cleanTree = aged("/Users/x/.codex/worktrees/kp-fix", .workspace, hours: 30, gib: 40)
@@ -360,10 +360,11 @@ import Foundation
         check(worktreeAdvice(dirtyTree, .read(kept(changes: 3)), now: now).short == "3 not committed" && worktreeAdvice(cleanTree, .read(kept(ignored: ["ref"])), now: now).verdict == .check
               && worktreeAdvice(cleanTree, .read(kept(branch: nil)), now: now).verdict == .check && worktreeAdvice(cleanTree, .read(kept(changes: nil)), now: now).verdict == .check
               && worktreeAdvice(cleanTree, .read(kept(main: "/nonexistent/repository")), now: now).short == "Repository gone"
+              && worktreeAdvice(cleanTree, .read(kept(main: nil)), now: now).short == "Repository unknown"
               && worktreeAdvice(cleanTree, .unread, now: now).short == "Checking git…" && worktreeAdvice(cleanTree, .noRepository, now: now).verdict == .check,
               "uncommitted work, files git doesn't keep, unpushed detached commits, a missing repository or no answer from git keep a worktree Review first")
         let states = [cleanTree.profile.path: kept(), oldTree.profile.path: kept(), dirtyTree.profile.path: kept(changes: 3)]
-        let variants = [kept(), kept(changes: 2), kept(changes: nil), kept(ignored: ["ref/"]), kept(branch: nil), kept(main: "/nonexistent/repository"), kept(main: "/")]
+        let variants = [kept(), kept(changes: 2), kept(changes: nil), kept(ignored: ["ref/"]), kept(branch: nil), kept(main: "/nonexistent/repository"), kept(main: nil)]
         check(variants.allSatisfy { [.safe, .rebuild].contains(worktreeAdvice(cleanTree, .read($0), now: now).verdict) == $0.keepsEverything },
               "the check repeated before copying agrees with the Clean worktree answer in every case")
         func treeAdvice(_ m: FolderMeasurement) -> Advice {

@@ -110,6 +110,14 @@ import Darwin
         guard chmod(right.appendingPathComponent("deep").path, 0o700) == 0 else { preconditionFailure("Cannot restore own fixture permissions") }
         check(matched && !extraFolder && !unreadable && sameFiles(left.path, right.path),
               "copies match only when fully read: an extra empty folder or an unreadable folder means not the same")
+        // The recheck before copying: a folder it can't fully read counts as changed.
+        var leftStat = stat(); _ = lstat(left.path, &leftStat)
+        let readable = newestChange(left.path, own: leftStat)
+        guard chmod(left.appendingPathComponent("deep").path, 0) == 0 else { preconditionFailure("Cannot prepare own permission fixture") }
+        let blocked = newestChange(left.path, own: leftStat)
+        guard chmod(left.appendingPathComponent("deep").path, 0o700) == 0 else { preconditionFailure("Cannot restore own fixture permissions") }
+        check(readable < Date().addingTimeInterval(60) && readable > Date().addingTimeInterval(-3600) && blocked == .distantFuture,
+              "the recheck reads the real newest change, and a folder inside it can't open counts as changed")
         print("SUCCESS: \(count) bounded-scan checks. Preserved fixture: \(root.path)")
     }
 }

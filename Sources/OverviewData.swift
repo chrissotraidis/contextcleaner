@@ -500,7 +500,16 @@ func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, s
 /// is added or removed.
 func newestChange(_ path: String, own: stat, limit: Int = 200_000, seconds: TimeInterval = 4) -> Date {
     let ownSeconds = Int(own.st_mtimespec.tv_sec)
-    guard (own.st_mode & S_IFMT) == S_IFDIR, let root = try? BulkCursor(path, top: nil) else { return Date(timeIntervalSince1970: Double(ownSeconds)) }
+    guard (own.st_mode & S_IFMT) == S_IFDIR else { return Date(timeIntervalSince1970: Double(ownSeconds)) }
+    // Nil for a folder kept only in iCloud or just removed: nothing on this Mac can have changed inside it. Any other
+    // folder that can't be opened throws, and counts as changed.
+    func folder(_ p: String) throws -> BulkCursor? {
+        do { return try BulkCursor(p, top: nil) }
+        catch let error as POSIXError where error.code == .EDEADLK || error.code == .ENOENT { return nil }
+    }
+    let root: BulkCursor
+    do { guard let opened = try folder(path) else { return Date(timeIntervalSince1970: Double(ownSeconds)) }; root = opened }
+    catch { return .distantFuture }
     struct Level { let cursor: BulkCursor; let mtime: Int; var store: Int? = nil }
     var stack = [Level(cursor: root, mtime: ownSeconds)], newest = Int.min, count = 0
     let started = ProcessInfo.processInfo.systemUptime
@@ -518,9 +527,10 @@ func newestChange(_ path: String, own: stat, limit: Int = 200_000, seconds: Time
             break
         }
         if entry.name == ".DS_Store" { stack[stack.count - 1].store = entry.modifiedSeconds; continue }
-        if entry.isDirectory, !entry.isLink, !entry.isMountPoint, entry.device == own.st_dev, stack.count < 64,
-           let cursor = try? BulkCursor(stack[stack.count - 1].cursor.path + "/" + entry.name, top: nil) {
-            stack.append(Level(cursor: cursor, mtime: entry.modifiedSeconds)); continue
+        if entry.isDirectory, !entry.isLink, !entry.isMountPoint, entry.device == own.st_dev, stack.count < 64 {
+            let inner: BulkCursor?
+            do { inner = try folder(stack[stack.count - 1].cursor.path + "/" + entry.name) } catch { return .distantFuture }
+            if let inner { stack.append(Level(cursor: inner, mtime: entry.modifiedSeconds)); continue }
         }
         newest = max(newest, entry.modifiedSeconds)
     }
@@ -987,7 +997,8 @@ func readProjectActivity(_ root: String) -> ProjectActivity {
         isWorktree = true
         let gitdir = pointer.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
         var st = stat()
-        registered = lstat(gitdir, &st) == 0
+        // Unregistered only when its entry in the repository is really gone; any other failure leaves it unknown.
+        registered = lstat(gitdir, &st) == 0 ? true : errno == ENOENT ? false : nil
         if let range = gitdir.range(of: "/.git/worktrees/") { mainRepository = String(gitdir[..<range.lowerBound]) }
     }
     let branch = gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])
@@ -1414,7 +1425,8 @@ extension RepoBackup {
     /// and exact copies. The test for a Clean worktree, read again just before a command is copied.
     var keepsEverything: Bool {
         guard changes == 0, backedUp, worktrees == 0, unkeptIgnored.isEmpty else { return false }
-        return mainRepository.map { FileManager.default.fileExists(atPath: $0) } ?? true
+        // A worktree whose repository can't be named isn't known to keep anything.
+        return mainRepository.map { FileManager.default.fileExists(atPath: $0) } ?? !isWorktree
     }
 }
 /// The answer for a whole worktree folder. It's only Safe or Rebuildable when nothing in it exists only here:
@@ -1437,6 +1449,9 @@ func worktreeAdvice(_ m: FolderMeasurement, _ git: WorktreeGit, now: Date = Date
     }
     if let main = b.mainRepository, !FileManager.default.fileExists(atPath: main) {
         return answer(.check, "Repository gone", "The repository this worktree belongs to is gone, so its files may be the only copy.", look)
+    }
+    if b.isWorktree && b.mainRepository == nil {
+        return answer(.check, "Repository unknown", "Git didn't say which repository this worktree belongs to, so whether its commits are kept there is unknown.", look)
     }
     guard let changes = b.changes else { return answer(.check, "Git didn't answer", "Git couldn't read this worktree in time, so what exists only here is unknown.", look) }
     if changes > 0 { return answer(.check, "\(changes) not committed", "\(changes) \(changes == 1 ? "file isn't" : "files aren't") committed. They exist only in this folder.", "Commit or copy what you need, then move it to the Trash. " + look) }

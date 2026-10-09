@@ -88,6 +88,11 @@ import Darwin
         let listingResult = DirectoryListing.read(denied.path, preferences: Preferences())
         guard chmod(denied.path, 0o700) == 0 else { preconditionFailure("Cannot restore own fixture permissions") }
         check(permissionResult.state == .inaccessible && permissionResult.allocatedBytes == nil, "permission-denied traversal withholds its partial total")
+        var privacy = permissionResult; privacy.diagnostic = "/x: The operation couldn’t be completed. Operation not permitted"
+        var other = permissionResult; other.diagnostic = "Incomplete measurement; partial sizes withheld. /x: The operation couldn’t be completed. Resource busy"
+        check(permissionResult.permissionDenied && !permissionResult.privacyBlocked && privacy.privacyBlocked && privacy.problem == "macOS blocked access"
+              && !other.privacyBlocked && other.problem == "Part of it couldn't be read",
+              "only Operation not permitted is called macOS blocked access and offered Full Disk Access; other read errors say part couldn't be read")
         check(!listingResult.complete && listingResult.names.isEmpty, "permission-denied listing is explicitly incomplete")
         check(try Data(contentsOf: denied.appendingPathComponent("keep.txt")) == Data("Preserve even during denied access test".utf8), "permission fixture is restored with its original payload")
         print("SUCCESS: \(count) bounded-scan checks. Preserved fixture: \(root.path)")

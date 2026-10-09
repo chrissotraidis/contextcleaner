@@ -444,12 +444,15 @@ func freesNothing(_ m: FolderMeasurement) -> Advice? {
     guard m.state == .measured, let bytes = m.allocatedBytes, bytes < 1_048_576, m.processes.isEmpty,
           ![.simulator, .virtualMachine, .appData, .history].contains(m.profile.category), !isWorktreeFolder(m.profile.path) else { return nil }
     let synced = ["/Documents/", "/Desktop/"].contains { m.profile.path.contains($0) }
-    if m.fileCount > 0 && synced {
-        var a = Advice(verdict: .keep, reason: "Its \(m.fileCount) \(m.fileCount == 1 ? "file is" : "files are") kept in iCloud, not on this Mac, so it takes no space here. Moving it to the Trash would remove it from iCloud too.", howTo: "Nothing to do: it frees no space on this Mac.", command: nil, lastUsed: m.latestModifiedAt)
+    // A folder whose contents are only in iCloud lists no files, but it isn't empty.
+    let cloudOnly = (m.cloudOnlyFolders ?? 0) > 0
+    if (m.fileCount > 0 || cloudOnly) && synced {
+        let what = m.fileCount > 0 ? "Its \(m.fileCount) \(m.fileCount == 1 ? "file is" : "files are")" : "What's inside is"
+        var a = Advice(verdict: .keep, reason: what + " kept in iCloud, not on this Mac, so it takes no space here. Moving it to the Trash would remove it from iCloud too.", howTo: "Nothing to do: it frees no space on this Mac.", command: nil, lastUsed: m.latestModifiedAt)
         a.short = "In iCloud only"
         return a
     }
-    guard m.fileCount == 0 else { return nil }
+    guard m.fileCount == 0, !cloudOnly, (m.contents?.omittedEntries ?? 0) == 0 else { return nil }
     var a = Advice(verdict: .safe, reason: "An empty folder. Removing it frees no space, but tidies the list.", howTo: "Move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     a.short = "Empty"
     return a

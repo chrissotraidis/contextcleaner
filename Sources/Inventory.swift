@@ -324,7 +324,9 @@ struct TreeMeasure {
             childMap = childMap.filter { keep.contains($0.key) || $0.key == current }
         }
         struct FileIdentity: Hashable { let device: Int32; let inode: UInt64 }
-        var seen: Set<FileIdentity> = [], failures: [String] = [], omitted = 0
+        // cloudOnly counts folders whose contents are only in iCloud: macOS won't list them without downloading them
+        // (it reports "Resource deadlock avoided"), and reads never download. They take no space on this Mac.
+        var seen: Set<FileIdentity> = [], failures: [String] = [], omitted = 0, cloudOnly = 0
         func incomplete(_ reason: String) -> FolderMeasurement {
             result(.limited, diagnostic: "\(reason) after \(entries.formatted()) entries. Partial sizes are withheld. Measure a smaller child folder or run a manual scan with its larger allowance.")
         }
@@ -334,6 +336,7 @@ struct TreeMeasure {
         var stack: [BulkCursor] = []
         if (rootStat.st_mode & S_IFMT) == S_IFDIR {
             do { stack.append(try BulkCursor(profile.path, top: nil)) }
+            catch let error as POSIXError where error.code == .EDEADLK { cloudOnly += 1 }
             catch { failures.append(profile.path + ": " + error.localizedDescription) }
         } else { files = 1 }
         while let cursor = stack.last {
@@ -343,7 +346,8 @@ struct TreeMeasure {
             do {
                 guard let next = try cursor.next() else { stack.removeLast(); continue }
                 entry = next
-            } catch { if failures.count < 3 { failures.append(cursor.path + ": " + error.localizedDescription) }; stack.removeLast(); continue }
+            } catch let error as POSIXError where error.code == .EDEADLK { cloudOnly += 1; stack.removeLast(); continue }
+            catch { if failures.count < 3 { failures.append(cursor.path + ": " + error.localizedDescription) }; stack.removeLast(); continue }
             let name = entry.name
             let atRoot = cursor.top == nil
             // Full paths are only needed to open a folder or to test exclusions.
@@ -383,15 +387,21 @@ struct TreeMeasure {
             if entry.isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
                 do { stack.append(try BulkCursor(child, top: top, box: box)) }
-                catch let error as POSIXError where error.code == .EDEADLK { omitted += 1 }
+                catch let error as POSIXError where error.code == .EDEADLK { cloudOnly += 1 }
+                catch let error as POSIXError where error.code == .ENOENT { }   // removed since it was listed, by a task still running
                 catch let error as POSIXError where skipsPrivate && (error.code == .EPERM || error.code == .EACCES) { omitted += 1 }
                 catch { if failures.count < 3 { failures.append(child + ": " + error.localizedDescription) } }
             } else { files += 1 }
             if entries % 4000 == 0 { Thread.sleep(forTimeInterval: 0.002) }
         }
         if !failures.isEmpty { return result(.inaccessible, diagnostic: "Incomplete measurement; partial sizes withheld. " + failures.joined(separator: "\n")) }
-        contents = FolderContents(children: Array(childMap.values.map(\.summary).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }.prefix(512)), fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted)
+        contents = FolderContents(children: Array(childMap.values.map(\.summary).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }.prefix(512)), fileTypes: typeMap.values.sorted { $0.bytes > $1.bytes }, listedChildren: listedChildren, retainedLimit: 512, omittedEntries: omitted + cloudOnly)
         let latest = latestSeconds == Int.min ? nil : Date(timeIntervalSince1970: Double(latestSeconds))
-        return result(.measured, bytes, logical, files, latest, diagnostic: omitted > 0 ? "\(omitted) excluded paths, symbolic links or other-volume entries were skipped. Size describes only included contents." : nil)
+        var notes: [String] = []
+        if omitted > 0 { notes.append("\(omitted) excluded paths, symbolic links or other-volume entries were skipped. Size describes only included contents.") }
+        if cloudOnly > 0 { notes.append(cloudOnly == 1 ? "1 folder inside is kept only in iCloud and wasn't downloaded. It takes no space on this Mac." : "\(cloudOnly) folders inside are kept only in iCloud and weren't downloaded. They take no space on this Mac.") }
+        var measured = result(.measured, bytes, logical, files, latest, diagnostic: notes.isEmpty ? nil : notes.joined(separator: " "))
+        measured.cloudOnlyFolders = cloudOnly > 0 ? cloudOnly : nil
+        return measured
     }
 }

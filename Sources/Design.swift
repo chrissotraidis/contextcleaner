@@ -74,7 +74,14 @@ extension MeasurementState {
 extension FolderMeasurement {
     /// Ordinary file permissions ("Permission denied") need a different fix from macOS privacy protection ("Operation not permitted").
     var permissionDenied: Bool { state == .inaccessible && ((diagnostic ?? "").contains("Permission denied") || (diagnostic ?? "").contains("error 13")) }
-    var problem: String { permissionDenied ? "No permission to read it" : state.problem }
+    /// Only "Operation not permitted" is macOS privacy protection, which Full Disk Access fixes. Anything else, such as a
+    /// folder a task changed mid-scan, is a read error that scanning again usually clears.
+    var privacyBlocked: Bool { state == .inaccessible && (diagnostic ?? "").contains("Operation not permitted") }
+    var problem: String {
+        if permissionDenied { return "No permission to read it" }
+        if state == .inaccessible && !privacyBlocked { return "Part of it couldn't be read" }
+        return state.problem
+    }
 }
 
 extension Color {

@@ -397,6 +397,12 @@ import Foundation
         check(cloudAdvice.verdict == .keep && cloudAdvice.short == "In iCloud only" && emptyAdvice.verdict == .safe && emptyAdvice.short == "Empty"
               && advice(for: tiny, policy: LocationPolicy(), devices: [:], now: now).verdict == .check,
               "files kept only in iCloud are Not for the Trash, an empty folder is Safe to remove, and a small folder with files still gets looked at")
+        // 0.21.6: a folder whose contents are only in iCloud lists no files, but it isn't empty.
+        var cloudFolder = item("/Users/x/Documents/Codex/2026-10-08/backup", .workspace, 0); cloudFolder.fileCount = 0; cloudFolder.cloudOnlyFolders = 1
+        var cloudElsewhere = item("/Users/x/.codex/scratch/synced-out", .workspace, 0); cloudElsewhere.fileCount = 0; cloudElsewhere.cloudOnlyFolders = 2
+        check(advice(for: cloudFolder, policy: LocationPolicy(), devices: [:], now: now).short == "In iCloud only" && advice(for: cloudFolder, policy: LocationPolicy(), devices: [:], now: now).verdict == .keep
+              && advice(for: cloudElsewhere, policy: LocationPolicy(), devices: [:], now: now).short != "Empty" && advice(for: cloudElsewhere, policy: LocationPolicy(), devices: [:], now: now).verdict != .safe,
+              "a folder holding only iCloud-only folders is In iCloud only, never Empty or Safe to remove")
         check(!looksIrreplaceable("DerivedData-iPhoneOS-duplicate-save-20260927") && !looksIrreplaceable("derived-audio-recovery-20260927") && looksIrreplaceable("iphone-backup") && looksIrreplaceable("private-ocr-live"),
               "Xcode build folders named after a save or recovery feature aren't mistaken for backups")
         var taskWork = aged("/Users/x/.codex/tasks/app/work", .workspace, hours: 1, gib: 20)

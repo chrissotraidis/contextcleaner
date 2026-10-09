@@ -2,6 +2,12 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.21.6
+
+- **iCloud folders no longer look blocked.** With iCloud Drive's Desktop & Documents on, macOS keeps old items only in iCloud. Context Cleaner never downloads them, and a folder holding one showed under Couldn't Scan as "macOS blocked access", where Full Disk Access can't help. Those folders are now measured, and the iCloud-only part is noted in Details. It takes no space on this Mac.
+- **Never "Empty" by mistake.** A folder whose contents are only in iCloud lists no files. It's now "In iCloud only" and Not for the Trash, because moving it would remove it from iCloud too.
+- **The right fix for each problem.** Only a folder macOS actually protects shows "macOS blocked access" and the Full Disk Access steps. Other read errors say part of the folder couldn't be read and offer Try Again. A folder a task removes mid-scan is skipped.
+
 ## 0.21.5
 
 - **Tick boxes keep up in Free Up Space.** Ticking a group, Select All or Clear changed the selection, but the boxes on the rows below could stay as they were until you scrolled. Each row now redraws whenever the selection changes, however it changed.

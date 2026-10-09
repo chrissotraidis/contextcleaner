@@ -394,7 +394,7 @@ struct MainView: View {
         switch row.measurement.state {
         case .inaccessible where row.measurement.permissionDenied:
             Button("Show in Finder") { revealInFinder([path]) }.controlSize(.small).help("Check the folder's permissions with Get Info")
-        case .inaccessible: Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small)
+        case .inaccessible where row.measurement.privacyBlocked: Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small)
         case .limited: Button("Scan Subfolders") { model.selected = path; model.inspector = "Contents"; model.inspectChildren(row.measurement) }.controlSize(.small).disabled(busy)
         case .missing: Button("Stop Checking") { model.policy(path) { $0.excluded = true } }.controlSize(.small).disabled(model.running || model.inspecting).help("Turns this folder off. You can turn it back on in Settings › Coverage.")
         default: Button("Try Again") { model.selected = path; model.scan(selectedOnly: true) }.controlSize(.small).disabled(busy)
@@ -549,7 +549,7 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(item.problem).font(.headline)
                     Text(problemSentence(item)).font(.callout).foregroundStyle(.secondary)
-                    if item.state == .inaccessible && !item.permissionDenied { Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small) }
+                    if item.privacyBlocked { Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small) }
                     if item.state == .limited { Button("Scan Subfolders") { model.inspector = "Contents"; model.inspectChildren(item) }.controlSize(.small).disabled(busy) }
                 }
             }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Color.attention.opacity(0.08))
@@ -870,6 +870,7 @@ struct MainView: View {
 /// Why a scan couldn't read a folder, in a sentence.
 func problemSentence(_ item: FolderMeasurement) -> String {
     if item.permissionDenied { return "Its file permissions don't let you read it. Get Info in Finder shows who can." }
+    if item.state == .inaccessible && !item.privacyBlocked { return "Something inside couldn't be read during the scan, often because a task was changing it. Scan it again." }
     switch item.state {
     case .limited: return "It holds too much to read in the allowed time. Scan its subfolders instead."
     case .missing: return "It may have been moved or removed since it was found."

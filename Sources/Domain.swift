@@ -164,6 +164,8 @@ struct FolderMeasurement: Codable, Identifiable {
     var elapsedSeconds: Double
     var scopeID: String = "legacy-du"
     var contents: FolderContents? = nil
+    /// Folders inside whose contents are kept only in iCloud. They aren't downloaded, so what's in them is unknown.
+    var cloudOnlyFolders: Int? = nil
 }
 struct ScanRecord: Codable, Identifiable {
     var schema = 1

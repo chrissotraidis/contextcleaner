@@ -277,6 +277,35 @@ import Foundation
         check(!readRepoBackup(wtree).keepsEverything && readRepoBackup(wtree).unkeptIgnored == ["ref/"], "a new file inside an ignored folder makes the worktree hold something only it has")
         try writeNew(Data("x".utf8), to: URL(fileURLWithPath: wtree + "/notes.txt"))
         check(readRepoBackup(wtree).changes == 1 && !readRepoBackup(wtree).keepsEverything, "an untracked file counts as uncommitted")
+        // 0.22: big folders git ignores are found and measured on their own, and APFS clones count once.
+        let sonicHome = root.appendingPathComponent("sonic-home").path, sonic = sonicHome + "/GitHub/sonicpad"
+        for run in 1...4 { try fm.createDirectory(atPath: sonic + "/docs/artifacts/run-\(run)", withIntermediateDirectories: true) }
+        try fm.createDirectory(atPath: sonic + "/build-macos", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: sonic + "/docs/small-ignored", withIntermediateDirectories: true)
+        try writeNew(Data("docs/artifacts/\nbuild-*/\ndocs/small-ignored/\n".utf8), to: URL(fileURLWithPath: sonic + "/.gitignore"))
+        try writeNew(Data("notes".utf8), to: URL(fileURLWithPath: sonic + "/docs/small-ignored/notes.txt"))
+        let payload = sonic + "/docs/artifacts/run-1/payload.bin"
+        try writeNew(Data(repeating: 7, count: 200 << 20), to: URL(fileURLWithPath: payload))
+        for copy in ["docs/artifacts/run-2/payload.bin", "docs/artifacts/run-3/payload.bin", "docs/artifacts/run-4/payload.bin", "build-macos/a.bin", "build-macos/b.bin", "build-macos/c.bin"] {
+            guard clonefile(payload, sonic + "/" + copy, 0) == 0 else { preconditionFailure("Cannot clone the fixture payload") }
+        }
+        runGit(["-C", sonic, "init", "-q"])
+        let sonicProfiles = Inventory.discover(home: sonicHome, preferences: Preferences()).profiles
+        guard let artifacts = sonicProfiles.first(where: { $0.path == sonic + "/docs/artifacts" }), let buildMac = sonicProfiles.first(where: { $0.path == sonic + "/build-macos" }) else {
+            preconditionFailure("big folders git ignores were not discovered")
+        }
+        check(!sonicProfiles.contains { $0.path == sonic + "/docs/small-ignored" }, "big folders git ignores are discovered; small ones are left out")
+        let measuredArtifacts = TreeMeasure.measure(artifacts, preferences: Preferences(), cancellation: Cancellation(), activity: [], activityAvailable: false)
+        let measuredBuild = TreeMeasure.measure(buildMac, preferences: Preferences(), cancellation: Cancellation(), activity: [], activityAvailable: false)
+        let artifactsMiB = (measuredArtifacts.allocatedBytes ?? 0) >> 20, buildMiB = (measuredBuild.allocatedBytes ?? 0) >> 20
+        check(measuredArtifacts.state == .measured && artifactsMiB >= 195 && artifactsMiB < 260 && buildMiB >= 195 && buildMiB < 260,
+              "a 200 MB file and three APFS clones of it measure about 200 MB, not 800 MB (measured \(artifactsMiB) and \(buildMiB) MiB)")
+        var sonicProject = readProjectActivity(sonic)
+        sonicProject.ignored = ignoredByGit(sonic, paths: [artifacts.path, buildMac.path])
+        let artifactsAdvice = advice(for: measuredArtifacts, policy: LocationPolicy(), devices: [:], project: sonicProject)
+        let buildAdvice = advice(for: measuredBuild, policy: LocationPolicy(), devices: [:], project: sonicProject)
+        check(artifactsAdvice.verdict == .check && artifactsAdvice.short == "Not in git" && artifactsAdvice.reason.hasPrefix("Git ignores it") && buildAdvice.verdict == .rebuild,
+              "a folder git ignores is Review first, Not in git; an ignored build-macos is Rebuildable")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

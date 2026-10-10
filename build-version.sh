@@ -35,8 +35,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>Context Cleaner</string>
 <key>CFBundleIconFile</key><string>ContextCleaner</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.21.8</string>
-<key>CFBundleVersion</key><string>55</string>
+<key>CFBundleShortVersionString</key><string>0.22.0</string>
+<key>CFBundleVersion</key><string>56</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
@@ -59,7 +59,7 @@ mkdir "$package_dir"
 ditto "$app" "$package_dir/Context Cleaner.app"
 ln -s /Applications "$package_dir/Applications"
 printf '%s\n' "$stage_dir" > "$release_root/build-stage.txt"
-hdiutil create -volname 'Context Cleaner 0.21.8' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.21.8.dmg"
-hdiutil verify "$release_root/Context-Cleaner-0.21.8.dmg"
-(cd "$release_root" && shasum -a 256 Context-Cleaner-0.21.8.dmg > SHA256SUMS.txt)
+hdiutil create -volname 'Context Cleaner 0.22.0' -srcfolder "$package_dir" -format UDZO "$release_root/Context-Cleaner-0.22.0.dmg"
+hdiutil verify "$release_root/Context-Cleaner-0.22.0.dmg"
+(cd "$release_root" && shasum -a 256 Context-Cleaner-0.22.0.dmg > SHA256SUMS.txt)
 printf 'App retained at: %s\n' "$app"

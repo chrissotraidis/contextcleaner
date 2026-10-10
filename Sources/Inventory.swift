@@ -20,7 +20,7 @@ struct Discovery: Codable {
 }
 struct Inventory {
     static func discover(home: String, preferences: Preferences, cancellation: Cancellation = Cancellation(), progress: (String) -> Void = { _ in }) -> Discovery {
-        var paths: Set<String> = [], notes: [String] = []
+        var paths: Set<String> = [], notes: [String] = [], repositoriesFound: [String] = []
         var complete = true
         func add(_ p: String) {
             let p = normalized(p)
@@ -68,10 +68,14 @@ struct Inventory {
                     if entry.kind == .workspaces { add(project) }
                     for repository in repositories(project) {
                         for suffix in Coverage.projectSuffixes { add(repository + "/" + suffix) }
+                        repositoriesFound.append(repository)
                     }
                 }
             }
         }
+        // Big folders git ignores (agent artifacts, downloaded references, build-macos): read-only git, a few at a time.
+        let ignored = parallelMap(repositoriesFound) { cancellation.stopped ? [] : largeIgnoredFolders($0) }
+        for folders in ignored { for p in folders { add(p) } }
         for p in preferences.customRoots where !preferences.excluded(p) { paths.insert(normalized(p)) }
         for (p, policy) in preferences.locations where policy.isWatched && !preferences.excluded(p) { paths.insert(normalized(p)) }
         let profiles = paths.map { path in
@@ -177,6 +181,10 @@ final class BulkCursor {
         let linkCount: UInt32
         let allocated: Int64
         let logical: Int64
+        /// APFS: the bytes only this file holds. A clone shares the rest with its family. Nil when the volume doesn't say.
+        let privateSize: Int64?
+        /// APFS: the clone family a file belongs to; clones of one file share it. 0 when unknown.
+        let cloneID: UInt64
     }
     let path: String
     var top: String?
@@ -188,15 +196,19 @@ final class BulkCursor {
     private var cursor: UnsafeMutableRawPointer
     private var remaining = 0
     private var finished = false
-    private static let request: attrlist = {
+    /// Asks for each file's private size and clone family too, until a volume that doesn't know them refuses.
+    private var extended = true
+    private static func request(extended: Bool) -> attrlist {
         var a = attrlist()
         a.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         a.commonattr = attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME) | attrgroup_t(ATTR_CMN_DEVID)
             | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_FILEID)
         a.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS) | attrgroup_t(ATTR_DIR_ALLOCSIZE) | attrgroup_t(ATTR_DIR_DATALENGTH)
         a.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT) | attrgroup_t(ATTR_FILE_ALLOCSIZE) | attrgroup_t(ATTR_FILE_DATALENGTH)
+        // With FSOPT_ATTR_CMN_EXTENDED, forkattr asks for extended common attributes.
+        if extended { a.forkattr = attrgroup_t(ATTR_CMNEXT_PRIVATESIZE) | attrgroup_t(ATTR_CMNEXT_CLONEID) }
         return a
-    }()
+    }
     init(_ path: String, top: String?, box: ChildBox? = nil) throws {
         self.path = path; self.top = top; self.box = box
         let fd = retryingInterrupted { Darwin.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
@@ -209,8 +221,12 @@ final class BulkCursor {
     func next() throws -> Entry? {
         if remaining == 0 {
             guard !finished else { return nil }
-            var request = Self.request
-            let count = retryingInterrupted { getattrlistbulk(fd, &request, buffer, capacity, 0) }
+            var request = Self.request(extended: extended)
+            var count = retryingInterrupted { getattrlistbulk(fd, &request, buffer, capacity, extended ? UInt64(FSOPT_ATTR_CMN_EXTENDED) : 0) }
+            if count < 0 && errno == EINVAL && extended {
+                extended = false; request = Self.request(extended: false)
+                count = retryingInterrupted { getattrlistbulk(fd, &request, buffer, capacity, 0) }
+            }
             if count < 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             if count == 0 { finished = true; return nil }
             remaining = Int(count); cursor = buffer
@@ -238,9 +254,53 @@ final class BulkCursor {
             if returned.fileattr & attrgroup_t(ATTR_FILE_ALLOCSIZE) != 0 { allocated = p.loadUnaligned(as: Int64.self); p += 8 }
             if returned.fileattr & attrgroup_t(ATTR_FILE_DATALENGTH) != 0 { logical = p.loadUnaligned(as: Int64.self); p += 8 }
         }
+        // Extended common attributes come after the file attributes.
+        var privateSize: Int64?, cloneID: UInt64 = 0
+        if returned.forkattr & attrgroup_t(ATTR_CMNEXT_PRIVATESIZE) != 0 { privateSize = p.loadUnaligned(as: Int64.self); p += 8 }
+        if returned.forkattr & attrgroup_t(ATTR_CMNEXT_CLONEID) != 0 { cloneID = p.loadUnaligned(as: UInt64.self); p += 8 }
         return Entry(name: name, isDirectory: isDirectory, isRegular: isRegular, isLink: type == UInt32(VLNK.rawValue), isMountPoint: mountPoint,
-                     device: device, modifiedSeconds: Int(modified.tv_sec), fileID: fileID, linkCount: linkCount, allocated: allocated, logical: logical)
+                     device: device, modifiedSeconds: Int(modified.tv_sec), fileID: fileID, linkCount: linkCount, allocated: allocated, logical: logical,
+                     privateSize: privateSize, cloneID: cloneID)
     }
+}
+/// The space a volume has in use, or nil when it can't be read. No folder is ever shown bigger than this.
+func usedSpace(on path: String) -> Int64? {
+    var fs = statfs()
+    guard statfs(path, &fs) == 0 else { return nil }
+    return Int64(fs.f_blocks - fs.f_bfree) * Int64(fs.f_bsize)
+}
+/// Whether a folder holds at least minimum bytes on disk. Stops as soon as it does; a folder too big to finish reading
+/// in the time allowed counts as holding that much. Links and other disks don't count. Metadata only.
+func holdsAtLeast(_ path: String, _ minimum: Int64, seconds: TimeInterval = 3) -> Bool {
+    guard let root = try? BulkCursor(path, top: nil) else { return false }
+    var st = stat(); guard lstat(path, &st) == 0 else { return false }
+    var stack = [root], total: Int64 = 0
+    let started = ProcessInfo.processInfo.systemUptime
+    while let cursor = stack.last {
+        if total >= minimum || ProcessInfo.processInfo.systemUptime - started > seconds { return true }
+        guard let entry = (try? cursor.next()) ?? nil else { stack.removeLast(); continue }
+        if entry.isLink || entry.isMountPoint || entry.device != st.st_dev { continue }
+        total += entry.allocated
+        if entry.isDirectory, stack.count < 64, let inner = try? BulkCursor(cursor.path + "/" + entry.name, top: nil) { stack.append(inner) }
+    }
+    return total >= minimum
+}
+/// The outermost folders git ignores in a repository that hold at least minimum bytes, such as an agent's artifacts
+/// folder or a downloaded reference. Folders git ignores aren't in any commit, so they're measured on their own.
+/// Read-only git; up to 64 per repository.
+func largeIgnoredFolders(_ repository: String, minimum: Int64 = 500 << 20) -> [String] {
+    guard let output = gitOutput(repository, ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"]) else { return [] }
+    // --directory also lists a folder that merely holds nothing but ignored things (docs/ around docs/artifacts/),
+    // so each candidate is confirmed with git check-ignore before the outermost are kept.
+    let candidates = output.split(separator: "\u{0}").map(String.init).filter { $0.hasSuffix("/") && !$0.hasPrefix("../") && $0.count > 1 }
+        .map { repository + "/" + $0.dropLast() }.sorted().prefix(512)
+    let ignored = ignoredByGit(repository, paths: Array(candidates))
+    var outer: [String] = []
+    for path in candidates where ignored[path] == true && !outer.contains(where: { path.hasPrefix($0 + "/") }) {
+        outer.append(path)
+        if outer.count >= 64 { break }
+    }
+    return outer.filter { holdsAtLeast($0, minimum) }
 }
 struct DirectoryListing {
     var names: [String]
@@ -330,6 +390,18 @@ struct TreeMeasure {
         // cloudOnly counts folders whose contents are only in iCloud: macOS won't list them without downloading them
         // (it reports "Resource deadlock avoided"), and reads never download. They take no space on this Mac.
         var seen: Set<FileIdentity> = [], failures: [String] = [], omitted = 0, cloudOnly = 0
+        // APFS clones share their blocks, and each reports them all. A clone counts its private bytes, and the shared
+        // part counts once per clone family, or per file name and size, whichever was seen first. What removing the
+        // folder frees is about this; the plain block count can be several times the disk.
+        var sharedCounted: Set<Int> = []
+        func occupied(_ entry: BulkCursor.Entry) -> Int64 {
+            guard entry.isRegular, let own = entry.privateSize, own >= 0, own < entry.allocated else { return entry.allocated }
+            var family = Hasher(); family.combine(0); family.combine(entry.cloneID)
+            var copy = Hasher(); copy.combine(1); copy.combine(entry.name); copy.combine(entry.logical)
+            let newFamily = entry.cloneID == 0 || sharedCounted.insert(family.finalize()).inserted
+            let newCopy = sharedCounted.insert(copy.finalize()).inserted
+            return own + (newFamily && newCopy ? entry.allocated - own : 0)
+        }
         func incomplete(_ reason: String) -> FolderMeasurement {
             result(.limited, diagnostic: "\(reason) after \(entries.formatted()) entries. Partial sizes are withheld. Measure a smaller child folder or run a manual scan with its larger allowance.")
         }
@@ -373,8 +445,9 @@ struct TreeMeasure {
                 box = childMap[name] ?? ChildBox(name: name, directory: entry.isDirectory, identity: "\(entry.device):\(entry.fileID)")
                 childMap[name] = box
             }
+            let size = occupied(entry)
             if let box {
-                box.bytes += entry.allocated
+                box.bytes += size
                 if !entry.isDirectory { box.files += 1 }
                 if entry.modifiedSeconds > box.latest { box.latest = entry.modifiedSeconds }
             }
@@ -384,9 +457,9 @@ struct TreeMeasure {
                 var type = ext.isEmpty || dot == name.startIndex ? "No extension" : "." + (ext.utf8.contains { $0 >= 65 && $0 <= 90 } ? String(ext.prefix(32)).lowercased() : String(ext.prefix(32)))
                 if typeMap[type] == nil && typeMap.count >= 63 { type = "Other extensions" }
                 var summary = typeMap[type] ?? FileTypeSummary(kind: type)
-                summary.files += 1; summary.bytes += entry.allocated; typeMap[type] = summary
+                summary.files += 1; summary.bytes += size; typeMap[type] = summary
             }
-            bytes += entry.allocated; logical += entry.logical
+            bytes += size; logical += entry.logical
             if entry.modifiedSeconds > latestSeconds { latestSeconds = entry.modifiedSeconds }
             if entry.isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
@@ -407,6 +480,7 @@ struct TreeMeasure {
         var notes: [String] = []
         if omitted > 0 { notes.append("\(omitted) excluded paths, symbolic links or other-volume entries were skipped. Size describes only included contents.") }
         if cloudOnly > 0 { notes.append(cloudOnly == 1 ? "1 folder inside is kept only in iCloud and wasn't downloaded. It takes no space on this Mac." : "\(cloudOnly) folders inside are kept only in iCloud and weren't downloaded. They take no space on this Mac.") }
+        if let used = usedSpace(on: profile.path) { bytes = min(bytes, used) }
         var measured = result(.measured, bytes, logical, files, latest, diagnostic: notes.isEmpty ? nil : notes.joined(separator: " "))
         measured.cloudOnlyFolders = cloudOnly > 0 ? cloudOnly : nil
         return measured

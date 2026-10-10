@@ -404,6 +404,18 @@ import Foundation
         check(advice(for: cloudFolder, policy: LocationPolicy(), devices: [:], now: now).short == "In iCloud only" && advice(for: cloudFolder, policy: LocationPolicy(), devices: [:], now: now).verdict == .keep
               && advice(for: cloudElsewhere, policy: LocationPolicy(), devices: [:], now: now).short != "Empty" && advice(for: cloudElsewhere, policy: LocationPolicy(), devices: [:], now: now).verdict != .safe,
               "a folder holding only iCloud-only folders is In iCloud only, never Empty or Safe to remove")
+        // 0.22: where Everything else is, from saved looks inside it.
+        let firstLook = Date(timeIntervalSince1970: 1_000_000)
+        let looks = [ElsewhereSnapshot(date: firstLook, sizes: ["/u/GitHub": 50 * gib, "/u/GitHub/sonic": 40 * gib, "/u/Movies": 100 * gib]),
+                     ElsewhereSnapshot(date: firstLook.addingTimeInterval(86400), sizes: ["/u/GitHub": 200 * gib, "/u/GitHub/sonic": 190 * gib, "/u/GitHub/other": 10 * gib, "/u/Movies": 100 * gib])]
+        let highlights = ElsewhereHighlights(looks)
+        check(highlights.biggest == "/u/GitHub/sonic" && highlights.grew == "/u/GitHub/sonic" && highlights.grewBytes == 150 * gib && highlights.since == firstLook
+              && ElsewhereHighlights([looks[0]]).grew == nil && ElsewhereHighlights([]).biggest == nil,
+              "Everything else names its biggest and fastest-growing places, its parts rather than ~/GitHub, and growth only against an earlier look")
+        check(isProjectBuildOutput("/Users/x/GitHub/p/build-macos") && isProjectBuildOutput("/Users/x/GitHub/p/web/node_modules") && isProjectBuildOutput("/Users/x/.codex/scratch/t/build")
+              && !isProjectBuildOutput("/Users/x/.codex/scratch/out") && !isProjectBuildOutput("/Users/x/GitHub/dist") && !isProjectBuildOutput("/Users/x/GitHub/p/docs/artifacts")
+              && !isProjectBuildOutput("/Users/x/GitHub/p/build-ios-preview1-backup"),
+              "other tools' build folders count as build output only inside a project")
         check(!looksIrreplaceable("DerivedData-iPhoneOS-duplicate-save-20260927") && !looksIrreplaceable("derived-audio-recovery-20260927") && looksIrreplaceable("iphone-backup") && looksIrreplaceable("private-ocr-live"),
               "Xcode build folders named after a save or recovery feature aren't mistaken for backups")
         var taskWork = aged("/Users/x/.codex/tasks/app/work", .workspace, hours: 1, gib: 20)

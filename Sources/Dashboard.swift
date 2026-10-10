@@ -470,6 +470,17 @@ struct StatusLine: View {
             if model.attentionCount > 0 { dot; link("\(model.attentionCount) couldn't be scanned", tint: .attention) { model.categoryFilter = nil; model.search = ""; model.section = .needsAttention } }
             Spacer()
         }.font(.callout).lineLimit(1)
+        if model.gitBlocked {
+            // A refused git must never look like an answer, so say plainly that project checks are off.
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.caution).accessibilityHidden(true)
+                Text("Project checks are off: git won't run until the Xcode license is accepted. Run this in Terminal, then reopen Context Cleaner.")
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Copy Command") { copyToClipboard("sudo xcodebuild -license accept") }.controlSize(.small)
+                    .help("sudo xcodebuild -license accept")
+                Spacer(minLength: 0)
+            }.font(.callout)
+        }
     }
     private var dot: some View { Text("·").foregroundStyle(.tertiary) }
     private func link(_ title: String, tint: Color, action: @escaping () -> Void) -> some View {
@@ -506,6 +517,13 @@ struct DiskMap: View {
             list.append(Segment(id: "kept", title: "Ignored by you", detail: "You chose to ignore or not scan these", bytes: kept.keptBytes + kept.offBytes, color: .ignored, action: { model.search = ""; model.categoryFilter = nil; model.section = .kept }))
             tracked += kept.keptBytes + kept.offBytes
         }
+        // Folders are measured one at a time. If their sum ever passes what the disk has in use, they're shown in
+        // proportion, so the bar never claims more than the disk holds.
+        if tracked > volume.used, tracked > 0 {
+            let k = Double(volume.used) / Double(tracked)
+            list = list.map { Segment(id: $0.id, title: $0.title, detail: $0.detail, bytes: Int64(Double($0.bytes) * k), color: $0.color, outlined: $0.outlined, action: $0.action) }
+            tracked = volume.used
+        }
         list.append(Segment(id: "other", title: "Everything else", detail: "macOS, apps and folders it doesn't scan. Click to see what's in it", bytes: max(0, volume.used - tracked), color: Color.primary.opacity(0.16), action: { model.showingElsewhere = true }))
         list.append(Segment(id: "free", title: "Free", detail: "Space you have now", bytes: volume.free, color: .clear, outlined: true, action: nil))
         return list.filter { $0.bytes > 0 }
@@ -521,7 +539,7 @@ struct DiskMap: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(r.total > 0 ? "You can get back about \(byteLabel(r.total))" : "Nothing to get back yet")
+                    Text(r.total > 0 ? "You can get back about \(byteLabel(min(r.total, model.volume?.used ?? r.total)))" : "Nothing to get back yet")
                         .font(.title2.weight(.semibold)).monospacedDigit()
                     Text(r.total > 0 ? "\(byteLabel(r.safe.bytes)) safe, \(byteLabel(r.inside.bytes)) in old items, \(byteLabel(r.rebuild.bytes)) rebuildable. You remove it; nothing here deletes."
                          : "Scan your folders so Context Cleaner can see when each was last used.")
@@ -607,6 +625,15 @@ struct WentPanel: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("Needs disk readings from two times in this range. Context Cleaner notes disk space every hour while it's open.").font(.callout).foregroundStyle(.secondary)
+            }
+            // Where Everything else is, from the last look inside it: the biggest place and the one that grew most.
+            if let line = model.elsewhereSummary {
+                Button { model.showingElsewhere = true } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                        Text(line + " ").foregroundStyle(.primary) + Text("Look inside").foregroundStyle(Color.accentColor)
+                    }.font(.caption).fixedSize(horizontal: false, vertical: true)
+                }.buttonStyle(.plain).pointingHand().help("See what's in Everything else")
             }
         }
     }
@@ -895,12 +922,12 @@ struct ElsewhereView: View {
         let largest = Double(max(model.elsewhere.compactMap(\.bytes).max() ?? 1, max(other - found, 1)))
         VStack(alignment: .leading, spacing: 12) {
             Text("Everything else · \(byteLabel(other))").font(.title2.weight(.semibold))
-            Text("Space outside the places Context Cleaner scans: macOS and its system data, your apps, Photos, Mail and Messages, local snapshots, and your own folders. It's sized each time you open this, biggest first; open any row to see what's in it. Projects say whether they're backed up.")
+            Text("Space outside the places Context Cleaner scans: macOS and its system data, your apps, Photos, Mail and Messages, local snapshots, and your own folders. It's sized when you open this, and on its own when it's large or growing fast, biggest first; open any row to see what's in it. Projects say whether they're backed up.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if model.lookingElsewhere {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Sizing your home folder, Library and Applications. It reads sizes only and can take a few minutes. If macOS asks about other apps' data, sizing waits for your answer.")
+                    Text("Sizing your home folder, Library, Applications and projects. It reads sizes only and can take a few minutes. If macOS asks about other apps' data, sizing waits for your answer.")
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
                     Spacer()
                     Button("Stop") { model.stopLookingElsewhere() }
@@ -908,7 +935,7 @@ struct ElsewhereView: View {
             } else if model.elsewhere.isEmpty {
                 HStack {
                     Button("Look Inside", systemImage: "magnifyingglass") { model.lookElsewhere() }.buttonStyle(.borderedProminent)
-                    Text("Sizes the top-level folders of your home, Library and Applications, leaving out what's already scanned. It reads sizes only and saves nothing.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text("Sizes the top-level folders of your home, Library and Applications, and each project in ~/GitHub, leaving out what's already scanned. It reads sizes only, and keeps them so the next look can say what grew.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if !model.elsewhere.isEmpty {
@@ -929,7 +956,7 @@ struct ElsewhereView: View {
                         }
                     }.padding(.trailing, 8)
                 }.frame(minHeight: 260, maxHeight: 460)
-                Text("Measured \(model.elsewhereDate?.formatted(date: .omitted, time: .shortened) ?? "") · \(byteLabel(found)) found in these folders, of \(byteLabel(volumeUsed)) used on your disk. These sizes aren't saved or used in any answer. Backed up means pushed as of the last fetch.")
+                Text("Measured \(model.elsewhereDate?.formatted(date: .omitted, time: .shortened) ?? "") · \(byteLabel(min(found, volumeUsed))) found in these folders, of \(byteLabel(volumeUsed)) used on your disk. Copies that share space (APFS clones) count once. Sizes are kept only to show what grew, never used in any answer. Backed up means pushed as of the last fetch.")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {

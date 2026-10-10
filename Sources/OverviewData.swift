@@ -616,7 +616,7 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
         case .packageCache, .installCache, .buildOutput, .debugSymbols: return true
         // DiffusionBee keeps the pictures you made next to its models; those don't come back.
         case .model: return m.profile.associatedApp != "DiffusionBee"
-        case .workspace: return ["/build", "/generated", "/intermediates", "/.cxx"].contains { m.profile.path.hasSuffix($0) }
+        case .workspace: return isProjectBuildOutput(m.profile.path)
         default: return false
         }
     }()
@@ -642,6 +642,8 @@ private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActi
     if !a.staleItems.isEmpty { return "\(byteLabel(a.staleBytes)) old inside" }
     if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return "Open in \(app) at last scan" }
     let idle = a.lastUsed.map { now.timeIntervalSince($0) / 86400 }
+    // Not in any commit and not build output: the one thing to know about it.
+    if a.verdict == .check, project?.ignored[m.profile.path] == true, !isProjectBuildOutput(m.profile.path) { return "Not in git" }
     if a.verdict == .rebuild { return a.lastUsed.map { "Used " + ageText($0, now: now) } ?? "Rebuilt when needed" }
     if let project, [.workspace, .buildOutput].contains(m.profile.category) {
         if let u = project.uncommitted, u > 0, a.verdict == .check { return "Uncommitted work" }
@@ -681,7 +683,11 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
     let label = project.isWorktree ? "Worktree \(project.name)" : "Project \(project.name)"
     var evidence = [label + ": " + project.summary(now: now) + "."]
     let ignored = project.ignored[m.profile.path]
-    if ignored == true { evidence.append("Git ignores this folder, so the repository doesn't need it.") }
+    if ignored == true && !isProjectBuildOutput(m.profile.path) && result.verdict == .check {
+        // Not build output, and not in any commit: an agent's artifacts, a downloaded reference, your own files.
+        result = Advice(verdict: .check, reason: "Git ignores it, so it's only on this Mac. It isn't build output, so nothing recreates it.", howTo: "Look inside and keep what you need, then move the rest to the Trash.", command: nil, lastUsed: lastActivity)
+        evidence.append("Git ignores this folder, so no commit holds a copy.")
+    } else if ignored == true { evidence.append("Git ignores this folder, so the repository doesn't need it.") }
     if ignored == false && isProjectBuildOutput(m.profile.path) {
         // A folder named build that git tracks may be source; don't treat it as output.
         result = Advice(verdict: .check, reason: "Git tracks files in this folder, so it may hold source, not just build output.", howTo: "Look inside first.", command: nil, lastUsed: lastActivity)
@@ -705,7 +711,19 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
     return result
 }
 /// Build output inside a project: recreated by building again.
-func isProjectBuildOutput(_ path: String) -> Bool { ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) } }
+/// Build output by name. build, generated, intermediates and .cxx anywhere; other tools' output folders (build-macos,
+/// cmake-build-debug, out, dist, target, node_modules, .build, DerivedData) only inside a project in ~/GitHub or a
+/// Codex worktree, where Context Cleaner finds them because git ignores them.
+func isProjectBuildOutput(_ path: String) -> Bool {
+    let name = (path as NSString).lastPathComponent
+    if ["build", "generated", "intermediates", ".cxx"].contains(name) { return true }
+    let inProject = ["/GitHub/", "/.codex/worktrees/"].contains { root in
+        path.range(of: root).map { path[$0.upperBound...].contains("/") } ?? false
+    }
+    // A name that says backup or save (build-ios-preview1-backup) may be a deliberate copy, not output.
+    guard inProject, !looksIrreplaceable(name) else { return false }
+    return ["out", "dist", "target", "node_modules", ".build", "DerivedData"].contains(name) || ["build-", "build_", "cmake-build"].contains { name.hasPrefix($0) }
+}
 /// Build output or a scratch work folder: each holds one subfolder per build or experiment.
 func isProjectOutput(_ path: String) -> Bool { isProjectBuildOutput(path) || path.hasSuffix("/work") }
 /// The folder rules. Evidence first (open files, your own marks, last use), then what the folder is.
@@ -788,8 +806,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         if let idle, idle < 30 { return Advice(verdict: .rebuild, reason: "Debug files for a device you connected \(ageText(m.latestModifiedAt, now: now)). Xcode copies them again the next time you connect it.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .safe, reason: "Debug files for one device and iOS version. Xcode copies them again when you connect it.", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .workspace:
-        let rebuildable = ["/build", "/generated", "/intermediates", "/.cxx"].contains { path.hasSuffix($0) }
-        if rebuildable { return projectBuild() }
+        if isProjectBuildOutput(path) { return projectBuild() }
         if path.contains("/.codex/scratch/") { return Advice(verdict: .check, reason: "Left behind by a Codex task: builds, downloads, logs or test copies. Codex doesn't clean these up.", howTo: "If the task is done, look for anything you made by hand, then move the folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch space for \(project): logs, test installs and experiments. It can also hold files you made by hand.", howTo: "Remove the experiment folders you're done with. Keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Files in the \(project) project. Some may be your only copy.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
@@ -924,6 +941,26 @@ let developerToolsInstalled: Bool = {
     process.waitUntilExit()
     return process.terminationStatus == 0
 }()
+/// The git Context Cleaner runs, found once. /usr/bin/git exits 69 when Xcode is installed but its license isn't
+/// accepted; the Command Line Tools' own git still works then. licenseBlocked says git was refused for that reason.
+struct GitTool: Equatable { var path: String?; var licenseBlocked: Bool }
+func findGit(_ candidates: [String]) -> GitTool {
+    var blocked = false
+    for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+        process.standardInput = FileHandle.nullDevice; process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+        guard (try? process.run()) != nil else { continue }
+        if done.wait(timeout: .now() + 10) == .timedOut { process.terminate(); continue }
+        if process.terminationReason == .exit && process.terminationStatus == 0 { return GitTool(path: path, licenseBlocked: blocked) }
+        if process.terminationStatus == 69 { blocked = true }
+    }
+    return GitTool(path: nil, licenseBlocked: blocked)
+}
+let gitTool: GitTool = developerToolsInstalled ? findGit(["/usr/bin/git", "/Library/Developer/CommandLineTools/usr/bin/git"]) : GitTool(path: nil, licenseBlocked: false)
 /// Settings that make git run a program, switched off for every read. A repository's own config (.git/config) can name
 /// programs for git to run: an fsmonitor hook, content filters, a signature checker. A folder you downloaded or copied can
 /// carry such a config, so Context Cleaner never lets git run them. Settings given with -c win over every config file.
@@ -946,9 +983,9 @@ func gitSafetyArguments(filterKeys: [String]) -> [String]? {
 }
 /// Runs git and returns its output, or nil on failure or after the time limit. No settings are added; use gitOutput.
 private func runGit(_ root: String, _ arguments: [String], timeout: TimeInterval, okStatuses: Set<Int32>) -> String? {
-    guard developerToolsInstalled else { return nil }
+    guard let git = gitTool.path else { return nil }
     let process = Process(), pipe = Pipe()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+    process.executableURL = URL(fileURLWithPath: git)
     process.arguments = arguments
     var environment = ProcessInfo.processInfo.environment
     environment["GIT_OPTIONAL_LOCKS"] = "0"; environment["GIT_TERMINAL_PROMPT"] = "0"; environment["GIT_ASKPASS"] = "/usr/bin/false"; environment["SSH_ASKPASS"] = "/usr/bin/false"
@@ -1142,7 +1179,26 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
 
 // MARK: - Everything else
 
-/// One place outside the scanned folders, measured on request. Never saved, never part of any answer.
+/// Each look inside Everything else, saved as paths and sizes so the next look can say what grew. Never part of any answer.
+struct ElsewhereSnapshot: Codable, Equatable {
+    var date: Date
+    var sizes: [String: Int64]
+}
+/// What to name on the overview: the biggest place in the latest look, and the one that grew most since a look at
+/// least an hour earlier (1 GiB or more). A folder whose parts are listed too, such as ~/GitHub, is left out for its parts.
+struct ElsewhereHighlights: Equatable {
+    var biggest: String?, biggestBytes: Int64 = 0
+    var grew: String?, grewBytes: Int64 = 0, since: Date?
+    init(_ history: [ElsewhereSnapshot]) {
+        guard let latest = history.max(by: { $0.date < $1.date }) else { return }
+        let paths = latest.sizes.keys.filter { path in !latest.sizes.keys.contains { $0.hasPrefix(path + "/") } }.sorted()
+        if let top = paths.max(by: { latest.sizes[$0]! < latest.sizes[$1]! }) { biggest = top; biggestBytes = latest.sizes[top]! }
+        guard let earlier = history.filter({ latest.date.timeIntervalSince($0.date) >= 3600 }).max(by: { $0.date < $1.date }) else { return }
+        let changes = paths.compactMap { path in earlier.sizes[path].map { (path, latest.sizes[path]! - $0) } }
+        if let most = changes.max(by: { $0.1 < $1.1 }), most.1 >= 1 << 30 { grew = most.0; grewBytes = most.1; since = earlier.date }
+    }
+}
+/// One place outside the scanned folders, measured on request. Its size is kept only to show what grew.
 struct ElsewhereItem: Identifiable, Sendable {
     var id: String { path }
     let path: String

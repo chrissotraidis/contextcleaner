@@ -80,6 +80,8 @@ struct FolderRow: Identifiable {
     @Published var capacity: [CapacityReading] = []
     /// One-line result of the most recent scan, shown under the page header until dismissed.
     @Published var lastResult: String?
+    /// Git is installed but refuses to run (Xcode's license isn't accepted) and no other git works: project checks are off.
+    @Published private(set) var gitBlocked = false
     /// Simulators as Xcode reports them, keyed by device ID. Read-only.
     @Published var simDevices: [String: SimDevice] = [:] { didSet { discoveryVersion += 1 } }
     /// Known folders that no longer exist on disk.
@@ -153,6 +155,8 @@ struct FolderRow: Identifiable {
         let home = home
         let paths = Array(Set((latest.map(\.profile) + discovery.profiles).filter { [.workspace, .buildOutput].contains($0.category) && !$0.path.contains("/DerivedData") }.map(\.path)))
         DispatchQueue.global(qos: .utility).async {
+            let blocked = gitTool.path == nil && gitTool.licenseBlocked
+            DispatchQueue.main.async { self.gitBlocked = blocked }
             var roots: [String: String] = [:]
             for path in paths { if let root = repositoryRoot(for: path, home: home) { roots[path] = root } }
             var activity: [String: ProjectActivity] = [:]
@@ -253,21 +257,68 @@ struct FolderRow: Identifiable {
     /// What's inside each row you opened, and the rows still being sized.
     @Published private(set) var elsewhereChildren: [String: [ElsewhereItem]] = [:]
     @Published private(set) var elsewhereOpening: Set<String> = []
+    /// Earlier looks inside Everything else, oldest first: paths and sizes only, so the overview can say what grew.
+    @Published private(set) var elsewhereHistory: [ElsewhereSnapshot] = []
     private var elsewhereCancellation = Cancellation()
-    /// Sizes the top level of your home folder, your Library and Applications, leaving out every folder
-    /// Context Cleaner already scans or you turned off, so nothing is counted twice. Reads metadata only.
+    /// Sizes the top level of your home folder, your Library and Applications, and each repository in ~/GitHub, leaving
+    /// out every folder Context Cleaner already scans or you turned off, so nothing is counted twice. Reads metadata only;
+    /// the sizes are saved so the next look can say what grew.
     func lookElsewhere() {
         guard !lookingElsewhere else { return }
         lookingElsewhere = true; elsewhere = []; elsewhereChildren = [:]; elsewhereOpening = []
         elsewhereCancellation = Cancellation()
-        let home = home, job = elsewhereJob()
+        let home = home, job = elsewhereJob(), token = elsewhereCancellation
         DispatchQueue.global(qos: .userInitiated).async {
+            let projects = home + "/GitHub"
             var targets = ["/Applications"]
-            for path in folderEntries(home) where path != home + "/Library" { targets.append(path) }
+            for path in folderEntries(home) where path != home + "/Library" && path != projects { targets.append(path) }
             targets += folderEntries(home + "/Library")
-            let found = job(targets, true)
-            DispatchQueue.main.async { self.elsewhere = found; self.elsewhereDate = Date(); self.lookingElsewhere = false }
+            var found = job(targets, true)
+            // Each repository on its own, so the biggest and fastest-growing can be named; ~/GitHub is their sum.
+            var st = stat()
+            let repositories = lstat(projects, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR ? job(folderEntries(projects), false) : []
+            if !repositories.isEmpty {
+                let sized = repositories.compactMap(\.bytes)
+                var all = ElsewhereItem(path: projects, name: abbreviatedPath(projects), bytes: sized.isEmpty ? nil : sized.reduce(0, +), note: sized.isEmpty ? "Too big to size in the time allowed." : nil)
+                all.isFolder = true
+                all.about = elsewhereAbout(projects, home: home)
+                all.scannedInside = repositories.reduce(0) { $0 + $1.scannedInside }
+                all.modified = repositories.compactMap(\.modified).max()
+                all.scannedModified = repositories.compactMap(\.scannedModified).max()
+                found = (found + [all]).sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
+            }
+            let snapshot = ElsewhereSnapshot(date: Date(), sizes: Dictionary((found + repositories).compactMap { item in item.bytes.map { (item.path, $0) } }, uniquingKeysWith: { a, _ in a }))
+            let stopped = token.stopped
+            DispatchQueue.main.async {
+                self.elsewhere = found; self.elsewhereDate = Date(); self.lookingElsewhere = false
+                if !repositories.isEmpty { self.elsewhereChildren[projects] = repositories }
+                // A look you stopped part way isn't a fair comparison for the next one.
+                guard !stopped, !snapshot.sizes.isEmpty else { return }
+                do { try self.store?.appendElsewhere(snapshot); self.elsewhereHistory.append(snapshot) }
+                catch { self.error = "The look inside Everything else couldn't be saved: \(error.localizedDescription)" }
+            }
         }
+    }
+    /// Looks inside Everything else on its own when it's at least a quarter of the used space or grew 2 GiB a day or
+    /// more this week, at most every six hours, so the overview can name where the space is.
+    func considerLookingElsewhere(now: Date = Date()) {
+        guard !lookingElsewhere, store != nil, let used = volume?.used, used > 0 else { return }
+        if let last = elsewhereHistory.last?.date, now.timeIntervalSince(last) < 6 * 3600 { return }
+        let share = Double(everythingElseBytes) / Double(used)
+        let week = spaceWent(from: now.addingTimeInterval(-7 * 86400), to: now)
+        let perDay = week.map { w in Double((w.diskChange ?? 0) - w.places.reduce(Int64(0)) { $0 + $1.bytes }) / w.days } ?? 0
+        if share >= 0.25 || perDay >= Double(2 << 30) { lookElsewhere() }
+    }
+    /// One sentence for the overview naming the biggest and fastest-growing places in Everything else, or nil.
+    var elsewhereSummary: String? {
+        let h = ElsewhereHighlights(elsewhereHistory)
+        guard let biggest = h.biggest else { return nil }
+        var text = "In Everything else, \(abbreviatedPath(biggest)) is biggest, at \(byteLabel(h.biggestBytes))"
+        if let grew = h.grew, let since = h.since {
+            text += grew == biggest ? ", and grew \(byteLabel(h.grewBytes)) since \(since.formatted(date: .abbreviated, time: .omitted))."
+                : ". \(abbreviatedPath(grew)) grew most: \(byteLabel(h.grewBytes)) since \(since.formatted(date: .abbreviated, time: .omitted))."
+        } else { text += "." }
+        return text
     }
     /// Sizes what's inside one row, the same way. Kept until Look Again.
     func openElsewhere(_ path: String) {
@@ -436,6 +487,7 @@ struct FolderRow: Identifiable {
             records = droppingOldContents(storage.records()); preferences = storage.preferences()
             capacity = storage.capacityReadings()
             cleanups = storage.cleanups()
+            elsewhereHistory = storage.elsewhereSnapshots()
             discovery = storage.learnedDiscovery() ?? Discovery(profiles: [], notes: [])
             store = storage
             error = storage.warnings.isEmpty ? nil : storage.warnings.joined(separator: "\n")
@@ -456,6 +508,7 @@ struct FolderRow: Identifiable {
         loadSimDevices()
         refreshGone()
         refreshProjects()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.considerLookingElsewhere() }
     }
     // Derived state is rebuilt only when its inputs change; SwiftUI reads these many times per frame.
     private struct Derived { var key = ""; var historyKey = -1; var saved: [String: FolderMeasurement] = [:]; var latest: [FolderMeasurement] = []; var history: [String: [HistoryPoint]] = [:]; var growth: [String: GrowthSummary] = [:] }
@@ -1148,6 +1201,7 @@ struct FolderRow: Identifiable {
                 let grew = record.measurements.filter { $0.state == .measured && (self.growthSummary($0.profile.path).delta ?? 0) > 0 }.count
                 self.lastResult = scanOutcome(record, grew: grew)
                 self.running = false; self.progress = self.lastResult ?? record.resultSummary
+                self.considerLookingElsewhere()
             }
         }
     }

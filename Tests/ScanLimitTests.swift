@@ -118,6 +118,16 @@ import Darwin
         guard chmod(left.appendingPathComponent("deep").path, 0o700) == 0 else { preconditionFailure("Cannot restore own fixture permissions") }
         check(readable < Date().addingTimeInterval(60) && readable > Date().addingTimeInterval(-3600) && blocked == .distantFuture,
               "the recheck reads the real newest change, and a folder inside it can't open counts as changed")
+        // Git refused because Xcode's license isn't accepted (exit 69): the next git is used, or nothing is.
+        let gitBins = root.appendingPathComponent("git-bins")
+        try FileManager.default.createDirectory(at: gitBins, withIntermediateDirectories: false)
+        let refusing = gitBins.appendingPathComponent("refusing").path, working = gitBins.appendingPathComponent("working").path
+        try writeNew(Data("#!/bin/sh\nexit 69\n".utf8), to: URL(fileURLWithPath: refusing))
+        try writeNew(Data("#!/bin/sh\necho git version 2\n".utf8), to: URL(fileURLWithPath: working))
+        guard chmod(refusing, 0o755) == 0, chmod(working, 0o755) == 0 else { preconditionFailure("Cannot prepare fixture git") }
+        check(findGit([refusing, working]) == GitTool(path: working, licenseBlocked: true) && findGit([refusing]) == GitTool(path: nil, licenseBlocked: true)
+              && findGit([working]) == GitTool(path: working, licenseBlocked: false) && findGit([gitBins.appendingPathComponent("missing").path]) == GitTool(path: nil, licenseBlocked: false),
+              "a git refused by the Xcode license falls back to the next one; with none working, git counts as blocked")
         print("SUCCESS: \(count) bounded-scan checks. Preserved fixture: \(root.path)")
     }
 }

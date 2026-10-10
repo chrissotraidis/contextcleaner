@@ -60,7 +60,7 @@ final class AppendStore {
     private(set) var warnings: [String] = []
     init(root: URL) throws {
         self.root = root
-        for folder in ["scans", "preferences", "imports", "discoveries", "capacity", "cleanups", "trash-lists"] {
+        for folder in ["scans", "preferences", "imports", "discoveries", "capacity", "cleanups", "trash-lists", "elsewhere"] {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
         }
     }
@@ -123,6 +123,13 @@ final class AppendStore {
     func cleanups() -> [Cleanup] {
         let all = decodeAll("cleanups", as: Cleanup.self, label: "cleanup")
         return Dictionary(grouping: all, by: \.id).values.compactMap { $0.max { $0.updatedAt < $1.updatedAt } }.sorted { $0.copiedAt > $1.copiedAt }
+    }
+    /// Saves one look inside Everything else as a new file.
+    func appendElsewhere(_ snapshot: ElsewhereSnapshot) throws {
+        try writeNew(encoder.encode(snapshot), to: root.appendingPathComponent("elsewhere/\(Int64(snapshot.date.timeIntervalSince1970 * 1000))-\(UUID().uuidString).json"))
+    }
+    func elsewhereSnapshots() -> [ElsewhereSnapshot] {
+        decodeAll("elsewhere", as: ElsewhereSnapshot.self, label: "Everything else look").sorted { $0.date < $1.date }
     }
     /// Saves the paths of a long Trash command as a new file, for the command to read. Returns its path.
     func saveTrashList(_ id: String, _ paths: [String]) throws -> String {

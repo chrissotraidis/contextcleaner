@@ -2,6 +2,15 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.22.0
+
+On a nearly full disk, Context Cleaner could miss the folder filling it and show sizes bigger than the disk. This release finds those folders and counts space the way the disk does.
+
+- **Big folders git ignores are found.** Inside each project in `~/GitHub` and each Codex worktree, any folder of 500 MB or more that git ignores is now measured on its own: an agent's `docs/artifacts`, a downloaded `ref/`, a `build-macos`. Build folders by name (build-*, out, dist, target, node_modules, .build, DerivedData) are Rebuildable. Anything else is Review first, "Not in git": no commit has a copy.
+- **Clones count once.** APFS clones share their space, and each reports all of it, so a folder of clones could look several times bigger than the space removing it frees. Sizes now count shared space once. No folder or total is shown bigger than the space the disk has in use.
+- **Blocked git says so.** When Xcode's license isn't accepted, git refuses to run and every project check quietly came back unknown. Context Cleaner now uses the Command Line Tools' git if that works, and otherwise says project checks are off, with the command that turns them back on.
+- **Everything else names what's in it.** When Everything else is a quarter of the used space or grows 2 GiB a day, Context Cleaner looks inside it on its own, at most every six hours, now listing each project in `~/GitHub` separately. The overview names the biggest place and the one that grew most, with a link to look inside. These sizes are kept only to show growth.
+
 ## 0.21.8
 
 A full audit of the fallbacks in every file that decides: each place a failed read or missing answer turns into a default was checked for whether that default could make something look removable. Three could.

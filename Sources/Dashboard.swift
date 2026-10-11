@@ -935,7 +935,7 @@ struct ElsewhereView: View {
             } else if model.elsewhere.isEmpty {
                 HStack {
                     Button("Look Inside", systemImage: "magnifyingglass") { model.lookElsewhere() }.buttonStyle(.borderedProminent)
-                    Text("Sizes the top-level folders of your home, Library and Applications, and each project in ~/GitHub, leaving out what's already scanned. It reads sizes only, and keeps them so the next look can say what grew.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text("Sizes the top-level folders of your home, Library and Applications, and each project in ~/GitHub and ~/Developer, leaving out what's already scanned. It reads sizes only, and keeps them so the next look can say what grew.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
             if !model.elsewhere.isEmpty {

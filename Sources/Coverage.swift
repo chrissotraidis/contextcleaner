@@ -46,6 +46,18 @@ enum CoveragePresence {
 
 enum Coverage {
     static let projectSuffixes = ["android/app/.cxx", "android/app/build/intermediates", "build", "generated", "work"]
+    /// Folders in your home folder that hold your projects, each one a git repository or a folder of them. ~/Developer is
+    /// where Apple's tools and many guides put projects; ~/GitHub is where GitHub Desktop does.
+    static let projectRoots = ["GitHub", "Developer"]
+    /// Claude Code's scratchpads: one folder per project, one per session inside, in the shared /private/tmp. Claude Code
+    /// asks agents to write temporary files there, and they stay until the Mac restarts.
+    static let claudeScratch = "/private/tmp/claude-\(getuid())"
+    /// Places where everything is temporary: yours, and Claude Code's when you own it.
+    static func temporaryRoots() -> [String] {
+        var st = stat()
+        let claude = lstat(claudeScratch, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR && st.st_uid == getuid() ? [claudeScratch] : []
+        return (temporaryFolder.map { [$0] } ?? []) + claude
+    }
     /// Your own temporary folder (\$TMPDIR), where apps and command-line tools leave work files. Resolved, without symbolic links.
     static let temporaryFolder: String? = {
 #if DEMO
@@ -65,6 +77,8 @@ enum Coverage {
         CoverageEntry(writer: "Codex", relativePath: "Library/Application Support/Codex", kind: .folder, category: .appData, writes: "App state, caches and local databases.", name: "App data", group: .ai),
         CoverageEntry(writer: "Claude", relativePath: "Library/Application Support/Claude", kind: .folder, category: .appData, writes: "App state, caches and local databases.", name: "App data", group: .ai),
         CoverageEntry(writer: "Your projects", relativePath: "GitHub", kind: .projects, category: .workspace, writes: "Build output, generated files and work folders inside each repository.", name: "Build folders", group: .developer),
+        CoverageEntry(writer: "Your projects", relativePath: "Developer", kind: .projects, category: .workspace, writes: "Build output, generated files and work folders inside each repository.", name: "Build folders", group: .developer),
+        CoverageEntry(writer: "Claude Code", relativePath: claudeScratch, kind: .children, category: .temporary, writes: "Scratchpads, one folder per project with one per session inside: build trees, downloads and test copies an agent made. Nothing keeps them, and they stay until the Mac restarts.", name: "Scratchpads", group: .ai),
         CoverageEntry(writer: "Xcode", relativePath: "Library/Developer/Xcode/DerivedData", kind: .folder, category: .buildOutput, writes: "Compiled intermediates, indexes and build products for every project you open.", name: "Build data", group: .developer),
         CoverageEntry(writer: "Xcode", relativePath: "Library/Developer/Xcode/iOS DeviceSupport", kind: .children, category: .debugSymbols, writes: "Symbol files copied from each connected device and OS version.", name: "Device support files", group: .developer),
         CoverageEntry(writer: "Simulator", relativePath: "Library/Developer/CoreSimulator/Devices", kind: .children, category: .simulator, writes: "One folder per virtual device: installed apps, their data, saves and photos.", name: "Test devices", group: .developer),
@@ -92,7 +106,7 @@ enum Coverage {
     ] + (temporaryFolder.map { [CoverageEntry(writer: "Apps and tools", relativePath: $0, kind: .folder, category: .temporary, writes: "Work files apps and command-line tools leave behind: build trees, traces, unpacked downloads. macOS clears what nothing has used for 3 days, but not always.", name: "Temporary files", group: .developer)] } ?? [])
     /// What the app deliberately does not scan, stated so the boundary is explicit.
     static let notScanned: [String] = [
-        "System files and the macOS installation (/System, /Library, /private).",
+        "System files and the macOS installation (/System, /Library, /private), apart from Claude Code's scratchpads in /private/tmp.",
         "Other users' home folders.",
         "Photos, Mail, Messages and iCloud Drive libraries.",
         "Time Machine local snapshots and purgeable space managed by macOS.",

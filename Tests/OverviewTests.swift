@@ -416,6 +416,23 @@ import Foundation
               && !isProjectBuildOutput("/Users/x/.codex/scratch/out") && !isProjectBuildOutput("/Users/x/GitHub/dist") && !isProjectBuildOutput("/Users/x/GitHub/p/docs/artifacts")
               && !isProjectBuildOutput("/Users/x/GitHub/p/build-ios-preview1-backup"),
               "other tools' build folders count as build output only inside a project")
+        // 0.22.1: ~/Developer is a projects folder like ~/GitHub; ~/Library/Developer (Xcode's) isn't.
+        check(isProjectBuildOutput("/Users/x/Developer/app/target") && !isProjectBuildOutput("/Users/x/Library/Developer/Xcode/out")
+              && locationHint("/Users/x/Developer/app/build") == "Developer/app" && locationHint("/Users/x/Library/Developer/Xcode/DerivedData/x") == nil
+              && Classifier.profile(path: "/Users/x/Developer/app/build", home: "/Users/x", readMetadata: false).project == "app",
+              "projects in ~/Developer get the same build rules and names as ~/GitHub; Xcode's ~/Library/Developer doesn't")
+        // Claude Code's scratchpads in /private/tmp: temporary, named for their project, and allowed in a Trash command.
+        let claudeProject = Coverage.claudeScratch + "/-Users-x-GitHub-sonicpad"
+        let claudeProfile = Classifier.profile(path: claudeProject, home: "/Users/x", readMetadata: false)
+        check(claudeProfile.category == .temporary && claudeProfile.displayName == "Claude Code scratch · GitHub-sonicpad"
+              && pathFitsCommand(claudeProject + "/session/scratchpad/head_wt_target", home: "/Users/x", temporary: [Coverage.claudeScratch])
+              && !pathFitsCommand(Coverage.claudeScratch, home: "/Users/x", temporary: [Coverage.claudeScratch])
+              && !pathFitsCommand("/private/tmp/other", home: "/Users/x", temporary: [Coverage.claudeScratch]),
+              "Claude Code scratchpads are temporary, named for their project, and only folders inside them go in a command")
+        var oldScratch = item(claudeProject, .temporary, 7 * gib); oldScratch.profile = claudeProfile; oldScratch.latestModifiedAt = now.addingTimeInterval(-4 * 86400)
+        var liveScratch = oldScratch; liveScratch.latestModifiedAt = now.addingTimeInterval(-3600)
+        check(advice(for: oldScratch, policy: LocationPolicy(), devices: [:], now: now).verdict == .safe && advice(for: liveScratch, policy: LocationPolicy(), devices: [:], now: now).verdict == .check,
+              "a Claude Code scratchpad untouched for 3 days is Safe to remove; one in use is Review first")
         check(!looksIrreplaceable("DerivedData-iPhoneOS-duplicate-save-20260927") && !looksIrreplaceable("derived-audio-recovery-20260927") && looksIrreplaceable("iphone-backup") && looksIrreplaceable("private-ocr-live"),
               "Xcode build folders named after a save or recovery feature aren't mistaken for backups")
         var taskWork = aged("/Users/x/.codex/tasks/app/work", .workspace, hours: 1, gib: 20)
@@ -466,12 +483,12 @@ import Foundation
               && shellEcho("/bin/zsh", forShell("( echo 'hi' )", shell: "/opt/homebrew/bin/fish")) == "hi\n", "bash and zsh get the command as written; other shells get it run by zsh, unchanged")
         // Which paths may be in a Trash command at all.
         let home = "/Users/x", tmp = "/private/var/folders/ab/cd/T"
-        check(pathFitsCommand("/Users/x/.codex/scratch/pm028", home: home, temporary: tmp) && pathFitsCommand("/Users/x/Library/Developer/Xcode/DerivedData", home: home, temporary: tmp)
-              && pathFitsCommand(tmp + "/build-tmp", home: home, temporary: tmp), "ordinary scratch, build and temporary items may be in a command")
+        check(pathFitsCommand("/Users/x/.codex/scratch/pm028", home: home, temporary: [tmp]) && pathFitsCommand("/Users/x/Library/Developer/Xcode/DerivedData", home: home, temporary: [tmp])
+              && pathFitsCommand(tmp + "/build-tmp", home: home, temporary: [tmp]), "ordinary scratch, build and temporary items may be in a command")
         let refusedPaths = ["/Users/x", "/Users/x/GitHub", "/Users/x/Documents", "/Users/x/Library/Caches", "/Users/x/Library/Keychains/login.keychain-db", "/Users/x/Library/Mobile Documents/com~apple~CloudDocs/a",
                             "/Users/x/.ssh/id", "/Users/x/.Trash/old", "/Users/y/build", "/", "/Applications/App.app", "/Users/x/a/../b", "/Users/x//a/b", "relative/path", tmp,
                             "/Users/x/a/new\nline", "/Users/x/a/evil\u{1B}[2J", "/Users/x/a/\u{202E}gnp.exe"]
-        check(refusedPaths.allSatisfy { !pathFitsCommand($0, home: home, temporary: tmp) },
+        check(refusedPaths.allSatisfy { !pathFitsCommand($0, home: home, temporary: [tmp]) },
               "never in a command: home and its top-level folders, ~/Library's own folders, keychains, iCloud Drive, keys, the Trash, other users, outside home, .. or //, and names with control or invisible characters")
         // The command itself, run for real on things it must leave alone: a link, a missing path, and an expired command.
         let fixture = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cc-security-" + UUID().uuidString)

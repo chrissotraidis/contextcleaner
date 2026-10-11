@@ -3,10 +3,10 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: CleanerModel
     var body: some View {
-        TabView {
-            GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }
-            ScanningSettings(model: model).tabItem { Label("Scanning", systemImage: "magnifyingglass") }
-            CoverageSettings(model: model).tabItem { Label("Coverage", systemImage: "folder.badge.gearshape") }
+        TabView(selection: $model.settingsTab) {
+            GeneralSettings(model: model).tabItem { Label("General", systemImage: "gearshape") }.tag(SettingsTab.general)
+            ScanningSettings(model: model).tabItem { Label("Scanning", systemImage: "magnifyingglass") }.tag(SettingsTab.scanning)
+            CoverageSettings(model: model).tabItem { Label("Coverage", systemImage: "folder.badge.gearshape") }.tag(SettingsTab.coverage)
         }.frame(width: 620, height: 560)
     }
 }
@@ -182,12 +182,20 @@ struct CoverageSettings: View {
                 }
             }.formStyle(.grouped)
         }
+        // Change Places… in the scan sheet asks for Your folders open, where you add a place.
+        .onAppear { showYourFolders() }
+        .onChange(of: model.showYourFolders) { showYourFolders() }
         .task {
             let home = model.home
             presence = await Task.detached(priority: .utility) {
                 Dictionary(uniqueKeysWithValues: Coverage.entries.map { ($0.id, Coverage.presence($0, home: home)) })
             }.value
         }
+    }
+    private func showYourFolders() {
+        guard model.showYourFolders else { return }
+        model.showYourFolders = false
+        query = ""; filter = .all; openGroups.insert("mine")
     }
     /// An accessible expand button beside the group's switch.
     private func groupHeader(_ group: CoverageGroup, entries: [CoverageEntry], open: Bool) -> some View {
@@ -222,7 +230,7 @@ struct CoverageSettings: View {
                     Image(systemName: "chevron.right").font(.caption).rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(.secondary).frame(width: 12)
                 }.buttonStyle(.plain).accessibilityLabel(open ? "Hide details" : "Show details")
                 Image(systemName: entry.category.symbol).foregroundStyle(entry.category.tint).frame(width: 18).accessibilityHidden(true)
-                Text(entry.writer == "You" ? entry.name : entry.writer == "Your projects" ? "GitHub · " + entry.name : entry.writer + " · " + entry.name).font(.callout).lineLimit(1)
+                Text(entry.writer == "You" ? entry.name : entry.writer == "Your projects" ? entry.relativePath + " · " + entry.name : entry.writer + " · " + entry.name).font(.callout).lineLimit(1)
                 Spacer()
                 Text(status == .missing ? "Not on this Mac" : status == .unavailable ? "Couldn't check" : size > 0 ? byteLabel(size) : status == .present ? "On this Mac" : "…")
                     .font(.caption).monospacedDigit().foregroundStyle(status == .unavailable ? Color.attention : .secondary)
@@ -278,6 +286,7 @@ struct CoverageSettings: View {
 struct ScanPlanView: View {
     @ObservedObject var model: CleanerModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openSettings) private var openSettings
     /// Open until the first scan, so what a scan does is the first thing you read.
     @State private var showHow: Bool
     init(model: CleanerModel) { self.model = model; _showHow = State(initialValue: model.records.isEmpty) }
@@ -307,7 +316,7 @@ struct ScanPlanView: View {
             VStack(alignment: .leading, spacing: 9) {
                 ForEach(groups) { group in
                     let entries = included.filter { $0.group == group }.sorted { (sizes[$0.id] ?? 0) > (sizes[$1.id] ?? 0) }
-                    let writers = entries.map { $0.writer == "You" ? "Downloads" : $0.writer == "Your projects" ? "GitHub projects" : $0.writer }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+                    let writers = entries.map { $0.writer == "You" ? "Downloads" : $0.writer == "Your projects" ? "Your projects" : $0.writer }.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
                     let size = model.groupSize(group)
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Image(systemName: group.symbol).foregroundStyle(Color.accentColor).frame(width: 18).accessibilityHidden(true)
@@ -358,7 +367,10 @@ struct ScanPlanView: View {
                 }.padding(.top, 6)
             } label: { Text("What a scan does").font(.callout.weight(.semibold)) }
             HStack {
-                SettingsLink { Text("Change Places…") }
+                Button("Change Places…") {
+                    model.settingsTab = .coverage; model.showYourFolders = true
+                    dismiss(); openSettings()
+                }.help("Opens Settings › Coverage, where you turn places on or off and add your own folders.")
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Watchlist Only (\(watched))") { model.showingScanPlan = false; model.scan(watchedOnly: true) }

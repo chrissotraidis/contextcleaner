@@ -399,9 +399,9 @@ func loginShell() -> String? { getpwuid(getuid()).flatMap { $0.pointee.pw_shell 
 /// control or invisible characters, which could garble the terminal or hide what the command shows, and lie inside your
 /// home folder or your temporary folder. Never your home folder's own top-level folders, a folder directly in ~/Library,
 /// your keychains, iCloud Drive, SSH or GPG keys, or the Trash.
-func pathFitsCommand(_ path: String, home: String, temporary: String? = Coverage.temporaryFolder) -> Bool {
+func pathFitsCommand(_ path: String, home: String, temporary: [String] = Coverage.temporaryRoots()) -> Bool {
     guard isCleanAbsolutePath(path), !path.unicodeScalars.contains(where: { $0.value < 0x20 || (0x7F...0x9F).contains($0.value) || [.format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) }) else { return false }
-    if let temporary, path.hasPrefix(temporary + "/") { return true }
+    if temporary.contains(where: { path.hasPrefix($0 + "/") }) { return true }
     guard path.hasPrefix(home + "/") else { return false }
     let parts = path.dropFirst(home.count + 1).split(separator: "/").map(String.init)
     guard parts.count >= 2, !(parts.count == 2 && parts[0] == "Library") else { return false }
@@ -712,12 +712,13 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
 }
 /// Build output inside a project: recreated by building again.
 /// Build output by name. build, generated, intermediates and .cxx anywhere; other tools' output folders (build-macos,
-/// cmake-build-debug, out, dist, target, node_modules, .build, DerivedData) only inside a project in ~/GitHub or a
-/// Codex worktree, where Context Cleaner finds them because git ignores them.
+/// cmake-build-debug, out, dist, target, node_modules, .build, DerivedData) only inside a project in ~/GitHub,
+/// ~/Developer or a Codex worktree, where Context Cleaner finds them because git ignores them.
 func isProjectBuildOutput(_ path: String) -> Bool {
     let name = (path as NSString).lastPathComponent
     if ["build", "generated", "intermediates", ".cxx"].contains(name) { return true }
-    let inProject = ["/GitHub/", "/.codex/worktrees/"].contains { root in
+    // ~/Library/Developer is Xcode's, not a projects folder.
+    let inProject = !path.contains("/Library/") && (Coverage.projectRoots.map { "/" + $0 + "/" } + ["/.codex/worktrees/"]).contains { root in
         path.range(of: root).map { path[$0.upperBound...].contains("/") } ?? false
     }
     // A name that says backup or save (build-ios-preview1-backup) may be a deliberate copy, not output.
@@ -839,7 +840,11 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     case .unknown:
         return Advice(verdict: .check, reason: "Context Cleaner doesn't recognize this folder.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     case .temporary:
-        if path == Coverage.temporaryFolder { return Advice(verdict: .check, reason: "Your temporary folder, where apps and command-line tools leave work files. Don't remove the folder itself; apps write here all the time.", howTo: "Remove the items inside that nothing has used for 3 days. Free up space lists them.", command: nil, lastUsed: m.latestModifiedAt) }
+        if path == Coverage.temporaryFolder || path == Coverage.claudeScratch { return Advice(verdict: .check, reason: "Your temporary folder, where apps and command-line tools leave work files. Don't remove the folder itself; apps write here all the time.", howTo: "Remove the items inside that nothing has used for 3 days. Free up space lists them.", command: nil, lastUsed: m.latestModifiedAt) }
+        if containsPath(Coverage.claudeScratch, path) {
+            if let idle, idle >= 3 { return Advice(verdict: .safe, reason: "Scratchpads from Claude Code sessions nothing has used for \(Int(idle)) days. Those sessions are done, and nothing else keeps these files.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
+            return Advice(verdict: .check, reason: "Scratchpads from Claude Code sessions, changed \(ageText(m.latestModifiedAt, now: now)). A session still running may need them.", howTo: "Wait until nothing has used it for 3 days, or until you've closed those sessions, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+        }
         if let idle, idle >= 3 { return Advice(verdict: .safe, reason: "A temporary item nothing has used for \(Int(idle)) days. macOS itself clears these after 3 days.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "A temporary item changed \(ageText(m.latestModifiedAt, now: now)). A running task may still need it.", howTo: "Wait until nothing has used it for 3 days, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     }
@@ -850,7 +855,7 @@ func locationHint(_ path: String) -> String? {
     if isWorktreeFolder(path) { return nil }
     let parts = path.split(separator: "/").map(String.init)
     if let i = parts.firstIndex(of: "worktrees"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex worktree " + parts[i + 1] }
-    if let i = parts.firstIndex(of: "GitHub"), i + 1 < parts.count { return "GitHub/" + parts[i + 1] }
+    if let i = parts.firstIndex(where: { Coverage.projectRoots.contains($0) }), i + 1 < parts.count, i == 0 || parts[i - 1] != "Library" { return parts[i] + "/" + parts[i + 1] }
     if let i = parts.firstIndex(of: "backups"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex backup" }
     if let i = parts.firstIndex(of: "scratch"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex scratch" }
     return nil
@@ -1539,6 +1544,7 @@ func elsewhereAbout(_ path: String, home: String) -> String? {
         "/Applications": "Apps for everyone on this Mac. Uninstall ones you don't use.",
         "Applications": "Apps installed just for you. Uninstall ones you don't use.",
         "GitHub": "Your projects: source, git history and assets. Open it to see which are backed up. Build folders inside are scanned separately.",
+        "Developer": "Your projects: source, git history and assets. Open it to see which are backed up. Build folders inside are scanned separately.",
         ".codex": "Codex's own folder. Open it to see its parts. Conversations, scratch, backups, tasks and worktrees are scanned separately; this is the rest, such as its databases and logs.",
         ".codex/worktrees": "Codex's copies of your projects, one per task. They're scanned separately, each judged by git.",
         ".ollama": "Ollama. Its models are scanned separately; this is the rest.",
@@ -1661,7 +1667,7 @@ func changePlace(_ m: FolderMeasurement, home: String) -> String {
     guard let match else { return m.profile.associatedApp }
     switch match.writer {
     case "You": return "Downloads"
-    case "Your projects": return "GitHub projects"
+    case "Your projects": return "Projects"
     default: return match.writer + " · " + match.name
     }
 }

@@ -19,7 +19,11 @@ struct Classifier {
             p.category = category; p.name = name; p.associatedApp = app; p.explanation = explanation; p.consequence = consequence
             p.evidence.append(Evidence(label: "Association", value: app, level: .inferred, source: "Matched known directory structure; not proof of the historical writer."))
         }
-        if let temporary = Coverage.temporaryFolder, containsPath(temporary, path) {
+        if containsPath(Coverage.claudeScratch, path) && path != Coverage.claudeScratch {
+            // Claude Code names each project's folder after its path, with / written as -.
+            let project = url.lastPathComponent.hasPrefix(home.replacingOccurrences(of: "/", with: "-") + "-") ? String(url.lastPathComponent.dropFirst(home.count + 1)) : url.lastPathComponent
+            assign(.temporary, "Claude Code scratch · " + project, "Claude Code", "Scratchpads Claude Code sessions wrote for this project: build trees, downloads and test copies. Nothing keeps them.", "A session still running may need its folder. One nothing has used for 3 days is done.")
+        } else if let temporary = Coverage.temporaryFolder, containsPath(temporary, path) {
             assign(.temporary, path == temporary ? "Temporary files" : url.lastPathComponent, "Apps and tools", "Work files apps and command-line tools left in your temporary folder: build trees, traces, unpacked downloads.", "Nothing keeps temporary files. macOS itself clears ones nothing has used for 3 days.")
         } else if isWorktreeFolder(path) {
             assign(.workspace, url.lastPathComponent, "Codex worktree", "A copy of a project Codex made for one task. Its commits belong to the main repository; build output and files git doesn't track exist only here.", "Uncommitted changes and files git doesn't track are lost with it. Committed work stays in the main repository.")
@@ -86,11 +90,11 @@ struct Classifier {
             } else if path.contains("/Library/Application Support/") {
                 let app = String(path.components(separatedBy: "/Library/Application Support/")[1].split(separator: "/").first ?? "Unknown")
                 assign(.appData, app + " data", app, "Data stored beneath the application's support directory. May include preferences, libraries, databases and saves.", "Preserve by default. Use the application's content management where appropriate.")
-            } else if containsPath(home + "/.codex", path) || containsPath(home + "/GitHub", path) || containsPath(home + "/Documents/Codex", path) {
+            } else if containsPath(home + "/.codex", path) || Coverage.projectRoots.contains(where: { containsPath(home + "/" + $0, path) }) || containsPath(home + "/Documents/Codex", path) {
                 assign(.workspace, url.lastPathComponent, path.contains("/.codex/") || path.contains("/Documents/Codex") ? "Codex workspace" : "Development tools", "Mixed working directory. Build output, patches, private inputs and diagnostics can coexist here.", "Inspect child folders and provenance. Never treat an entire workspace as disposable based on its name.")
             }
         }
-        for root in [home + "/.codex/worktrees", home + "/GitHub"] where containsPath(root, path) && path != root {
+        for root in [home + "/.codex/worktrees"] + Coverage.projectRoots.map({ home + "/" + $0 }) where containsPath(root, path) && path != root {
             let relative = String(path.dropFirst(root.count + 1))
             let projectFolder = String(relative.split(separator: "/").first ?? "")
             guard !projectFolder.isEmpty else { continue }

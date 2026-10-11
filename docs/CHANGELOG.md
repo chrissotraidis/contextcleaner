@@ -2,6 +2,14 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.22.1
+
+From people trying it on their own Macs.
+
+- **Claude Code's scratchpads are scanned.** Claude Code has its agents write temporary files under `/private/tmp/claude-…`, one folder per project, and they stay until the Mac restarts. A Rust build left there (7.2 GB) never showed up. Each project's scratchpads are now listed under AI tools: Safe to remove once nothing has used them for 3 days, Review first before that.
+- **`~/Developer` is a projects folder.** It's scanned like `~/GitHub`: build folders, big folders git ignores, and each project sized on its own in Everything else. Xcode's `~/Library/Developer` isn't mistaken for it.
+- **Change Places… goes where you'd expect.** In the scan window, it now opens Settings › Coverage with Your folders open, where you add a folder.
+
 ## 0.22.0
 
 On a nearly full disk, Context Cleaner could miss the folder filling it and show sizes bigger than the disk. This release finds those folders and counts space the way the disk does.

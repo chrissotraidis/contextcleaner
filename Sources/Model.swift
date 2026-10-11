@@ -82,6 +82,10 @@ struct FolderRow: Identifiable {
     @Published var lastResult: String?
     /// Git is installed but refuses to run (Xcode's license isn't accepted) and no other git works: project checks are off.
     @Published private(set) var gitBlocked = false
+    /// The Settings tab shown, so a button can open Settings at the right place.
+    @Published var settingsTab = SettingsTab.general
+    /// Asks Settings › Coverage to open Your folders once it's shown.
+    @Published var showYourFolders = false
     /// Simulators as Xcode reports them, keyed by device ID. Read-only.
     @Published var simDevices: [String: SimDevice] = [:] { didSet { discoveryVersion += 1 } }
     /// Known folders that no longer exist on disk.
@@ -260,7 +264,8 @@ struct FolderRow: Identifiable {
     /// Earlier looks inside Everything else, oldest first: paths and sizes only, so the overview can say what grew.
     @Published private(set) var elsewhereHistory: [ElsewhereSnapshot] = []
     private var elsewhereCancellation = Cancellation()
-    /// Sizes the top level of your home folder, your Library and Applications, and each repository in ~/GitHub, leaving
+    /// Sizes the top level of your home folder, your Library and Applications, and each repository in ~/GitHub and
+    /// ~/Developer, leaving
     /// out every folder Context Cleaner already scans or you turned off, so nothing is counted twice. Reads metadata only;
     /// the sizes are saved so the next look can say what grew.
     func lookElsewhere() {
@@ -269,29 +274,34 @@ struct FolderRow: Identifiable {
         elsewhereCancellation = Cancellation()
         let home = home, job = elsewhereJob(), token = elsewhereCancellation
         DispatchQueue.global(qos: .userInitiated).async {
-            let projects = home + "/GitHub"
+            let projectFolders = Coverage.projectRoots.map { home + "/" + $0 }
             var targets = ["/Applications"]
-            for path in folderEntries(home) where path != home + "/Library" && path != projects { targets.append(path) }
+            for path in folderEntries(home) where path != home + "/Library" && !projectFolders.contains(path) { targets.append(path) }
             targets += folderEntries(home + "/Library")
             var found = job(targets, true)
-            // Each repository on its own, so the biggest and fastest-growing can be named; ~/GitHub is their sum.
-            var st = stat()
-            let repositories = lstat(projects, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR ? job(folderEntries(projects), false) : []
-            if !repositories.isEmpty {
-                let sized = repositories.compactMap(\.bytes)
+            // Each repository on its own, so the biggest and fastest-growing can be named; a projects folder is their sum.
+            var repositories: [ElsewhereItem] = [], parts: [String: [ElsewhereItem]] = [:]
+            for projects in projectFolders {
+                var st = stat()
+                guard lstat(projects, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { continue }
+                let inside = job(folderEntries(projects), false)
+                guard !inside.isEmpty else { continue }
+                repositories += inside; parts[projects] = inside
+                let sized = inside.compactMap(\.bytes)
                 var all = ElsewhereItem(path: projects, name: abbreviatedPath(projects), bytes: sized.isEmpty ? nil : sized.reduce(0, +), note: sized.isEmpty ? "Too big to size in the time allowed." : nil)
                 all.isFolder = true
                 all.about = elsewhereAbout(projects, home: home)
-                all.scannedInside = repositories.reduce(0) { $0 + $1.scannedInside }
-                all.modified = repositories.compactMap(\.modified).max()
-                all.scannedModified = repositories.compactMap(\.scannedModified).max()
-                found = (found + [all]).sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
+                all.scannedInside = inside.reduce(0) { $0 + $1.scannedInside }
+                all.modified = inside.compactMap(\.modified).max()
+                all.scannedModified = inside.compactMap(\.scannedModified).max()
+                found.append(all)
             }
+            found.sort { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
             let snapshot = ElsewhereSnapshot(date: Date(), sizes: Dictionary((found + repositories).compactMap { item in item.bytes.map { (item.path, $0) } }, uniquingKeysWith: { a, _ in a }))
             let stopped = token.stopped
             DispatchQueue.main.async {
                 self.elsewhere = found; self.elsewhereDate = Date(); self.lookingElsewhere = false
-                if !repositories.isEmpty { self.elsewhereChildren[projects] = repositories }
+                for (projects, inside) in parts { self.elsewhereChildren[projects] = inside }
                 // A look you stopped part way isn't a fair comparison for the next one.
                 guard !stopped, !snapshot.sizes.isEmpty else { return }
                 do { try self.store?.appendElsewhere(snapshot); self.elsewhereHistory.append(snapshot) }
@@ -866,8 +876,9 @@ struct FolderRow: Identifiable {
         for path in paths { sizes[path] = known[path] ?? knownBytes(path) }
         if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
         // Paths that may never be in a command are left out before anything is read.
-        let refused = paths.filter { !pathFitsCommand($0, home: home) }
-        let items = paths.filter { pathFitsCommand($0, home: home) }.map { (path: $0, seen: knownSeen[$0] ?? seenDate($0)) }
+        let roots = Coverage.temporaryRoots()
+        let refused = paths.filter { !pathFitsCommand($0, home: home, temporary: roots) }
+        let items = paths.filter { pathFitsCommand($0, home: home, temporary: roots) }.map { (path: $0, seen: knownSeen[$0] ?? seenDate($0)) }
         // Worktrees offered because git had everything in them get the same git check again, in full.
         let cleanTrees = paths.filter { isWorktreeFolder($0) && worktrees[$0]?.keepsEverything == true }
         state.start(paths)
@@ -933,7 +944,7 @@ struct FolderRow: Identifiable {
         let posix = readsPOSIX(shell)
         // A worktree names its repository in its .git file; only a real repository in your home folder is told it's gone.
         let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil }))
-            .filter { repo in var st = stat(); return pathFitsCommand(repo, home: home, temporary: nil) && lstat(repo + "/.git", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR && (posix || !repo.contains("\\")) }.sorted()
+            .filter { repo in var st = stat(); return pathFitsCommand(repo, home: home, temporary: []) && lstat(repo + "/.git", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR && (posix || !repo.contains("\\")) }.sorted()
         let inline = trashCommand(targets, prune: prune, expires: expires)
         if posix && inline.utf8.count <= trashInlineLimit { return inline }
         guard let store, let list = try? store.saveTrashList(id, targets), !list.contains("'"), !list.contains("\\") else { return posix ? inline : nil }
@@ -1317,3 +1328,5 @@ struct FolderRow: Identifiable {
 func folderEntries(_ folder: String) -> [String] {
     ((try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? []).sorted().map { folder + "/" + $0 }
 }
+/// The tabs of the Settings window.
+enum SettingsTab: Hashable { case general, scanning, coverage }

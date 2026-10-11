@@ -49,10 +49,10 @@ Coding agents, Xcode, simulators and package managers write a lot to disk and ne
 |---|---|
 | 🟢 **Safe to remove** | Nothing. You won't need it again. |
 | 🔵 **Rebuildable** | You wait for the next build or download to recreate it. |
-| 🟠 **Review first** | It may hold something that exists only there, such as files made by hand or a backup. Look inside first. |
+| 🟠 **Review first** | It may hold something that exists only there, such as files made by hand, a backup, or a folder git ignores (Not in git). Look inside first. |
 | ⚪ **Not for the Trash** | App libraries and chat history (manage them in their apps), and folders that take no space on this Mac, such as files kept only in iCloud. |
 
-Before copying, every item is checked again: anything gone, open in an app or changed since the scan is left out. A whole Codex worktree is offered only when git has everything in it, and that's checked again too. Backups are never ticked for you, and a command never moves a whole Downloads, `~/GitHub`, virtual machine or chat history.
+Before copying, every item is checked again: anything gone, open in an app or changed since the scan is left out. A whole Codex worktree is offered only when git has everything in it, and that's checked again too. Backups are never ticked for you, and a command never moves a whole Downloads, `~/GitHub`, `~/Developer`, virtual machine or chat history.
 
 <table>
   <tr>
@@ -75,7 +75,7 @@ Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses 
 
 | Group | Places |
 |---|---|
-| AI tools | Codex worktrees, scratch, backups, tasks and conversations; Claude Code's scratchpads in /private/tmp; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
+| AI tools | Codex worktrees, scratch, backups, tasks and conversations; Claude Code's scratchpads in `/private/tmp`; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
 | Developer tools | Build folders in `~/GitHub` and `~/Developer`, and any folder of 500 MB or more that git ignores there; Xcode DerivedData and device support; simulators; iPhone install caches; npm, pip, uv, Yarn, Gradle, Homebrew and Playwright caches; your temporary folder |
 | Virtual machines | Parallels, Docker Desktop, UTM, Android emulators |
 | Games | Steam, CrossOver, OpenEmu |
@@ -108,7 +108,7 @@ Safe to remove and Rebuildable lose nothing. Safe to remove means its project is
 <details>
 <summary><b>How does it know a project is backed up?</b></summary>
 
-It asks git, read-only and offline: a remote, every commit pushed as of your last fetch, nothing uncommitted or stashed. Files git ignores, like `.env`, are named, because git never backs them up.
+It asks git, read-only and offline: a remote, every commit pushed as of your last fetch, nothing uncommitted or stashed. Files git ignores, like `.env`, are named, because git never backs them up. If git can't run, for example because Xcode's license hasn't been accepted, the overview says project checks are off and gives the command that turns them on.
 </details>
 
 <details>

@@ -128,6 +128,12 @@ import Darwin
         check(findGit([refusing, working]) == GitTool(path: working, licenseBlocked: true) && findGit([refusing]) == GitTool(path: nil, licenseBlocked: true)
               && findGit([working]) == GitTool(path: working, licenseBlocked: false) && findGit([gitBins.appendingPathComponent("missing").path]) == GitTool(path: nil, licenseBlocked: false),
               "a git refused by the Xcode license falls back to the next one; with none working, git counts as blocked")
+        // Every helper's pipe is closed when its output has been read. Each used to stay open with the timeout timers,
+        // and a few hundred git reads during a scan left it unable to open folders ("Too many open files").
+        func openPipes() -> Int { (0..<Int32(4096)).filter { fd in var st = stat(); return fstat(fd, &st) == 0 && (st.st_mode & S_IFMT) == S_IFIFO }.count }
+        let pipesBefore = openPipes()
+        _ = parallelMap(Array(0..<60)) { _ in gitOutput(root.path, ["rev-parse", "HEAD"]) }
+        check(openPipes() == pipesBefore, "git leaves no pipe open behind it, however many run at once")
         print("SUCCESS: \(count) bounded-scan checks. Preserved fixture: \(root.path)")
     }
 }

@@ -2,6 +2,12 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.22.2
+
+- **"Part of it couldn't be read" on hundreds of folders is fixed.** Each time Context Cleaner asked git about a project, it left the connection to git open for a while. A Mac with hundreds of projects and Codex worktrees ran out of open files mid-scan, and every folder after that failed with "Too many open files": 255 of 258 in one scan. Connections now close as soon as git answers, and the app allows itself more open files.
+- **Everything else saves again.** The same shortage made "The look inside Everything else couldn't be saved" appear. It also no longer looks inside Everything else while a scan is running.
+- **Terminal prompts.** Settings › General says how to stop macOS asking every time whether your terminal may access data from other apps: turn on Full Disk Access for it.
+
 ## 0.22.1
 
 From people trying it on their own Macs.

@@ -101,7 +101,7 @@ struct FolderRow: Identifiable {
             process.arguments = ["simctl", "list", "devices", "-j"]
             process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
             guard (try? process.run()) != nil else { return }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let data = readAll(pipe)
             process.waitUntilExit()
             let devices = process.terminationStatus == 0 ? parseSimDevices(data) : [:]
             DispatchQueue.main.async { self.simDevices = devices }
@@ -312,7 +312,8 @@ struct FolderRow: Identifiable {
     /// Looks inside Everything else on its own when it's at least a quarter of the used space or grew 2 GiB a day or
     /// more this week, at most every six hours, so the overview can name where the space is.
     func considerLookingElsewhere(now: Date = Date()) {
-        guard !lookingElsewhere, store != nil, let used = volume?.used, used > 0 else { return }
+        // Never alongside a scan: both open many folders at once.
+        guard !lookingElsewhere, !running, store != nil, let used = volume?.used, used > 0 else { return }
         if let last = elsewhereHistory.last?.date, now.timeIntervalSince(last) < 6 * 3600 { return }
         let share = Double(everythingElseBytes) / Double(used)
         let week = spaceWent(from: now.addingTimeInterval(-7 * 86400), to: now)

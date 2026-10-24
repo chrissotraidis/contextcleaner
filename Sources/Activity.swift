@@ -43,6 +43,7 @@ struct ActivitySnapshot {
             else { outputLimited = true; if process.isRunning { process.terminate() } }
         }
         process.waitUntilExit(); timer.cancel()
+        try? pipe.fileHandleForReading.close()
         let complete = process.terminationStatus == 0 && !cancellation.stopped && !outputLimited
         return ActivitySnapshot(observations: complete ? parse(String(decoding: data, as: UTF8.self)) : [], available: complete,
             note: complete ? "Open handles observed at scan start. Handle access modes do not establish actual writes or inactivity." : outputLimited ? "Open-file output exceeded its 16 MiB allowance; activity is unknown." : "Open-file helper failed, was cancelled or timed out; activity is unknown.")

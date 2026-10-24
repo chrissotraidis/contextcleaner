@@ -100,6 +100,13 @@ struct Inventory {
 func keepReadsLocal() {
     _ = setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_PROCESS, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
     _ = setiopolicy_np(IOPOL_TYPE_VFS_TRIGGER_RESOLVE, IOPOL_SCOPE_PROCESS, IOPOL_VFS_TRIGGER_RESOLVE_OFF)
+    // Apps start with room for 256 open files. Four folders scanned at once, each keeping one folder open per level of
+    // depth, plus git and lsof, can come close; 4,096 leaves room.
+    var limit = rlimit()
+    if getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < 4096 {
+        limit.rlim_cur = min(4096, limit.rlim_max)
+        _ = setrlimit(RLIMIT_NOFILE, &limit)
+    }
 }
 /// Whether macOS gave Context Cleaner Full Disk Access. The TCC database can only be opened with it. Opens nothing else.
 func hasFullDiskAccess(home: String = NSHomeDirectory()) -> Bool {

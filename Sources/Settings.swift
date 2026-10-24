@@ -64,7 +64,7 @@ struct GeneralSettings: View {
                     ForEach(installedTerminals) { Text($0.name).tag($0.id) }
                 } label: { Label("Open commands in", systemImage: "terminal") }
             } header: { Text("Terminal") } footer: {
-                Text("After you copy a Move-to-Trash command, the Open button beside Copy opens this app. You paste with Command-V and press Return; Context Cleaner never runs the command.")
+                Text("After you copy a Move-to-Trash command, the Open button beside Copy opens this app. You paste with Command-V and press Return; Context Cleaner never runs the command. If macOS asks every time whether \(chosenTerminal(terminalID).name) may access data from other apps, turn on Full Disk Access for \(chosenTerminal(terminalID).name) in System Settings › Privacy & Security, and it stops asking.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section {

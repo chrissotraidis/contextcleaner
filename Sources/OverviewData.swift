@@ -1002,12 +1002,19 @@ private func runGit(_ root: String, _ arguments: [String], timeout: TimeInterval
     do { try process.run() } catch { return nil }
     let pid = process.processIdentifier
     // Asked to stop at the limit, then made to, so a stuck git can never hold a scan.
-    DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { if process.isRunning { process.terminate() } }
-    DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 2) { if process.isRunning { kill(pid, SIGKILL) } }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout) { [weak process] in if process?.isRunning == true { process?.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 2) { [weak process] in if process?.isRunning == true { kill(pid, SIGKILL) } }
+    let data = readAll(pipe)
     process.waitUntilExit()
     guard process.terminationReason == .exit, okStatuses.contains(process.terminationStatus) else { return nil }
     return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+/// Reads a helper's output to the end, then closes the pipe. Foundation keeps a pipe's read end open otherwise, and an
+/// app may only have 256 files open: a few hundred git reads used to leave every scan unable to open a folder.
+func readAll(_ pipe: Pipe) -> Data {
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    try? pipe.fileHandleForReading.close()
+    return data
 }
 /// Runs git read-only with a time limit, with every setting that could run a program switched off. Returns trimmed output, or nil on failure.
 func gitOutput(_ root: String, _ arguments: [String], timeout: TimeInterval = 10, okStatuses: Set<Int32> = [0]) -> String? {

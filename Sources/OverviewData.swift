@@ -438,6 +438,8 @@ func looksLikeBuildOutput(_ name: String) -> Bool {
     let n = name.lowercased()
     return rebuildableName(name) || n.hasPrefix("deriveddata") || n.hasPrefix("derived-") || n.hasPrefix("derived_") || n.hasSuffix("-derived") || n.hasSuffix("-deriveddata")
 }
+/// The folder PadMint's scripts/player-check.sh makes for each run: padmint-player-check.XXXXXX.
+func isPlayerCheck(_ name: String) -> Bool { name.hasPrefix("padmint-player-check.") }
 /// Folders that take no space on this Mac. Files kept only in iCloud (Desktop & Documents) take none here, and removing
 /// them removes them from iCloud too, so they're Not for the Trash. A folder with no files at all is Safe to remove.
 func freesNothing(_ m: FolderMeasurement) -> Advice? {
@@ -1173,8 +1175,17 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments or scratch.
         guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch || temporary else { continue }
         let held = m.processes.map(\.path)
-        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum, backups: true) where !held.contains(where: { containsPath(child.path, $0) }) {
+        // A PadMint player check leaves a 20 GiB folder for each run and asks you to delete it. Once nothing has
+        // touched it for an hour and no app holds it, it's listed whatever the untouched time: running the check makes it again.
+        let isCheck = { (name: String) in temporary && isPlayerCheck(name) }
+        for child in staleChildren(m, now: now, days: (temporary ? min(quiet, 3600) : quiet) / 86400, minimum: minimum, backups: true)
+        where !held.contains(where: { containsPath(child.path, $0) }) && (isCheck(child.name) || child.modifiedAt.map { now.timeIntervalSince($0) >= quiet } == true) {
             let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
+            if isCheck(child.name) {
+                found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: .rebuild,
+                                        why: (["Finished PadMint player check"] + [age].compactMap { $0 }).joined(separator: " · "), owner: path, seen: child.modifiedAt))
+                continue
+            }
             let backup = looksIrreplaceable(child.name)
             // macOS itself clears temporary items nothing has used for 3 days.
             let oldTemporary = temporary && !backup && child.modifiedAt.map { now.timeIntervalSince($0) >= 3 * 86400 } == true

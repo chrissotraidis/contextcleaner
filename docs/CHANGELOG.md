@@ -2,6 +2,11 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.22.3
+
+- **Finished PadMint player checks are offered.** PadMint's `scripts/player-check.sh` leaves a folder of about 20 GiB in your temporary folder for every run and asks you to delete it. Temporary items used to wait 3 days before counting as old, so a check that finished yesterday never showed up. Once nothing has touched one for an hour and no app has it open, it's listed in Free Up Space as Rebuildable, whatever the Untouched for setting: running the check again makes it again. On the Mac this was built on, that was 62.8 GiB.
+- **Scan These Again.** Under Couldn't Scan, one button reads every folder that failed again, instead of Try Again on each row.
+
 ## 0.22.2
 
 - **"Part of it couldn't be read" on hundreds of folders is fixed.** Each time Context Cleaner asked git about a project, it left the connection to git open for a while. A Mac with hundreds of projects and Codex worktrees ran out of open files mid-scan, and every folder after that failed with "Too many open files": 255 of 258 in one scan. Connections now close as soon as git answers, and the app allows itself more open files.

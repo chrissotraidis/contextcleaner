@@ -463,6 +463,12 @@ struct MainView: View {
         } else if model.section == .needsAttention {
             Text("\(rows.count) \(rows.count == 1 ? "folder" : "folders") couldn't be read").font(.title2.weight(.semibold))
             Text("Each row says why and offers one fix. Nothing is changed until you choose it.").font(.callout).foregroundStyle(.secondary)
+            // Folders that failed to read (not ones too big for the time limit) usually read fine a second time.
+            let retry = rows.filter { [.inaccessible, .failed].contains($0.measurement.state) && !$0.measurement.privacyBlocked && !$0.measurement.permissionDenied }.map(\.id)
+            if retry.count > 1 {
+                Button("Scan These \(retry.count) Again", systemImage: "arrow.clockwise") { model.scan(only: retry) }
+                    .disabled(model.running || model.inspecting || model.discovering).help("Reads just these folders again. Sizes only; nothing is changed.")
+            }
         } else {
             Text(byteLabel(uniqueAllocatedTotal(measured))).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
             let setAside = model.keptSummary.kept.count + model.keptSummary.off.count

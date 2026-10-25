@@ -1153,21 +1153,24 @@ struct FolderRow: Identifiable {
             selected = url.path; categoryFilter = nil; section = .locations; locationFilter = .all; search = ""
         } catch { self.error = error.localizedDescription }
     }
-    func scan(selectedOnly: Bool = false, watchedOnly: Bool = false, priorityOnly: Bool = false) {
+    /// only: scan just these folders, such as everything under Couldn't Scan. selectedOnly scans the selected folder.
+    func scan(selectedOnly: Bool = false, watchedOnly: Bool = false, priorityOnly: Bool = false, only paths: [String]? = nil) {
         guard !running, !inspecting, !discovering, store != nil else { return }
         if selectedOnly, let selected, preferences.excluded(selected) { error = "This location is excluded. Include it again before scanning."; return }
-        cancellation = Cancellation(); let token = cancellation, prefs = preferences, home = home, path = selected
+        let only = paths.map { $0.filter { !preferences.excluded($0) } } ?? (selectedOnly ? [selected].compactMap { $0 } : nil)
+        let selectedOnly = only != nil
+        cancellation = Cancellation(); let token = cancellation, prefs = preferences, home = home
         let known = discovery.profiles, history = records, now = Date()
         // A full scan also re-measures every saved folder that's still on disk (for example sizes imported from
         // SpaceCheck), so every row gets a fresh size and a last-changed date, not only newly discovered ones.
         let saved = latest.map(\.profile).filter { !gone.contains($0.path) && !fileOnly.contains($0.path) && !preferences.excluded($0.path) }
         running = true; partial = []; completed = 0; targetCount = 0
-        progress = selectedOnly ? "Checking selected location…" : "Discovering locations; macOS may request access…"
-        let scope = selectedOnly ? "Selected folder" : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to \(preferences.effectivePriorityCount))" : fullScanScope
+        progress = selectedOnly ? ((only?.count ?? 0) > 1 ? "Checking \(only!.count) folders…" : "Checking selected location…") : "Discovering locations; macOS may request access…"
+        let scope = selectedOnly ? ((only?.count ?? 0) > 1 ? "Selected folders" : "Selected folder") : watchedOnly ? "Watched locations" : priorityOnly ? "Priority locations (up to \(preferences.effectivePriorityCount))" : fullScanScope
         // A scan you start runs at normal priority; background checks stay low so they never slow your Mac.
         DispatchQueue.global(qos: priorityOnly ? .utility : .userInitiated).async {
             let found: Discovery
-            if selectedOnly, let path { found = Discovery(profiles: [Classifier.profile(path: path, home: home, preferences: prefs)], notes: ["Selected folder only; exclusions apply."]) }
+            if let only { found = Discovery(profiles: only.map { Classifier.profile(path: $0, home: home, preferences: prefs) }, notes: ["Selected folders only; exclusions apply."]) }
             else if watchedOnly {
                 let paths = prefs.locations.filter { $0.value.isWatched && !prefs.excluded($0.key) }.map(\.key).sorted()
                 found = Discovery(profiles: paths.map { Classifier.profile(path: $0, home: home, preferences: prefs) }, notes: ["Watchlist only; no broad discovery. Missing watched paths are recorded as missing."])

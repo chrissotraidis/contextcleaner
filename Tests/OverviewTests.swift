@@ -390,6 +390,17 @@ import Foundation
         check(tempList.map(\.name) == ["trace.ktrace", "build-tmp"] && tempList[0].cost == .safe && tempList[1].cost == .check && tempList[0].why == "Temporary item · untouched 6 days" && tempList[0].owner == tmpRoot,
               "old temporary items are listed: safe after 3 days, Review first before; anything used recently stays out")
         check(advice(for: temp, policy: LocationPolicy(), devices: [:], now: now).staleItems.map(\.name) == ["trace.ktrace"], "the temporary folder counts items untouched for 3 days as old")
+        // 0.22.3: a finished PadMint player check is listed after an hour, whatever the untouched time, unless an app holds it.
+        var checks = temp
+        checks.contents = FolderContents(children: [ChildSummary(name: "padmint-player-check.Ab12Cd", directory: true, identity: "4", bytes: 20 * gib, files: 9, modifiedAt: now.addingTimeInterval(-2 * 3600)),
+                                                    ChildSummary(name: "padmint-player-check.Live01", directory: true, identity: "5", bytes: 24 * gib, files: 9, modifiedAt: now.addingTimeInterval(-300)),
+                                                    ChildSummary(name: "padmint-player-check.Held02", directory: true, identity: "6", bytes: 19 * gib, files: 9, modifiedAt: now.addingTimeInterval(-5 * 3600)),
+                                                    ChildSummary(name: "build-tmp", directory: true, identity: "2", bytes: 2 * gib, files: 9, modifiedAt: now.addingTimeInterval(-2 * 3600))],
+                                         fileTypes: [], listedChildren: 4, retainedLimit: 512, omittedEntries: 0)
+        checks.processes = [ProcessEvidence(pid: 1, command: "Python", access: "r", path: tmpRoot + "/padmint-player-check.Held02/padmint/tools/x")]
+        let checkList = suggestions([checks], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 3 * 86400, now: now)
+        check(checkList.map(\.name) == ["padmint-player-check.Ab12Cd"] && checkList[0].cost == .rebuild && checkList[0].why == "Finished PadMint player check · untouched 2 hours",
+              "a player check untouched for an hour is listed as Rebuildable even under 3 days; one still running, one held open, and other recent temporary items aren't")
         // 0.20: folders that take no space here, and Xcode build folders named after a feature.
         var cloud = item("/Users/x/Documents/Codex/2026-07-06", .workspace, 0); cloud.fileCount = 120
         var empty = item("/Users/x/.codex/scratch/vaultpad-out", .workspace, 0); empty.fileCount = 0

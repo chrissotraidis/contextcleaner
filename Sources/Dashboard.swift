@@ -457,9 +457,9 @@ struct StatusLine: View {
         let stale = full.map { Date().timeIntervalSince($0.finishedAt) > 86400 } ?? true
         let overview = model.overview
         HStack(spacing: 6) {
-            Image(systemName: "clock").foregroundStyle(stale ? Color.caution : .secondary).accessibilityHidden(true)
+            Image(systemName: stale ? "clock" : "checkmark.circle").foregroundStyle(stale ? Color.caution : Color.accentColor).accessibilityHidden(true)
             if let full {
-                Text("Sizes from the scan \(full.finishedAt.formatted(.relative(presentation: .named)))")
+                Text("Scanned \(full.finishedAt.formatted(.relative(presentation: .named)))")
                     .foregroundStyle(stale ? Color.caution : .primary)
                     .help("Took \(elapsedLabel(full.finishedAt.timeIntervalSince(full.startedAt))) · \(full.measurements.count) folders. Scan again with Scan Folders in the toolbar.")
             } else { Text("No scan yet. Choose Scan Folders in the toolbar.").foregroundStyle(Color.caution) }
@@ -539,9 +539,9 @@ struct DiskMap: View {
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(r.total > 0 ? "You can get back about \(byteLabel(min(r.total, model.volume?.used ?? r.total)))" : "Nothing to get back yet")
+                    Text(r.total > 0 ? "About \(byteLabel(min(r.total, model.volume?.used ?? r.total))) is safe, old or rebuildable" : "Nothing to get back yet")
                         .font(.title2.weight(.semibold)).monospacedDigit()
-                    Text(r.total > 0 ? "\(byteLabel(r.safe.bytes)) safe, \(byteLabel(r.inside.bytes)) in old items, \(byteLabel(r.rebuild.bytes)) rebuildable. You remove it; nothing here deletes."
+                    Text(r.total > 0 ? "\(byteLabel(r.safe.bytes)) safe to remove · \(byteLabel(r.inside.bytes)) old items · \(byteLabel(r.rebuild.bytes)) rebuildable"
                          : "Scan your folders so Context Cleaner can see when each was last used.")
                         .font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -717,12 +717,12 @@ struct FreeUpSummary: View {
         HStack(spacing: 14) {
             Image(systemName: "checklist").font(.title2).foregroundStyle(Color.accentColor).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(list.isEmpty ? "Nothing has sat untouched for \(quietPhrase(model.quietHours))" : "\(byteLabel(total)) you could get back now")
+                Text(list.isEmpty ? "Nothing has sat untouched for \(quietPhrase(model.quietHours))" : "\(byteLabel(total)) untouched for \(quietPhrase(model.quietHours)) or longer")
                     .font(.title3.weight(.semibold)).monospacedDigit()
                 HStack(spacing: 12) {
                     if !free.isEmpty { HStack(spacing: 5) { Circle().fill(Verdict.safe.tint).frame(width: 8, height: 8); Text("Nothing lost \(byteLabel(free.reduce(Int64(0)) { $0 + $1.bytes }))").monospacedDigit() } }
                     if !review.isEmpty { HStack(spacing: 5) { Circle().fill(Verdict.check.tint).frame(width: 8, height: 8); Text("Review first \(byteLabel(review.reduce(Int64(0)) { $0 + $1.bytes }))").monospacedDigit() } }
-                    Text("\(list.count) \(list.count == 1 ? "item" : "items") untouched for \(quietPhrase(model.quietHours)) or longer").foregroundStyle(.secondary)
+                    Text("\(list.count) \(list.count == 1 ? "item" : "items")").foregroundStyle(.secondary)
                 }.font(.callout)
             }
             Spacer()

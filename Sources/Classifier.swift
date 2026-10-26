@@ -83,7 +83,7 @@ struct Classifier {
                 recognizedRoot = home + "/" + rule.0
                 assign(.packageCache, rule.1, rule.2, "Downloaded dependencies or generated package assets in a recognized tool cache.", "Future commands may require fresh downloads or rebuilds. Avoid manual changes while the tool is running.")
             } else if containsPath(home + "/Downloads", path) {
-                assign(.download, "Downloads · " + url.lastPathComponent, "Multiple applications", "Downloaded files may include installers, documents and unique user data.", "Review each item; being in Downloads does not establish that another copy exists.")
+                assign(.download, path == home + "/Downloads" ? "Downloads" : "Downloads · " + url.lastPathComponent, "Multiple applications", "Downloaded files may include installers, documents and unique user data.", "Review each item; being in Downloads does not establish that another copy exists.")
             } else if containsPath(home + "/Parallels", path) {
                 assign(.virtualMachine, url.deletingPathExtension().lastPathComponent + " virtual machine", "Parallels Desktop", "A whole virtual computer: its disk, memory image and snapshots.", "Removing it deletes everything inside the virtual machine. Use Parallels Desktop to reclaim space or remove it.")
             } else if containsPath(home + "/Library/Containers/com.docker.docker/Data/vms", path) {

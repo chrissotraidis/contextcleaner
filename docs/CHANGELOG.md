@@ -2,6 +2,16 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.23.3
+
+A cleaner look, from going over every page.
+
+- **One status line.** After a scan, Overview and Free Up Space showed the scan's result and the status line under it, with counts that didn't quite match. They show one line now: "Scanned 26 minutes ago · 705 folders · 51 not scanned yet · 22 growing". Other pages still show the result, and a stopped scan or folders that couldn't be read show everywhere.
+- **Two totals that say what they count.** Overview's map says how much is safe, old or rebuildable; the card below says how much has sat untouched for your chosen time. The line under the map's total isn't cut off any more.
+- **Quieter rows.** Rows say when a size was measured only when it's over a day old ("measured 3 days ago"), instead of "size from in the last hour" under nearly every row.
+- **A running virtual machine says so.** "Running at last scan" instead of "Open in Parallels Desktop at last scan". A Parallels machine with no window open can still be running and holding memory.
+- **Small fixes.** "Downloads", not "Downloads · Downloads". History says "Moved all 9" only when nothing was left out.
+
 ## 0.23.2
 
 - **By kind keeps older PadMint versions together.** The label held the newer version's name, so each older version was its own group. They're one group now, with one tick box.

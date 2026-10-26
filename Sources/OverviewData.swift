@@ -602,10 +602,15 @@ func withSimulatorFacts(_ m: FolderMeasurement, devices: [String: SimDevice], no
     live.scopeID = xcodeLiveScope
     return live
 }
-/// "Size from 2 days ago", or "Size from Xcode, now" for live simulator facts.
+/// "measured 2 days ago", or "size from Xcode now" for live simulator facts.
 func sizeSourceText(_ m: FolderMeasurement) -> String? {
     guard m.state == .measured else { return nil }
-    return m.scopeID == xcodeLiveScope ? "size from Xcode, now" : "size from " + ageText(m.observedAt)
+    return m.scopeID == xcodeLiveScope ? "size from Xcode now" : "measured " + ageText(m.observedAt)
+}
+/// A list row says when its size was measured only when that's over a day ago; otherwise it's the latest scan's.
+func staleSizeText(_ m: FolderMeasurement, now: Date = Date()) -> String? {
+    guard m.scopeID != xcodeLiveScope, now.timeIntervalSince(m.observedAt) > 86400 else { return nil }
+    return sizeSourceText(m)
 }
 /// The verdict: your own choice first, then the folder rules, then what git says about its project.
 func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity? = nil, worktree: WorktreeGit? = nil, now: Date = Date()) -> Advice {
@@ -647,7 +652,7 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
 /// A few words for the Folders list, matching the reason.
 private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActivity?, now: Date) -> String {
     if !a.staleItems.isEmpty { return "\(byteLabel(a.staleBytes)) old inside" }
-    if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return "Open in \(app) at last scan" }
+    if !m.processes.isEmpty, let app = m.processes.first.map({ friendlyApp($0.command) }) { return m.profile.category == .virtualMachine ? "Running at last scan" : "Open in \(app) at last scan" }
     let idle = a.lastUsed.map { now.timeIntervalSince($0) / 86400 }
     // Not in any commit and not build output: the one thing to know about it.
     if a.verdict == .check, project?.ignored[m.profile.path] == true, !isProjectBuildOutput(m.profile.path) { return "Not in git" }

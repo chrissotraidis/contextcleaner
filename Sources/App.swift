@@ -137,6 +137,11 @@ struct MainView: View {
         }.padding(.horizontal, 22).padding(.top, 10).padding(.bottom, 10)
     }
     /// Scope and progress while a scan runs, then a one-line result.
+    /// Overview and Free Up Space say how current the sizes are in their own status line, so a scan that went fine
+    /// isn't repeated above it. A stopped scan or folders that couldn't be read still show everywhere.
+    func routineResultShownElsewhere(_ result: String) -> Bool {
+        [.overview, .freeUp].contains(model.section) && !result.hasPrefix("Stopped") && !result.contains("couldn't be read")
+    }
     @ViewBuilder var scanBanner: some View {
         if model.running || model.discovering {
             VStack(alignment: .leading, spacing: 0) {
@@ -170,7 +175,7 @@ struct MainView: View {
                 }.padding(.horizontal, 22).padding(.vertical, 8).background(Color.caution.opacity(0.10))
             }
             }
-        } else if let result = model.lastResult {
+        } else if let result = model.lastResult, !routineResultShownElsewhere(result) {
             let stopped = result.hasPrefix("Stopped")
             let unreadable = result.contains("couldn't be read")
             HStack(spacing: 10) {
@@ -375,7 +380,7 @@ struct MainView: View {
                     Text(lastUsedText(row)).font(.callout)
                         .foregroundStyle(row.advice.lastUsed == nil ? Color.secondary : Color.primary)
                     // Only say where the size came from when it isn't today's scan.
-                    if let source = sizeSourceText(row.measurement), source != "size from today" { Text(source).font(.caption).foregroundStyle(.secondary) }
+                    if let source = staleSizeText(row.measurement) { Text(source).font(.caption).foregroundStyle(.secondary) }
                 }
             }.width(min: 90, ideal: 110)
         }
@@ -782,7 +787,9 @@ struct MainView: View {
         let inCommand = cleanup.items.count - cleanup.count(.leftOut)
         let moved = cleanup.count(.moved)
         let open = Date().timeIntervalSince(cleanup.copiedAt) < CleanerModel.TrashWatch.lifetime
-        let headline = inCommand == 0 ? "Nothing copied" : moved == inCommand ? "Moved \(moved == 1 ? "1 item" : "all \(moved)") to the Trash" : "Moved \(moved) of \(inCommand) to the Trash"
+        // "all" only when nothing was left out of the command.
+        let all = cleanup.count(.leftOut) == 0 ? "all " : ""
+        let headline = inCommand == 0 ? "Nothing copied" : moved == inCommand ? "Moved \(moved == 1 ? "1 item" : all + "\(moved)") to the Trash" : "Moved \(moved) of \(inCommand) to the Trash"
         var notes: [String] = []
         if moved < inCommand { notes.append(open ? "\(inCommand - moved) waiting for the command" : "\(inCommand - moved) still in place") }
         if cleanup.count(.leftOut) > 0 { notes.append("\(cleanup.count(.leftOut)) left out when rechecked") }
@@ -1176,7 +1183,7 @@ struct TrashWatchStatus: View {
         let left = watch.leftOut.isEmpty ? "" : " " + leftOutText
         if total == 0 && !watch.leftOut.isEmpty && watch.leftOut.values.allSatisfy({ $0 == .gone }) { return "Nothing to copy: already gone." }
         if total == 0 { return "Nothing copied. " + leftOutText + " Scan again, then try once more." }
-        if watch.done { return "Moved \(total == 1 ? "1 item" : "all \(total)") to the Trash, \(byteLabel(watch.movedBytes)). Empty it to get the space back." + left }
+        if watch.done { return "Moved \(total == 1 ? "1 item" : (watch.leftOut.isEmpty ? "all " : "") + "\(total)") to the Trash, \(byteLabel(watch.movedBytes)). Empty it to get the space back." + left }
         if watch.moved.isEmpty { return "Copied a command for \(total == 1 ? "1 item" : "\(total) items"), \(byteLabel(watch.bytes)). Paste it and press Return." + left }
         return "\(watch.moved.count) of \(total) moved to the Trash, \(byteLabel(watch.movedBytes)). Waiting for the rest." + left
     }

@@ -193,7 +193,7 @@ import Foundation
         check(simSummary(sims, now: now).idle == 3, "idle devices: unused, never started, or unable to run")
         var pendingDevice = folder("/Users/x/Library/Developer/CoreSimulator/Devices/0A1B2C3D-0000-4000-8000-000000000001", .simulator, lastChanged: nil); pendingDevice.state = .pending; pendingDevice.allocatedBytes = nil
         let liveDevice = withSimulatorFacts(pendingDevice, devices: sims, now: now)
-        check(liveDevice.state == .measured && liveDevice.allocatedBytes == 5_000_000_000 && liveDevice.profile.displayName == "iPhone Old · iOS 26.5" && sizeSourceText(liveDevice) == "size from Xcode, now", "a device row uses Xcode's name and current size; no scan needed")
+        check(liveDevice.state == .measured && liveDevice.allocatedBytes == 5_000_000_000 && liveDevice.profile.displayName == "iPhone Old · iOS 26.5" && sizeSourceText(liveDevice) == "size from Xcode now" && staleSizeText(liveDevice) == nil, "a device row uses Xcode's name and current size; no scan needed")
         let staleRoot = withSimulatorFacts(folder("/Users/x/Library/Developer/CoreSimulator/Devices", .simulator, lastChanged: nil), devices: sims, now: now)
         let staleAdvice = advice(for: staleRoot, policy: LocationPolicy(), devices: sims, now: now)
         check(staleRoot.allocatedBytes == simSummary(sims, now: now).bytes && staleAdvice.reason.contains("measured 10 GiB"), "the Devices folder shows Xcode's current total and names the older scanned size")
@@ -379,6 +379,17 @@ import Foundation
               "a tool running git in a project, which changes its .git folder, doesn't count as using the project")
         check(recheck([(gitFixture.path, longAgo)], open: []).ready == [gitFixture.path],
               "the recheck before copying uses the same rule, so a git repository isn't left out as changed because git ran in it")
+        var freshSize = aged("/Users/x/GitHub/fresh/build", .workspace, hours: 30), oldSize = freshSize
+        freshSize.observedAt = Date().addingTimeInterval(-3600); oldSize.observedAt = Date().addingTimeInterval(-3 * 86400)
+        check(staleSizeText(freshSize) == nil && staleSizeText(oldSize) == "measured 3 days ago" && sizeSourceText(freshSize) == "measured an hour ago",
+              "a row says when its size was measured only when that's over a day ago, in plain words")
+        check(Classifier.profile(path: "/Users/x/Downloads", home: "/Users/x", readMetadata: false).displayName == "Downloads"
+              && Classifier.profile(path: "/Users/x/Downloads/Installers", home: "/Users/x", readMetadata: false).displayName == "Downloads · Installers",
+              "the Downloads folder is called Downloads, not Downloads · Downloads")
+        var runningVM = aged("/Users/x/Parallels/Windows 11.pvm", .virtualMachine, hours: 0.5, gib: 250)
+        runningVM.processes = [ProcessEvidence(pid: 1, command: "prl_vm_app", access: "open", path: "/Users/x/Parallels/Windows 11.pvm/harddisk.hdd")]
+        check(advice(for: runningVM, policy: LocationPolicy(), devices: [:], now: now).short == "Running at last scan",
+              "a virtual machine its app has open says it was running, not just open")
         check(isProjectBuildOutput("/Users/x/GitHub/site/.next") && isProjectBuildOutput("/Users/x/GitHub/game/obj") && !isProjectBuildOutput("/Users/x/Documents/obj"),
               "Next.js's .next and .NET's obj inside a project are build output; elsewhere they're just names")
         let codexPrivate = aged("/Users/x/.codex/private/kartpad-release-084", .workspace, hours: 24 * 4, gib: 48)

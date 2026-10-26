@@ -42,7 +42,7 @@ Coding agents, Xcode, simulators and package managers write a lot to disk and ne
 
 1. **Scan.** It measures the places where these tools pile up data (sizes and dates only), and reads git, read-only, for project folders.
 2. **Answer.** Every folder gets one answer, with the reason and evidence on its card.
-3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or group **By kind**, tick what you want gone, and copy one command (⇧⌘C). Big commands, and any with Review first items, ask once before copying. Folders works the same way: tick folders, copy one command.
+3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or group **By kind**, tick what you want gone, and copy one command (⇧⌘C). Review first folders with a plain reason they may go are listed too, such as a folder git ignores that nothing has touched (Not in git) or a game version PadMint has replaced; they're never ticked for you. Big commands, and any with Review first items, ask once before copying. Folders works the same way: tick folders, copy one command.
 4. **You run it.** Paste it in your terminal (Terminal, Ghostty, iTerm and others; the button beside Copy opens the one you pick in Settings). It moves each item to the Trash, prints what happened to each, and Context Cleaner records the cleanup in **History**. Put Back works.
 
 | Answer | What removing it costs |
@@ -75,10 +75,10 @@ Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses 
 
 | Group | Places |
 |---|---|
-| AI tools | Codex worktrees, scratch, backups, tasks and conversations; Claude Code's scratchpads in `/private/tmp`; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
+| AI tools | Codex worktrees, scratch, private work, backups, tasks and conversations; Claude Code's scratchpads in `/private/tmp`; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
 | Developer tools | Build folders in `~/GitHub` and `~/Developer`, and any folder of 500 MB or more that git ignores there; Xcode DerivedData and device support; simulators; iPhone install caches; npm, pip, uv, Yarn, Gradle, Homebrew and Playwright caches; your temporary folder |
 | Virtual machines | Parallels, Docker Desktop, UTM, Android emulators |
-| Games | Steam, CrossOver, OpenEmu |
+| Games | Steam, CrossOver, OpenEmu, PadMint game versions |
 | Downloads | Your Downloads folder |
 
 Turn any place off in **Settings › Coverage**, or add your own under **Your folders** there (the scan window's **Change Places…** opens it) or with **File › Add Folder to Scan**. Everything outside these places shows as "Everything else"; open it and it sizes the rest of your home folder, Library, Applications and each project in `~/GitHub` and `~/Developer`. When Everything else is large or growing fast, it looks on its own, and the overview names the biggest place and the one that grew most. For Parallels machines and Ollama models, the folder's card shows what's inside: the disk image, snapshots and suspended memory, or each model with the command that removes it.
@@ -142,7 +142,7 @@ No dependencies; needs Xcode on Apple silicon.
 ```sh
 git clone https://github.com/chrissotraidis/contextcleaner.git && cd contextcleaner
 bash build-version.sh /absolute/path/to/new-output      # app, DMG and SHA-256
-bash test-preserving.sh /absolute/path/to/new-tests     # 383 checks, fixtures only
+bash test-preserving.sh /absolute/path/to/new-tests     # 392 checks, fixtures only
 ```
 
 More: [changelog](docs/CHANGELOG.md) · [design notes](docs/DESIGN.md) · [validation records](docs/validation)

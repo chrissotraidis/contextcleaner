@@ -346,6 +346,53 @@ import Foundation
         check(suggestions([recovery], advice: adviseFor, gone: [], quiet: 24 * 3600, now: now.addingTimeInterval(3 * 86400)).first?.backup == true, "an old recovery copy is listed, marked as a backup")
         check(staleChildren(generated, now: now, days: 1).map(\.name) == ["toolchains"], "a folder's old items never include its backups")
         check(dayList.allSatisfy { $0.seen != nil }, "each suggestion keeps the newest change the scan saw, for the recheck before copying")
+        // 0.23: Review first folders with a clear reason they may go are listed once untouched.
+        var reachProject = ProjectActivity(root: "/Users/x/GitHub/reach", isWorktree: false, mainRepository: nil, registered: nil, branch: "main", defaultBranch: "main", lastCommit: now.addingTimeInterval(-86400), merged: true, uncommitted: 0)
+        reachProject.ignored = ["/Users/x/GitHub/reach/ref": true, "/Users/x/GitHub/reach/inputs": true]
+        let refFolder = aged("/Users/x/GitHub/reach/ref", .workspace, hours: 24 * 5, gib: 40)
+        var inputs = aged("/Users/x/GitHub/reach/inputs", .workspace, hours: 2, gib: 30)
+        inputs.contents = FolderContents(children: [ChildSummary(name: "old-dump", directory: true, identity: "1", bytes: 12 * gib, files: 9, modifiedAt: now.addingTimeInterval(-10 * 86400)),
+                                                    ChildSummary(name: "today", directory: true, identity: "2", bytes: 18 * gib, files: 9, modifiedAt: now.addingTimeInterval(-3600))],
+                                         fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        func reachAdvice(_ m: FolderMeasurement) -> Advice { advice(for: m, policy: LocationPolicy(), devices: [:], project: reachProject, now: now) }
+        let reachList = suggestions([refFolder, inputs], advice: reachAdvice, gone: [], quiet: 3 * 86400, now: now)
+        check(reachAdvice(refFolder).verdict == .check && reachAdvice(refFolder).short == "Not in git" && reachList.map(\.name) == ["ref", "old-dump"] && reachList.allSatisfy { $0.cost == .check }
+              && reachList[0].why == "Not in git, only on this Mac · untouched 5 days" && reachList[1].why.hasPrefix("Old item inside") && reachList[1].owner == inputs.profile.path,
+              "a folder only on this Mac is Review first and listed once untouched; while it's in use, the untouched items inside it are listed instead")
+        check(suggestions([refFolder], advice: reachAdvice, gone: [], quiet: 7 * 86400, now: now).isEmpty && suggestions([refFolder], advice: adviseFor, gone: [], quiet: 3 * 86400, now: now).isEmpty,
+              "it waits for the untouched time, and without git's word that it's ignored it isn't listed")
+        let nestedDump = aged("/Users/x/GitHub/reach/inputs/old-dump", .workspace, hours: 24 * 10, gib: 12)
+        var withGit = inputs
+        withGit.contents?.children.append(ChildSummary(name: ".git", directory: true, identity: "3", bytes: 5 * gib, files: 9, modifiedAt: now.addingTimeInterval(-30 * 86400)))
+        reachProject.ignored[nestedDump.profile.path] = true
+        let once = suggestions([withGit, nestedDump], advice: reachAdvice, gone: [], quiet: 3 * 86400, now: now)
+        check(once.filter { $0.name == "old-dump" }.map(\.why) == ["Not in git, only on this Mac · untouched 10 days"] && !once.contains { $0.name == ".git" } && staleChildren(withGit, now: now, days: 1).allSatisfy { $0.name != ".git" },
+              "a folder scanned on its own is never listed again as an item inside another, and a .git folder never is")
+        let gitFixture = URL(fileURLWithPath: "/private/tmp/cc-gitdate-" + UUID().uuidString)
+        try? FileManager.default.createDirectory(at: gitFixture.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try? Data("x".utf8).write(to: gitFixture.appendingPathComponent("main.c"))
+        let longAgo = now.addingTimeInterval(-20 * 86400)
+        for path in [gitFixture.appendingPathComponent("main.c").path, gitFixture.path] { try? FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: path) }
+        let gitMeasure = TreeMeasure.measure(Classifier.profile(path: gitFixture.path, home: "/Users/x", readMetadata: false), preferences: Preferences(), cancellation: Cancellation(), activity: [], activityAvailable: false)
+        check(gitMeasure.state == .measured && gitMeasure.latestModifiedAt.map { abs($0.timeIntervalSince(longAgo)) < 5 } == true,
+              "a tool running git in a project, which changes its .git folder, doesn't count as using the project")
+        check(isProjectBuildOutput("/Users/x/GitHub/site/.next") && isProjectBuildOutput("/Users/x/GitHub/game/obj") && !isProjectBuildOutput("/Users/x/Documents/obj"),
+              "Next.js's .next and .NET's obj inside a project are build output; elsewhere they're just names")
+        let codexPrivate = aged("/Users/x/.codex/private/kartpad-release-084", .workspace, hours: 24 * 4, gib: 48)
+        check(codexPrivate.profile.associatedApp == "Codex private work" && suggestions([codexPrivate], advice: adviseFor, gone: [], quiet: 3 * 86400, now: now).first?.why == "Left by a Codex task · untouched 4 days",
+              "work a Codex task kept out of git in ~/.codex/private is treated like its scratch")
+        check(locationHint("/Users/x/.codex/private/run") == "Codex private work" && locationHint("/Users/x/.padmint/games/kartpad-v0.7.8/build") == "PadMint kartpad-v0.7.8" && locationHint("/Users/x/.padmint/games/kartpad-v0.7.8") == nil,
+              "rows say where they are: Codex private work, or the PadMint game version a build folder belongs to")
+        let games = URL(fileURLWithPath: "/private/tmp/cc-padmint-" + UUID().uuidString + "/.padmint/games")
+        for name in ["kartpad-v0.7.8", "kartpad-v0.7.9", "kartpad-v0.7.10", "meleepad-v0.2.1", "notes"] { try? FileManager.default.createDirectory(at: games.appendingPathComponent(name), withIntermediateDirectories: true) }
+        check(newerVersionBeside(games.path + "/kartpad-v0.7.8") == "kartpad-v0.7.10" && newerVersionBeside(games.path + "/kartpad-v0.7.10") == nil
+              && newerVersionBeside(games.path + "/meleepad-v0.2.1") == nil && nameAndVersion("notes") == nil && nameAndVersion("a-v1.x") == nil && nameAndVersion("a-v1..2") == nil,
+              "an older game version knows the newest one beside it, comparing numbers (0.7.10 comes after 0.7.9)")
+        let oldGame = aged(games.path + "/kartpad-v0.7.8", .workspace, hours: 24 * 4, gib: 12), newGame = aged(games.path + "/kartpad-v0.7.10", .workspace, hours: 24 * 4, gib: 12)
+        let gameList = suggestions([oldGame, newGame], advice: adviseFor, gone: [], quiet: 3 * 86400, now: now)
+        check(oldGame.profile.associatedApp == "PadMint" && gameList.map(\.name) == ["kartpad-v0.7.8"] && gameList[0].cost == .check && gameList[0].why == "Older PadMint version, kartpad-v0.7.10 beside it · untouched 4 days"
+              && adviseFor(oldGame).short == "Older PadMint version, kartpad-v0.7.10 beside it",
+              "an older PadMint game version is Review first, says which version replaced it, and is listed once untouched; the newest isn't")
         // 0.19: whole Codex worktrees, judged by git.
         func kept(changes: Int? = 0, ignored: [String] = [], branch: String? = "codex/fix", main: String? = "/") -> RepoBackup {
             RepoBackup(hasRemote: true, unpushed: 2, changes: changes, stashes: 0, unkeptIgnored: ignored, lastCommit: nil, isWorktree: true, branch: branch, worktrees: 0, lastActivity: nil, mainRepository: main)

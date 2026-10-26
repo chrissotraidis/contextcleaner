@@ -43,12 +43,15 @@ struct Classifier {
             assign(.debugSymbols, url.lastPathComponent, "Xcode", "Debugging support for the device and OS version named by this directory.", "Old crash reports may need these symbols. A newer folder does not prove this version is unused.")
         } else if containsPath(home + "/.codex/backups", path) {
             assign(.backup, url.lastPathComponent + " recovery backup", "Codex workspace", "Recovery copy associated with Codex. Its contents and creation process have not been independently verified.", "Preserve unless another complete recovery copy has been verified. Uncommitted source and device saves may be unique.")
-        } else if containsPath(home + "/.codex/scratch", path) && path != home + "/.codex/scratch" {
+        } else if let scratch = [home + "/.codex/scratch", home + "/.codex/private"].first(where: { containsPath($0, path) && path != $0 }) {
+            let app = scratch.hasSuffix("/private") ? "Codex private work" : "Codex scratch"
             if url.lastPathComponent.lowercased().contains("backup") {
-                assign(.backup, url.lastPathComponent, "Codex scratch", "A backup a Codex task saved, such as app data copied off a device.", "It may be the only copy. Check you have these files elsewhere first.")
+                assign(.backup, url.lastPathComponent, app, "A backup a Codex task saved, such as app data copied off a device.", "It may be the only copy. Check you have these files elsewhere first.")
             } else {
-                assign(.workspace, url.lastPathComponent, "Codex scratch", "Left behind by a Codex task: builds, downloads, logs or test copies.", "Codex doesn't clean these up. Look for files you made by hand before removing it.")
+                assign(.workspace, url.lastPathComponent, app, "Left behind by a Codex task: builds, downloads, logs or test copies.", "Codex doesn't clean these up. Look for files you made by hand before removing it.")
             }
+        } else if isPadMintGame(path) {
+            assign(.workspace, url.lastPathComponent, "PadMint", "A game's source PadMint downloaded to build one version, with its build output and any game files you gave it.", "PadMint downloads it again if you build this version again. Game files you gave it may be inside; keep your own copy.")
         } else if containsPath(home + "/.ollama/models", path) {
             assign(.model, "Ollama models", "Ollama", "Language models downloaded with Ollama.", "Removing a model means downloading it again to use it.")
         } else if containsPath(home + "/.diffusionbee", path) {

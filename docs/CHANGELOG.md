@@ -2,6 +2,19 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.23.0
+
+On a disk 98% full, Free Up Space offered almost nothing while Review first held 1.37 TiB. Most of it was folders Context Cleaner already knew git ignores and nothing had touched for weeks, but it never offered them.
+
+- **Not in git folders are offered.** A folder git ignores that isn't build output, such as a downloaded `ref/`, `artifacts/` or `external/`, is listed in Free Up Space once nothing has touched it for your Untouched for time, labeled "Not in git, only on this Mac". While one is still in use, the untouched items inside it are listed instead. They stay Review first: never ticked for you, and copying asks first. On the Mac this was built on, the last scan's 3-day list grew to 630 GiB, 455 GiB of it Not in git, and the two places below add 166 GiB more.
+- **Two more places are scanned.** `~/.codex/private`, where Codex tasks keep release candidates and validation runs out of git (81 GiB here), is treated like Codex scratch. `~/.padmint/games` holds one folder per game version PadMint built (97 GiB here): each version, its build folders, and the folders git ignores inside it.
+- **Older PadMint versions say so.** A game version with a newer one beside it (kartpad-v0.7.8 next to kartpad-v0.8.3) is Review first, labeled "Older PadMint version", and listed once untouched. PadMint builds the latest release and downloads an older one again only if you build it. Game files you gave PadMint may be inside, so it's never ticked for you.
+- **Ticking several folders no longer loses them.** In Folders, ticks could vanish two ways. The list itself kept its own, older idea of what was selected and reported it when the window became active or the list reloaded, wiping the ticks. And the selection bar appeared when a second folder was ticked, pushing the list down a row, so a quick third click landed beside a box and replaced every tick with that one row. Now only a click or key press can take ticks away, the bar is always there, and with two or more ticked, a plain click on a row ticks it too. Untick with the box or Command-click; Clear starts over.
+- **Running git isn't using a project.** A `.git` folder changes whenever any tool runs git, which made a project folder look used today. Its date no longer counts; commits still do, from git. A `.git` folder is never listed as an item to remove.
+- **Next.js and .NET build folders.** `.next` and `obj` inside a project are build output, so Rebuildable.
+- **One Review first total.** Filtered to one answer, the panel on the right shows the same total as its tile.
+- **No item twice.** A folder measured on its own is never listed again as an item inside the folder holding it.
+
 ## 0.22.3
 
 - **Finished PadMint player checks are offered.** PadMint's `scripts/player-check.sh` leaves a folder of about 20 GiB in your temporary folder for every run and asks you to delete it. Temporary items used to wait 3 days before counting as old, so a check that finished yesterday never showed up. Once nothing has touched one for an hour and no app has it open, it's listed in Free Up Space as Rebuildable, whatever the Untouched for setting: running the check again makes it again. On the Mac this was built on, that was 62.8 GiB.

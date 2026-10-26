@@ -225,16 +225,47 @@ struct MainView: View {
         } else if !model.search.isEmpty {
             Text("\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
         }
-        if let summary = model.selectionSummary {
-            HStack(spacing: 12) {
-                Image(systemName: "checkmark.circle").foregroundStyle(Color.accentColor).accessibilityHidden(true)
-                Text("\(model.selection.count) selected · \(byteLabel(summary.bytes))").font(.callout.weight(.semibold)).monospacedDigit()
-                Text(summary.unmeasured > 0 ? "folders inside others counted once · \(summary.unmeasured) not scanned" : "folders inside others counted once").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Show in Finder") { revealInFinder(Array(model.selection)) }.controlSize(.small)
-                Button("Clear") { model.selection = [] }.controlSize(.small)
-            }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(0.10)).accessibilityElement(children: .contain).accessibilityLabel("\(model.selection.count) selected, \(byteLabel(summary.bytes))")
+        // In the lists with tick boxes the bar is always there, so ticking a second row never moves the rows under the pointer.
+        if model.section == .needsAttention ? model.selectionSummary != nil : !model.rows.isEmpty { selectionBar }
+    }
+    var selectionBar: some View {
+        let count = model.selection.count, summary = model.selectionSummary
+        let single = count == 1 ? model.rows.first(where: { $0.id == model.selection.first })?.bytes : nil
+        let size = summary.map { " · " + byteLabel($0.bytes) } ?? single.flatMap { $0 >= 0 ? " · " + byteLabel($0) : nil } ?? ""
+        let note = count == 0 ? "Tick folders to add up their sizes and copy one Move-to-Trash command. Shift-click ticks a range."
+            : count == 1 ? "Tick more to copy one command for all of them"
+            : summary.map { $0.unmeasured > 0 ? "folders inside others counted once · \($0.unmeasured) not scanned" : "folders inside others counted once" } ?? ""
+        return HStack(spacing: 12) {
+            Image(systemName: count == 0 ? "circle" : "checkmark.circle").foregroundStyle(count == 0 ? Color.secondary : Color.accentColor).accessibilityHidden(true)
+            if count > 0 { Text("\(count) selected" + size).font(.callout.weight(.semibold)).monospacedDigit() }
+            Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            Button("Show in Finder") { revealInFinder(Array(model.selection)) }.controlSize(.small).disabled(count == 0)
+            Button("Clear") { model.selection = [] }.controlSize(.small).disabled(count == 0)
+        }.padding(.horizontal, 14).padding(.vertical, 8).background(Color.accentColor.opacity(count == 0 ? 0.04 : 0.10))
+            .accessibilityElement(children: .contain).accessibilityLabel(count == 0 ? "Nothing selected" : "\(count) selected" + size)
+    }
+    /// What the table reports about its selection. Tick boxes change the selection directly, so the table's own idea of it
+    /// can lag behind, and it reports that idea when the window activates or the list reloads. Only a click or key press
+    /// may take ticks away; anything else can only add. With two or more ticked, a plain click on a row ticks it too and
+    /// never replaces the others, so a click that just misses a box loses nothing. Tick boxes, Shift- and Command-click
+    /// and the arrow keys work as usual; Clear starts over.
+    func tableSelect(_ new: Set<String>) {
+        guard new != model.selection else { return }
+        guard let event = NSApp.currentEvent, [.leftMouseDown, .leftMouseUp, .keyDown].contains(event.type) else {
+            if new.isSuperset(of: model.selection) { model.selection = new }
+            return
         }
+        if event.type != .keyDown, event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+           model.selection.count > 1 || toggledClick == event.eventNumber {
+            // The table can report one click twice, on press and on release; it ticks once.
+            if toggledClick != event.eventNumber, new.count == 1, let id = new.first, !model.selection.contains(id) {
+                toggledClick = event.eventNumber
+                model.selection.insert(id)
+            }
+            return
+        }
+        model.selection = new
     }
     /// How Folders are ordered. The default is biggest first.
     private var orderName: String {
@@ -296,6 +327,8 @@ struct MainView: View {
             }.padding(12).background(category.tint.opacity(0.08))
         }
     }
+    /// The mouse click that last ticked a row from the table: the table can report one click twice, and it counts once.
+    @State private var toggledClick = -1
     func selectedRow(_ id: String) -> Bool { model.selection.contains(id) }
     func lastUsedText(_ row: FolderRow) -> String {
         if let date = row.advice.lastUsed { return ageText(date) }
@@ -303,7 +336,7 @@ struct MainView: View {
         return row.measurement.state == .pending ? "—" : "Not recorded"
     }
     var folderTable: some View {
-        Table(model.sortedRows(sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
+        Table(model.sortedRows(sortOrder), selection: Binding(get: { model.selection }, set: { tableSelect($0) }), sortOrder: $sortOrder) {
             // A tick box per row, the same as Command-click: tick several, then copy one command from the right.
             TableColumn("") { row in
                 let isOn = model.selection.contains(row.id)
@@ -363,7 +396,7 @@ struct MainView: View {
     }
     /// Folders a scan couldn't read, each with its reason and one fix.
     var issuesTable: some View {
-        Table(model.sortedRows(sortOrder), selection: $model.selection, sortOrder: $sortOrder) {
+        Table(model.sortedRows(sortOrder), selection: Binding(get: { model.selection }, set: { tableSelect($0) }), sortOrder: $sortOrder) {
             TableColumn("Folder", value: \.name) { row in
                 VStack(alignment: .leading, spacing: 2) {
                     Label { Text(row.name).lineLimit(1) } icon: { Image(systemName: row.measurement.profile.category.symbol).foregroundStyle(selectedRow(row.id) ? Color.white : row.measurement.profile.category.tint) }.help(row.measurement.profile.path)
@@ -470,7 +503,9 @@ struct MainView: View {
                     .disabled(model.running || model.inspecting || model.discovering).help("Reads just these folders again. Sizes only; nothing is changed.")
             }
         } else {
-            Text(byteLabel(uniqueAllocatedTotal(measured))).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
+            // Filtered to one answer, the total is the tile's: each byte counted once, for the innermost folder holding it.
+            let answer = model.section == .locations && model.search.isEmpty && model.categoryFilter == nil ? Verdict.allCases.first { $0.filter == model.locationFilter } : nil
+            Text(byteLabel(answer.map { model.verdictTotal($0).bytes } ?? uniqueAllocatedTotal(measured))).font(.system(.largeTitle, design: .rounded).weight(.semibold)).monospacedDigit()
             let setAside = model.keptSummary.kept.count + model.keptSummary.off.count
             Text(model.section == .kept ? "in \(setAside) \(setAside == 1 ? "folder" : "folders") you set aside, last known sizes"
                  : "in \(measured.count) scanned \(measured.count == 1 ? "folder" : "folders")" + (pending > 0 ? " · \(pending) not scanned yet" : ""))
@@ -530,7 +565,7 @@ struct MainView: View {
                 .help(policy.isKept ? "Stop ignoring: suggest it again when it looks safe to remove" : "Ignore this folder: it's still scanned but never suggested, and it moves to Ignored")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
-        (Text("What it is: ").fontWeight(.semibold) + Text(item.profile.path.contains("/.codex/scratch/") ? "Scratch space a Codex task used for builds, test copies and downloads. Codex doesn't remove it when the task ends." : item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        (Text("What it is: ").fontWeight(.semibold) + Text(isCodexScratch(item.profile.path) ? "Scratch space a Codex task used for builds, test copies and downloads. Codex doesn't remove it when the task ends." : item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         let simulatorRoot = path.hasSuffix("/CoreSimulator/Devices")
         if model.gone.contains(path) {
             Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)

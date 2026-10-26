@@ -453,10 +453,13 @@ struct TreeMeasure {
                 childMap[name] = box
             }
             let size = occupied(entry)
+            // Git's own folder changes whenever any tool runs git (a fetch, a lock file); that isn't using the project.
+            // Commits count from git's own dates.
+            let counts = top != ".git"
             if let box {
                 box.bytes += size
                 if !entry.isDirectory { box.files += 1 }
-                if entry.modifiedSeconds > box.latest { box.latest = entry.modifiedSeconds }
+                if counts, entry.modifiedSeconds > box.latest { box.latest = entry.modifiedSeconds }
             }
             if !entry.isDirectory {
                 let dot = name.lastIndex(of: ".")
@@ -467,7 +470,7 @@ struct TreeMeasure {
                 summary.files += 1; summary.bytes += size; typeMap[type] = summary
             }
             bytes += size; logical += entry.logical
-            if entry.modifiedSeconds > latestSeconds { latestSeconds = entry.modifiedSeconds }
+            if counts, entry.modifiedSeconds > latestSeconds { latestSeconds = entry.modifiedSeconds }
             if entry.isDirectory {
                 if stack.count >= limits.depth { return incomplete("Directory depth allowance reached") }
                 do { stack.append(try BulkCursor(child, top: top, box: box)) }

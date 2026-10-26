@@ -337,6 +337,9 @@ struct Advice: Equatable {
     var staleBytes: Int64 { staleItems.reduce(0) { $0 + $1.bytes } }
     /// How long the stale items have gone unchanged: 7 days for project output, 30 for caches.
     var staleDays = 30
+    /// For a Review first folder with a clear reason it may go, such as "Not in git, only on this Mac": Free up space lists
+    /// it under this label once it has sat untouched, or lists the untouched items inside it while it's still in use.
+    var quietLabel: String?
 }
 struct StaleItem: Equatable, Identifiable {
     var id: String { path }
@@ -555,7 +558,7 @@ func friendlyApp(_ command: String) -> String {
 func staleChildren(_ m: FolderMeasurement, now: Date, days: Double = 30, minimum: Int64 = 50 * 1_048_576, backups: Bool = false) -> [StaleItem] {
     guard let children = m.contents?.children else { return [] }
     return children.filter { child in
-        guard child.bytes >= minimum, let modified = child.modifiedAt, backups || !looksIrreplaceable(child.name) else { return false }
+        guard child.bytes >= minimum, child.name != ".git", let modified = child.modifiedAt, backups || !looksIrreplaceable(child.name) else { return false }
         return now.timeIntervalSince(modified) >= days * 86400
     }.sorted { $0.bytes > $1.bytes }.map { StaleItem(path: m.profile.path + "/" + $0.name, name: $0.name, bytes: $0.bytes, modifiedAt: $0.modifiedAt) }
 }
@@ -664,10 +667,11 @@ private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActi
         default: return "Growth expected"
         }
     case .check:
+        if let label = a.quietLabel { return label }
         if let idle, idle < 7 { return "Used " + ageText(a.lastUsed, now: now) }
         switch m.profile.category {
         case .backup: return "May be the only copy"
-        case .workspace: return m.profile.path.contains("/.codex/scratch/") ? "Left by a Codex task" : m.profile.path.hasSuffix("/work") ? "Scratch, not in git" : "Project files"
+        case .workspace: return isCodexScratch(m.profile.path) ? "Left by a Codex task" : m.profile.path.hasSuffix("/work") ? "Scratch, not in git" : "Project files"
         case .model: return "Re-download to restore"
         case .download: return "Your downloads"
         case .virtualMachine: return "Whole computer"
@@ -680,15 +684,18 @@ private func shortReason(_ a: Advice, m: FolderMeasurement, project: ProjectActi
 /// The folder rules plus what git says about the project.
 private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: SimDevice], project: ProjectActivity?, now: Date) -> Advice {
     var result = ruleAdvice(for: m, policy: policy, devices: devices, now: now)
+    let quietLabel = result.quietLabel
     guard let project, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData"), m.state == .measured else { return result }
     let lastActivity = [m.latestModifiedAt, project.lastCommit].compactMap { $0 }.max()
     let label = project.isWorktree ? "Worktree \(project.name)" : "Project \(project.name)"
     var evidence = [label + ": " + project.summary(now: now) + "."]
     let ignored = project.ignored[m.profile.path]
+    var notInGit = false
     if ignored == true && !isProjectBuildOutput(m.profile.path) && result.verdict == .check {
         // Not build output, and not in any commit: an agent's artifacts, a downloaded reference, your own files.
         result = Advice(verdict: .check, reason: "Git ignores it, so it's only on this Mac. It isn't build output, so nothing recreates it.", howTo: "Look inside and keep what you need, then move the rest to the Trash.", command: nil, lastUsed: lastActivity)
         evidence.append("Git ignores this folder, so no commit holds a copy.")
+        notInGit = true
     } else if ignored == true { evidence.append("Git ignores this folder, so the repository doesn't need it.") }
     if ignored == false && isProjectBuildOutput(m.profile.path) {
         // A folder named build that git tracks may be source; don't treat it as output.
@@ -710,11 +717,12 @@ private func projectAdvice(for m: FolderMeasurement, policy: LocationPolicy, dev
         result = Advice(verdict: result.verdict, reason: result.reason, howTo: result.howTo, command: result.command, lastUsed: lastActivity)
     }
     result.evidence = evidence
+    if result.verdict == .check { result.quietLabel = notInGit ? "Not in git, only on this Mac" : quietLabel }
     return result
 }
 /// Build output inside a project: recreated by building again.
 /// Build output by name. build, generated, intermediates and .cxx anywhere; other tools' output folders (build-macos,
-/// cmake-build-debug, out, dist, target, node_modules, .build, DerivedData) only inside a project in ~/GitHub,
+/// cmake-build-debug, out, dist, target, node_modules, .build, DerivedData, Next.js's .next, .NET's obj) only inside a project in ~/GitHub,
 /// ~/Developer or a Codex worktree, where Context Cleaner finds them because git ignores them.
 func isProjectBuildOutput(_ path: String) -> Bool {
     let name = (path as NSString).lastPathComponent
@@ -725,7 +733,7 @@ func isProjectBuildOutput(_ path: String) -> Bool {
     }
     // A name that says backup or save (build-ios-preview1-backup) may be a deliberate copy, not output.
     guard inProject, !looksIrreplaceable(name) else { return false }
-    return ["out", "dist", "target", "node_modules", ".build", "DerivedData"].contains(name) || ["build-", "build_", "cmake-build"].contains { name.hasPrefix($0) }
+    return ["out", "dist", "target", "node_modules", ".build", "DerivedData", ".next", "obj"].contains(name) || ["build-", "build_", "cmake-build"].contains { name.hasPrefix($0) }
 }
 /// Build output or a scratch work folder: each holds one subfolder per build or experiment.
 func isProjectOutput(_ path: String) -> Bool { isProjectBuildOutput(path) || path.hasSuffix("/work") }
@@ -810,11 +818,16 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         return Advice(verdict: .safe, reason: "Debug files for one device and iOS version. Xcode copies them again when you connect it.", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .workspace:
         if isProjectBuildOutput(path) { return projectBuild() }
-        if path.contains("/.codex/scratch/") { return Advice(verdict: .check, reason: "Left behind by a Codex task: builds, downloads, logs or test copies. Codex doesn't clean these up.", howTo: "If the task is done, look for anything you made by hand, then move the folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
+        if isCodexScratch(path) { return Advice(verdict: .check, reason: "Left behind by a Codex task: builds, downloads, logs or test copies. Codex doesn't clean these up.", howTo: "If the task is done, look for anything you made by hand, then move the folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
+        if isPadMintGame(path), let newer = newerVersionBeside(path) {
+            var older = Advice(verdict: .check, reason: "Source PadMint downloaded to build this version. It builds the latest release, \(newer), which sits beside it, and downloads this one again only if you build this version again.", howTo: "Game files you gave PadMint may be inside. If you have your own copy of them, move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
+            older.quietLabel = "Older PadMint version, \(newer) beside it"
+            return older
+        }
         if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch space for \(project): logs, test installs and experiments. It can also hold files you made by hand.", howTo: "Remove the experiment folders you're done with. Keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Files in the \(project) project. Some may be your only copy.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     case .backup:
-        if path.contains("/.codex/scratch/") { return Advice(verdict: .check, reason: "A backup a Codex task saved, such as app data copied off a device. It may be your only copy.", howTo: "Check you have these files somewhere else, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
+        if isCodexScratch(path) { return Advice(verdict: .check, reason: "A backup a Codex task saved, such as app data copied off a device. It may be your only copy.", howTo: "Check you have these files somewhere else, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Codex copied this before a risky change. Once that work is safely in the project, you don't need it.", howTo: "Open the project and check the change is there. Then move this copy to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .history:
         return Advice(verdict: .keep, reason: "Your past conversations. Removing them loses them for good.", howTo: "Archive old conversations in the app instead.", command: nil, lastUsed: m.latestModifiedAt)
@@ -860,6 +873,8 @@ func locationHint(_ path: String) -> String? {
     if let i = parts.firstIndex(where: { Coverage.projectRoots.contains($0) }), i + 1 < parts.count, i == 0 || parts[i - 1] != "Library" { return parts[i] + "/" + parts[i + 1] }
     if let i = parts.firstIndex(of: "backups"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex backup" }
     if let i = parts.firstIndex(of: "scratch"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex scratch" }
+    if let i = parts.firstIndex(of: "private"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex private work" }
+    if let i = parts.firstIndex(of: "games"), i > 0, parts[i - 1] == ".padmint", i + 2 < parts.count { return "PadMint " + parts[i + 1] }
     return nil
 }
 /// Paths that no longer exist on disk. Only reads metadata.
@@ -1124,6 +1139,9 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
     var found: [Suggestion] = []
     let sorted = items.filter { $0.state == .measured && !gone.contains($0.profile.path) }.sorted { $0.profile.path.count < $1.profile.path.count }
     var taken: Set<String> = []
+    // Folders measured on their own, and the folders holding them: judged on their own, never again as an item inside another.
+    var measuredWithin: Set<String> = []
+    for m in items { var p = m.profile.path; while p.count > 1 && measuredWithin.insert(p).inserted { p = (p as NSString).deletingLastPathComponent } }
     for m in sorted {
         let path = m.profile.path
         // Apps always have files open somewhere in the temporary folder; there, only the items they hold are left out.
@@ -1134,7 +1152,7 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         let idle = m.latestModifiedAt.map { now.timeIntervalSince($0) }
         let untouched = idle.map { "untouched " + quietText($0) }
         let isQuiet = (idle ?? 0) >= quiet
-        let scratch = path.contains("/.codex/scratch/")
+        let scratch = isCodexScratch(path)
         let worktree = isWorktreeFolder(path)
         let rebuildable = m.profile.category.reproducible || m.profile.category == .debugSymbols || isProjectBuildOutput(path)
         func add(_ cost: Verdict, _ label: String, age: Bool = true, backup: Bool = false) {
@@ -1171,15 +1189,17 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
             if scratch { add(.check, m.profile.category == .backup ? "Backup in Codex scratch" : "Left by a Codex task"); continue }
             if path.hasSuffix("/work") { add(.check, "Scratch work folder"); continue }
             if m.profile.category == .virtualMachine && m.profile.associatedApp == "Android Emulator" { add(.check, "Android emulator"); continue }
+            if a.verdict == .check, let label = a.quietLabel { add(.check, label); continue }
         }
-        // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments or scratch.
-        guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch || temporary else { continue }
+        // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments, scratch, or files
+        // only on this Mac with a clear reason they may go (Not in git).
+        guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch || temporary || (a.verdict == .check && a.quietLabel != nil) else { continue }
         let held = m.processes.map(\.path)
         // A PadMint player check leaves a 20 GiB folder for each run and asks you to delete it. Once nothing has
         // touched it for an hour and no app holds it, it's listed whatever the untouched time: running the check makes it again.
         let isCheck = { (name: String) in temporary && isPlayerCheck(name) }
         for child in staleChildren(m, now: now, days: (temporary ? min(quiet, 3600) : quiet) / 86400, minimum: minimum, backups: true)
-        where !held.contains(where: { containsPath(child.path, $0) }) && (isCheck(child.name) || child.modifiedAt.map { now.timeIntervalSince($0) >= quiet } == true) {
+        where !held.contains(where: { containsPath(child.path, $0) }) && !measuredWithin.contains(child.path) && (isCheck(child.name) || child.modifiedAt.map { now.timeIntervalSince($0) >= quiet } == true) {
             let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
             if isCheck(child.name) {
                 found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: .rebuild,
@@ -1481,6 +1501,26 @@ func insideParts(_ path: String) -> [InsidePart] {
 // MARK: - Codex worktrees
 
 /// A whole Codex worktree folder: ~/.codex/worktrees/<name>, one task's copy of a project.
+/// Scratch space Codex tasks leave behind: ~/.codex/scratch, and ~/.codex/private for work kept out of git.
+func isCodexScratch(_ path: String) -> Bool { path.contains("/.codex/scratch/") || path.contains("/.codex/private/") }
+/// One game version PadMint downloaded and built: ~/.padmint/games/kartpad-v0.7.9.
+func isPadMintGame(_ path: String) -> Bool { (path as NSString).deletingLastPathComponent.hasSuffix("/.padmint/games") }
+/// "kartpad-v0.7.9" → ("kartpad", [0, 7, 9]).
+func nameAndVersion(_ name: String) -> (name: String, version: [Int])? {
+    guard let range = name.range(of: "-v", options: .backwards) else { return nil }
+    let parts = name[range.upperBound...].split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+    guard !parts.isEmpty, parts.allSatisfy({ $0 != nil }) else { return nil }
+    return (String(name[..<range.lowerBound]), parts.compactMap { $0 })
+}
+/// The newest folder beside this one with the same name and a higher version: "kartpad-v0.7.9" for kartpad-v0.7.8.
+func newerVersionBeside(_ path: String) -> String? {
+    let url = URL(fileURLWithPath: path)
+    guard let mine = nameAndVersion(url.lastPathComponent),
+          let siblings = try? FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path) else { return nil }
+    return siblings.compactMap { name in nameAndVersion(name).map { (name, $0) } }
+        .filter { $0.1.name == mine.name && mine.version.lexicographicallyPrecedes($0.1.version) }
+        .max { $0.1.version.lexicographicallyPrecedes($1.1.version) }?.0
+}
 func isWorktreeFolder(_ path: String) -> Bool {
     guard let range = path.range(of: "/.codex/worktrees/") else { return false }
     let name = path[range.upperBound...]

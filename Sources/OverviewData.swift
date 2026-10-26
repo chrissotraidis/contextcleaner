@@ -499,8 +499,9 @@ func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, s
     }
     return (ready, leftOut)
 }
-/// The newest change anywhere inside a folder, read in batches like a scan: links, other disks and Finder's .DS_Store
-/// files don't count, and a folder's own date is ignored when a .DS_Store written then explains it. Stops after limit
+/// The newest change anywhere inside a folder, read in batches like a scan: links, other disks, Finder's .DS_Store
+/// files and the folder's own .git (as in a scan, a tool running git isn't use) don't count, and a folder's own date is
+/// ignored when a .DS_Store written then explains it. Stops after limit
 /// entries or the time allowance; the folders still open then count by their own dates, which move whenever an entry
 /// is added or removed.
 func newestChange(_ path: String, own: stat, limit: Int = 200_000, seconds: TimeInterval = 4) -> Date {
@@ -532,6 +533,7 @@ func newestChange(_ path: String, own: stat, limit: Int = 200_000, seconds: Time
             break
         }
         if entry.name == ".DS_Store" { stack[stack.count - 1].store = entry.modifiedSeconds; continue }
+        if stack.count == 1 && entry.name == ".git" { continue }
         if entry.isDirectory, !entry.isLink, !entry.isMountPoint, entry.device == own.st_dev, stack.count < 64 {
             let inner: BulkCursor?
             do { inner = try folder(stack[stack.count - 1].cursor.path + "/" + entry.name) } catch { return .distantFuture }
@@ -1500,7 +1502,6 @@ func insideParts(_ path: String) -> [InsidePart] {
 
 // MARK: - Codex worktrees
 
-/// A whole Codex worktree folder: ~/.codex/worktrees/<name>, one task's copy of a project.
 /// Scratch space Codex tasks leave behind: ~/.codex/scratch, and ~/.codex/private for work kept out of git.
 func isCodexScratch(_ path: String) -> Bool { path.contains("/.codex/scratch/") || path.contains("/.codex/private/") }
 /// One game version PadMint downloaded and built: ~/.padmint/games/kartpad-v0.7.9.
@@ -1521,6 +1522,7 @@ func newerVersionBeside(_ path: String) -> String? {
         .filter { $0.1.name == mine.name && mine.version.lexicographicallyPrecedes($0.1.version) }
         .max { $0.1.version.lexicographicallyPrecedes($1.1.version) }?.0
 }
+/// A whole Codex worktree folder: ~/.codex/worktrees/<name>, one task's copy of a project.
 func isWorktreeFolder(_ path: String) -> Bool {
     guard let range = path.range(of: "/.codex/worktrees/") else { return false }
     let name = path[range.upperBound...]

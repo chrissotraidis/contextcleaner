@@ -371,11 +371,14 @@ import Foundation
         let gitFixture = URL(fileURLWithPath: "/private/tmp/cc-gitdate-" + UUID().uuidString)
         try? FileManager.default.createDirectory(at: gitFixture.appendingPathComponent(".git"), withIntermediateDirectories: true)
         try? Data("x".utf8).write(to: gitFixture.appendingPathComponent("main.c"))
-        let longAgo = now.addingTimeInterval(-20 * 86400)
+        // File dates are real: this test's now is in the future.
+        let longAgo = Date().addingTimeInterval(-20 * 86400)
         for path in [gitFixture.appendingPathComponent("main.c").path, gitFixture.path] { try? FileManager.default.setAttributes([.modificationDate: longAgo], ofItemAtPath: path) }
         let gitMeasure = TreeMeasure.measure(Classifier.profile(path: gitFixture.path, home: "/Users/x", readMetadata: false), preferences: Preferences(), cancellation: Cancellation(), activity: [], activityAvailable: false)
         check(gitMeasure.state == .measured && gitMeasure.latestModifiedAt.map { abs($0.timeIntervalSince(longAgo)) < 5 } == true,
               "a tool running git in a project, which changes its .git folder, doesn't count as using the project")
+        check(recheck([(gitFixture.path, longAgo)], open: []).ready == [gitFixture.path],
+              "the recheck before copying uses the same rule, so a git repository isn't left out as changed because git ran in it")
         check(isProjectBuildOutput("/Users/x/GitHub/site/.next") && isProjectBuildOutput("/Users/x/GitHub/game/obj") && !isProjectBuildOutput("/Users/x/Documents/obj"),
               "Next.js's .next and .NET's obj inside a project are build output; elsewhere they're just names")
         let codexPrivate = aged("/Users/x/.codex/private/kartpad-release-084", .workspace, hours: 24 * 4, gib: 48)

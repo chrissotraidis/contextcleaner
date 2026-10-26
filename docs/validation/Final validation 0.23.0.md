@@ -30,7 +30,7 @@ Separately, in Folders, ticks vanished two ways. Ticking a second folder made th
 | Same scan, 3-day filter, after | 143 items, 630 GiB: 455 GiB Not in git (68 folders), 62.8 GiB finished player checks, 47 GiB build output, 20 GiB old items inside folders in use, 24.9 GiB `obj` and `.next` now Safe to remove |
 | New places, measured live with the app's own discovery and measuring, 3-day filter | 25 items, 166 GiB: Codex private work 81 GiB, 13 older PadMint versions, PadMint build folders. No item listed twice; `kartpad-v0.7.8` listed whole once `.git` stopped counting |
 | Selection, installed 0.23.0, real mouse clicks in Folders › Review first | Three quick ticks and a click beside a fourth box: 4 ticked. Plain click on a ticked row: still 4. On an unticked row: 5. Untick a box: 4. Command-click a ticked row: 3. To Free Up Space and back: still 3 |
-| Free Up Space, installed 0.23.0, this Mac's last scan | 3 days: 137 items, 521 GiB (42.3 GiB Nothing lost, 478.7 GiB Review first). 1 week: 111 items, 250.8 GiB (was 7 items, 27.8 GiB) |
+| Free Up Space, installed 0.23.0, this Mac's last scan | 3 days: 137 items, 521 GiB (42.3 GiB Nothing lost, 478.7 GiB Review first). 1 week: 111 items, 250.8 GiB (0.22.3 showed 0 items). The probe's 630 GiB above also counts items already gone since that scan, such as finished player checks |
 | Install | DMG verified, signature valid, installed binary identical to the DMG's |
 | Compiler | No warnings, no errors |
 | Test suites | 392 checks pass, 9 new: Not in git listing and old items inside, the untouched time, `.next` and `obj`, Codex private work, version order (0.7.10 after 0.7.9), older PadMint versions, row locations, nothing listed twice, `.git` dates |

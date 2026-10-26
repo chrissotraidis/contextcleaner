@@ -18,5 +18,9 @@ Build 62. A second check after 0.23.1, aimed at the places the new code meets th
 | Not in git folders that hold tracked files (git calls a folder ignored even if files in it were force-added) | 0 of 90 |
 | Ticks, installed app: Clear, switch to Finder and back | Stays clear |
 | Ticks, installed app: 3 ticked, switch to Finder and back | Still 3 |
+| Full scan on the installed 0.23.2 | 706 folders read, none failed, in 3m 34s, including ~/.codex/private and ~/.padmint/games |
+| Recheck on every Free Up Space item after that scan (3 days), measured with 0.23.x's rule | 155 of 155 ready, none left out: the 0.23.0 problem is gone on real data |
+| By kind on the installed app, Review first | Not in git 63 (193.36 GiB), Left by a Codex task 6 (81.18 GiB), Older PadMint version 14 (62.07 GiB) in one group, Old item inside 47, Looks like a backup 1 |
+| Free Up Space after the scan | 3 days: 156 items, 424.08 GiB (61.54 GiB Nothing lost). 1 week: 126 items, 386.01 GiB |
 | Test suites | 394 checks pass, 1 new |
 

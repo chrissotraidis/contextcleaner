@@ -779,7 +779,8 @@ struct FolderRow: Identifiable {
         // Items you moved to the Trash leave the list at once, including old items inside folders, which no scan has seen go yet.
         // Whole folders follow the same rule as every Trash command; old items inside a folder are judged by the folder's rules.
         let byPath = Dictionary(items.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
-        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600, minimum: Self.suggestionMinimum)
+        let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600, minimum: Self.suggestionMinimum,
+                                itemized: Set(preferences.customRoots.map(normalized)))
             .filter { !trashedSinceScan.contains($0.path) && !vanished.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false) }
         suggestionCache = (key, value)
         return value
@@ -1139,19 +1140,30 @@ struct FolderRow: Identifiable {
         do { try store.saveDiscovery(discovery); try store.save(next); preferences = next } catch { self.error = "Discovery could not be fully saved: \(error.localizedDescription)" }
     }
     func addRoot() {
-        guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return }
+        guard store != nil else { error = "Preferences cannot be saved while storage is unavailable."; return }
         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
         panel.message = "Choose a folder to scan. Context Cleaner only reads its size and never changes it."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url, include(url.path) else { return }
+        selected = url.path; categoryFilter = nil; section = .locations; locationFilter = .all; search = ""
+    }
+    /// Adds a folder to Your folders. False if preferences can't be saved.
+    @discardableResult private func include(_ path: String) -> Bool {
+        guard let store else { error = "Preferences cannot be saved while storage is unavailable."; return false }
         var next = preferences
-        if !next.customRoots.contains(url.path) { next.customRoots.append(url.path) }
+        if !next.customRoots.contains(path) { next.customRoots.append(path) }
         do {
             try store.save(next); preferences = next
-            if !preferences.excluded(url.path), !discovery.profiles.contains(where: { $0.path == url.path }) {
-                discovery.profiles.append(Classifier.profile(path: url.path, home: home, readMetadata: false))
+            if !preferences.excluded(path), !discovery.profiles.contains(where: { $0.path == path }) {
+                discovery.profiles.append(Classifier.profile(path: path, home: home, readMetadata: false))
             }
-            selected = url.path; categoryFilter = nil; section = .locations; locationFilter = .all; search = ""
-        } catch { self.error = error.localizedDescription }
+            return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    /// From Everything else: scan this folder from now on, item by item, and scan it now.
+    /// What inside it sits untouched is then listed in Free up space, each item on its own.
+    func track(_ path: String) {
+        guard mayItemize(path, home: home), include(path) else { return }
+        scan(only: [path])
     }
     /// only: scan just these folders, such as everything under Couldn't Scan. selectedOnly scans the selected folder.
     func scan(selectedOnly: Bool = false, watchedOnly: Bool = false, priorityOnly: Bool = false, only paths: [String]? = nil) {

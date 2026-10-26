@@ -2,6 +2,15 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.24.0
+
+Finding more to delete, and more over time.
+
+- **Track a folder from Everything else.** Each folder there has a Track button. It adds the folder to Your folders and scans it at once, and from then on what sits untouched inside it shows in Free Up Space, item by item, as Review first. The folder itself is never offered whole, and in a folder of backups every item is marked a backup and never auto-ticked.
+- **Codex work folders.** ~BT~~/.codex/work~BT~ and every ~BT~work-…~BT~ folder beside it are scanned like Codex scratch, a new one included.
+- **Android SDK, item by item.** Each emulator system image and NDK version is its own row. A system image no emulator uses is Safe to remove. One an emulator uses names that emulator and is never suggested: delete the emulator in Android Studio first. On the Mac this was built on, that's 13 GiB Safe to remove.
+- **Free Up Space says when it's still reading git.** For the first minutes after launch, folders only on this Mac (Not in git) aren't listed yet; it now says so.
+
 ## 0.23.3
 
 A cleaner look, from going over every page.

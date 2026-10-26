@@ -75,13 +75,13 @@ Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses 
 
 | Group | Places |
 |---|---|
-| AI tools | Codex worktrees, scratch, private work, backups, tasks and conversations; Claude Code's scratchpads in `/private/tmp`; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
-| Developer tools | Build folders in `~/GitHub` and `~/Developer`, and any folder of 500 MB or more that git ignores there; Xcode DerivedData and device support; simulators; iPhone install caches; npm, pip, uv, Yarn, Gradle, Homebrew and Playwright caches; your temporary folder |
+| AI tools | Codex worktrees, scratch, private work, work folders, backups, tasks and conversations; Claude Code's scratchpads in `/private/tmp`; Claude; Hugging Face; LM Studio; Ollama; DiffusionBee |
+| Developer tools | Build folders in `~/GitHub` and `~/Developer`, and any folder of 500 MB or more that git ignores there; Xcode DerivedData and device support; simulators; Android emulator system images and NDKs; iPhone install caches; npm, pip, uv, Yarn, Gradle, Homebrew and Playwright caches; your temporary folder |
 | Virtual machines | Parallels, Docker Desktop, UTM, Android emulators |
 | Games | Steam, CrossOver, OpenEmu, PadMint game versions |
 | Downloads | Your Downloads folder |
 
-Turn any place off in **Settings › Coverage**, or add your own under **Your folders** there (the scan window's **Change Places…** opens it) or with **File › Add Folder to Scan**. Everything outside these places shows as "Everything else"; open it and it sizes the rest of your home folder, Library, Applications and each project in `~/GitHub` and `~/Developer`. When Everything else is large or growing fast, it looks on its own, and the overview names the biggest place and the one that grew most. For Parallels machines and Ollama models, the folder's card shows what's inside: the disk image, snapshots and suspended memory, or each model with the command that removes it.
+Turn any place off in **Settings › Coverage**, or add your own under **Your folders** there (the scan window's **Change Places…** opens it) or with **File › Add Folder to Scan**. Everything outside these places shows as "Everything else"; open it and it sizes the rest of your home folder, Library, Applications and each project in `~/GitHub` and `~/Developer`. Choose **Track** on any folder there to scan it item by item from then on: what sits untouched inside shows up in Free Up Space. When Everything else is large or growing fast, it looks on its own, and the overview names the biggest place and the one that grew most. For Parallels machines and Ollama models, the folder's card shows what's inside: the disk image, snapshots and suspended memory, or each model with the command that removes it.
 
 </details>
 
@@ -142,7 +142,7 @@ No dependencies; needs Xcode on Apple silicon.
 ```sh
 git clone https://github.com/chrissotraidis/contextcleaner.git && cd contextcleaner
 bash build-version.sh /absolute/path/to/new-output      # app, DMG and SHA-256
-bash test-preserving.sh /absolute/path/to/new-tests     # 397 checks, fixtures only
+bash test-preserving.sh /absolute/path/to/new-tests     # 403 checks, fixtures only
 ```
 
 More: [changelog](docs/CHANGELOG.md) · [design notes](docs/DESIGN.md) · [validation records](docs/validation)

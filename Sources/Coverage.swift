@@ -18,6 +18,8 @@ struct CoverageEntry: Identifiable, Hashable {
     /// Short label shown after the app name, e.g. "Codex · Conversations".
     var name: String
     var group: CoverageGroup
+    /// Also folders beside it named the same plus "-…": ~/.codex/work and ~/.codex/work-release, so a new one is found on its own.
+    var andNamedLike = false
     func path(home: String) -> String { relativePath.hasPrefix("/") ? relativePath : home + "/" + relativePath }
     /// The path as you'd type it: ~/.codex/worktrees, or the full path outside your home folder.
     var shownPath: String { relativePath.hasPrefix("/") ? relativePath : "~/" + relativePath }
@@ -74,6 +76,7 @@ enum Coverage {
         CoverageEntry(writer: "Codex", relativePath: ".codex/worktrees", kind: .workspaces, category: .workspace, writes: "Isolated Git checkouts, one per task, measured whole and with their build, generated and work folders.", name: "Worktrees", group: .ai),
         CoverageEntry(writer: "Codex", relativePath: ".codex/scratch", kind: .children, category: .workspace, writes: "Scratch space Codex tasks leave behind: builds, downloads, logs, test copies and device backups.", name: "Scratch", group: .ai),
         CoverageEntry(writer: "Codex", relativePath: ".codex/private", kind: .children, category: .workspace, writes: "Working folders Codex tasks keep out of git: release candidates, validation runs and private inputs.", name: "Private work", group: .ai),
+        CoverageEntry(writer: "Codex", relativePath: ".codex/work", kind: .children, category: .workspace, writes: "Work folders Codex tasks make for one job, here and in folders named work-… beside it: test runs, logs and downloads.", name: "Work folders", group: .ai, andNamedLike: true),
         CoverageEntry(writer: "Codex", relativePath: "Documents/Codex", kind: .children, category: .workspace, writes: "Task outputs, reports and files mentioned in conversations.", name: "Task outputs", group: .ai),
         CoverageEntry(writer: "Codex", relativePath: "Library/Application Support/Codex", kind: .folder, category: .appData, writes: "App state, caches and local databases.", name: "App data", group: .ai),
         CoverageEntry(writer: "Claude", relativePath: "Library/Application Support/Claude", kind: .folder, category: .appData, writes: "App state, caches and local databases.", name: "App data", group: .ai),
@@ -91,6 +94,8 @@ enum Coverage {
         CoverageEntry(writer: "npm", relativePath: ".npm/_npx", kind: .folder, category: .packageCache, writes: "Temporary installs made by npx.", name: "npx installs", group: .developer),
         CoverageEntry(writer: "pip", relativePath: "Library/Caches/pip", kind: .folder, category: .packageCache, writes: "Downloaded wheels and HTTP cache.", name: "Package cache", group: .developer),
         CoverageEntry(writer: "uv", relativePath: ".cache/uv", kind: .folder, category: .packageCache, writes: "Python package archives and built wheels.", name: "Package cache", group: .developer),
+        CoverageEntry(writer: "Android Studio", relativePath: "Library/Android/sdk/system-images", kind: .children, category: .packageCache, writes: "Emulator system images, one per Android version. Android Studio downloads one again when an emulator needs it.", name: "Emulator system images", group: .developer),
+        CoverageEntry(writer: "Android Studio", relativePath: "Library/Android/sdk/ndk", kind: .children, category: .packageCache, writes: "Native development kits, one folder per version. Gradle downloads the version a project asks for.", name: "NDK versions", group: .developer),
         CoverageEntry(writer: "Gradle", relativePath: ".gradle/caches", kind: .folder, category: .packageCache, writes: "Dependency jars, transforms and build caches for Android projects.", name: "Build cache", group: .developer),
         CoverageEntry(writer: "Homebrew", relativePath: "Library/Caches/Homebrew", kind: .folder, category: .packageCache, writes: "Downloaded bottles and casks.", name: "Downloads", group: .developer),
         CoverageEntry(writer: "Yarn", relativePath: "Library/Caches/Yarn", kind: .folder, category: .packageCache, writes: "Downloaded package archives.", name: "Package cache", group: .developer),
@@ -115,6 +120,16 @@ enum Coverage {
         "Any folder you exclude, and anything inside it.",
         "Symbolic links and other volumes reached through a parent folder.",
     ]
+    /// The folders an entry covers: its own, and those named like it beside it.
+    static func roots(_ entry: CoverageEntry, home: String) -> [String] {
+        let root = entry.path(home: home)
+        guard entry.andNamedLike else { return [root] }
+        let parent = (root as NSString).deletingLastPathComponent, prefix = (root as NSString).lastPathComponent + "-"
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: parent)) ?? []
+        return [root] + names.filter { $0.hasPrefix(prefix) }.sorted().map { parent + "/" + $0 }.filter { path in
+            var st = stat(); return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR
+        }
+    }
     static func presence(_ entry: CoverageEntry, home: String) -> CoveragePresence {
         var st = stat()
         if lstat(entry.path(home: home), &st) == 0 { return .present }

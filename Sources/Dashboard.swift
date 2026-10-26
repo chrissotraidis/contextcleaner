@@ -783,6 +783,10 @@ struct StartPanel: View {
                 trashStatus
             }
             Text(explanation(active)).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            if !model.projectsRead {
+                Label("Still asking git about your projects. Folders only on this Mac (Not in git) join the list when it's done.", systemImage: "hourglass")
+                    .font(.caption).foregroundStyle(Color.caution)
+            }
             // Select, total, copy: above the list, always in reach.
             HStack(spacing: 10) {
                 Toggle(isOn: Binding(get: { allTicked }, set: { on in
@@ -960,7 +964,7 @@ struct ElsewhereView: View {
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack {
-                Text("To have Context Cleaner track a folder here, add it with File › Add Folder to Scan.").font(.caption).foregroundStyle(.secondary)
+                Text("Track a folder to scan it item by item from now on. What sits untouched inside it then shows in Free Up Space.").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if !model.elsewhere.isEmpty && !model.lookingElsewhere { Button("Look Again") { model.lookElsewhere() } }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
@@ -998,6 +1002,12 @@ private struct ElsewhereRow: View {
                 if let bytes = item.bytes {
                     SizeBar(fraction: Double(bytes) / largest)
                     Text(byteLabel(bytes)).font(.callout).monospacedDigit().frame(width: 84, alignment: .trailing)
+                }
+                if item.isFolder, item.backup == nil, mayItemize(item.path, home: model.home) {
+                    let tracked = model.preferences.customRoots.contains(item.path)
+                    Button(tracked ? "Tracked" : "Track") { model.track(item.path) }.controlSize(.small).disabled(tracked)
+                        .help(tracked ? "In Your folders. What sits untouched inside it shows in Free Up Space, item by item."
+                              : "Scan it from now on, item by item: what sits untouched inside it shows in Free Up Space. Reads sizes only.")
                 }
                 Button { revealInFinder([item.path]) } label: { Image(systemName: "folder") }
                     .buttonStyle(.borderless).help("Show in Finder").accessibilityLabel("Show in Finder")

@@ -646,7 +646,7 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
             result.staleDays = Int(days)
         }
     }
-    result.short = shortReason(result, m: m, project: project, now: now)
+    if result.short.isEmpty { result.short = shortReason(result, m: m, project: project, now: now) }
     return result
 }
 /// A few words for the Folders list, matching the reason.
@@ -810,6 +810,16 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
     }
     switch m.profile.category {
     case .packageCache:
+        if let sdk = androidSDKItem(path), sdk.kind == "system-images" {
+            let home = String(sdk.sdk.dropLast("/Library/Android/sdk".count))
+            let users = emulatorsUsing(path, avdRoot: home + "/.android/avd")
+            if users.isEmpty { return Advice(verdict: .safe, reason: "No emulator uses this system image. Android Studio downloads it again if you make one that needs it.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
+            let named = users.prefix(3).joined(separator: ", ") + (users.count > 3 ? " and \(users.count - 3) more" : "")
+            // Never suggested: removing it breaks those emulators. Once they're gone, it's Safe to remove.
+            var used = Advice(verdict: .keep, reason: "Used by \(users.count == 1 ? "the emulator" : "\(users.count) emulators") \(named). Without it, \(users.count == 1 ? "it won't" : "they won't") start.", howTo: "Delete emulators you don't need in Android Studio's Device Manager. Once none uses this image, it's Safe to remove.", command: nil, lastUsed: m.latestModifiedAt)
+            used.short = "Used by " + (users.count == 1 ? users[0] : "\(users.count) emulators")
+            return used
+        }
         if let recent = recentlyUsed("This download cache") { return recent }
         let cmd: String? = path.hasSuffix(".npm/_cacache") ? "npm cache clean --force" : path.hasSuffix("Caches/pip") ? "pip cache purge" : path.hasSuffix(".cache/uv") ? "uv cache clean" : path.hasSuffix("Caches/Homebrew") ? "brew cleanup --prune=all" : path.hasSuffix("Caches/Yarn") ? "yarn cache clean" : nil
         return Advice(verdict: .safe, reason: "A download cache. The tool fetches what it needs again.", howTo: cmd == nil ? trash : "Run the tool's own clean command, or: " + trash.lowercased(), command: cmd, lastUsed: m.latestModifiedAt)
@@ -882,6 +892,7 @@ func locationHint(_ path: String) -> String? {
     if let i = parts.firstIndex(of: "backups"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex backup" }
     if let i = parts.firstIndex(of: "scratch"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex scratch" }
     if let i = parts.firstIndex(of: "private"), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex private work" }
+    if let i = parts.firstIndex(where: { $0 == "work" || $0.hasPrefix("work-") }), i > 0, parts[i - 1] == ".codex", i + 1 < parts.count { return "Codex " + parts[i] }
     if let i = parts.firstIndex(of: "games"), i > 0, parts[i - 1] == ".padmint", i + 2 < parts.count { return "PadMint " + parts[i + 1] }
     return nil
 }
@@ -1143,7 +1154,7 @@ func quietText(_ seconds: TimeInterval) -> String {
 /// or when nothing has changed in it for the quiet time and no app has it open: rebuildable output, Codex scratch,
 /// scratch work folders, recovery copies and emulators. Inside folders still in use, their untouched items are listed
 /// instead. Nested folders count once. Kept, ignored and removed folders never appear.
-func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Advice, gone: Set<String>, quiet: TimeInterval, now: Date = Date(), minimum: Int64 = 256 * 1_048_576) -> [Suggestion] {
+func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Advice, gone: Set<String>, quiet: TimeInterval, now: Date = Date(), minimum: Int64 = 256 * 1_048_576, itemized: Set<String> = []) -> [Suggestion] {
     var found: [Suggestion] = []
     let sorted = items.filter { $0.state == .measured && !gone.contains($0.profile.path) }.sorted { $0.profile.path.count < $1.profile.path.count }
     var taken: Set<String> = []
@@ -1169,14 +1180,16 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
             taken.insert(path)
         }
         let irreplaceable = looksIrreplaceable(URL(fileURLWithPath: path).lastPathComponent) || m.profile.category == .backup
+        // A folder you added is never offered whole: what's inside it is, item by item, below.
+        let itemize = itemized.contains(path)
         // Safe answers already say how long it's been unused.
-        if a.verdict == .safe && !irreplaceable { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: worktree); continue }
+        if a.verdict == .safe && !irreplaceable && !itemize { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: worktree); continue }
         // A whole worktree is listed only when git has everything in it. Otherwise its build folders are judged on their own.
         if worktree {
             if a.verdict == .rebuild && isQuiet { add(.rebuild, a.short) }
             continue
         }
-        if isQuiet {
+        if isQuiet && !itemize {
             if irreplaceable {
                 // Backups, saves and recovery copies may be the only copy; recovery copies wait at least three days.
                 if m.profile.category != .backup || scratch || (idle ?? 0) >= max(quiet, 3 * 86400) {
@@ -1201,20 +1214,21 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         }
         // Still in use: offer what inside it has sat untouched, if the folder holds builds, experiments, scratch, or files
         // only on this Mac with a clear reason they may go (Not in git).
-        guard !irreplaceable, rebuildable || isProjectOutput(path) || scratch || temporary || (a.verdict == .check && a.quietLabel != nil) else { continue }
+        guard itemize || (!irreplaceable && (rebuildable || isProjectOutput(path) || scratch || temporary || (a.verdict == .check && a.quietLabel != nil))) else { continue }
         let held = m.processes.map(\.path)
         // A PadMint player check leaves a 20 GiB folder for each run and asks you to delete it. Once nothing has
         // touched it for an hour and no app holds it, it's listed whatever the untouched time: running the check makes it again.
         let isCheck = { (name: String) in temporary && isPlayerCheck(name) }
         for child in staleChildren(m, now: now, days: (temporary ? min(quiet, 3600) : quiet) / 86400, minimum: minimum, backups: true)
-        where !held.contains(where: { containsPath(child.path, $0) }) && !measuredWithin.contains(child.path) && (isCheck(child.name) || child.modifiedAt.map { now.timeIntervalSince($0) >= quiet } == true) {
+        where !held.contains(where: { containsPath(child.path, $0) }) && !measuredWithin.contains(child.path) && !isAppLibrary(child.name) && (isCheck(child.name) || child.modifiedAt.map { now.timeIntervalSince($0) >= quiet } == true) {
             let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
             if isCheck(child.name) {
                 found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: .rebuild,
                                         why: (["Finished PadMint player check"] + [age].compactMap { $0 }).joined(separator: " · "), owner: path, seen: child.modifiedAt))
                 continue
             }
-            let backup = looksIrreplaceable(child.name)
+            // In a folder of backups you added, every item may be the only copy.
+            let backup = looksIrreplaceable(child.name) || (itemize && irreplaceable)
             // macOS itself clears temporary items nothing has used for 3 days.
             let oldTemporary = temporary && !backup && child.modifiedAt.map { now.timeIntervalSince($0) >= 3 * 86400 } == true
             // Inside a scratch or work folder, an item named like build output (DerivedData-…) is rebuilt by building.
@@ -1508,8 +1522,37 @@ func insideParts(_ path: String) -> [InsidePart] {
 
 // MARK: - Codex worktrees
 
-/// Scratch space Codex tasks leave behind: ~/.codex/scratch, and ~/.codex/private for work kept out of git.
-func isCodexScratch(_ path: String) -> Bool { path.contains("/.codex/scratch/") || path.contains("/.codex/private/") }
+/// Where a Codex task left something: "scratch", "private" (kept out of git), "work" or "work-…". Nil for the folder itself.
+func codexScratchArea(_ path: String) -> String? {
+    guard let range = path.range(of: "/.codex/", options: .backwards) else { return nil }
+    let parts = path[range.upperBound...].split(separator: "/", omittingEmptySubsequences: false)
+    guard parts.count >= 2, !parts[1].isEmpty else { return nil }
+    let area = String(parts[0])
+    return ["scratch", "private", "work"].contains(area) || area.hasPrefix("work-") ? area : nil
+}
+/// Space Codex tasks leave behind: scratch, private work and work folders.
+func isCodexScratch(_ path: String) -> Bool { codexScratchArea(path) != nil }
+/// An item in the Android SDK that Android Studio or Gradle downloads again: ("system-images", …) or ("ndk", …).
+func androidSDKItem(_ path: String) -> (kind: String, sdk: String)? {
+    guard let range = path.range(of: "/Library/Android/sdk/") else { return nil }
+    let parts = path[range.upperBound...].split(separator: "/")
+    guard parts.count == 2, ["system-images", "ndk"].contains(parts[0]) else { return nil }
+    return (String(parts[0]), String(path[..<range.upperBound].dropLast()))
+}
+/// The emulators whose settings name this system image (~/.android/avd/NAME.avd/config.ini, image.sysdir.1).
+/// An emulator whose settings can't be read counts as using it.
+func emulatorsUsing(_ image: String, avdRoot: String) -> [String] {
+    let api = (image as NSString).lastPathComponent
+    let avds = ((try? FileManager.default.contentsOfDirectory(atPath: avdRoot)) ?? []).filter { $0.hasSuffix(".avd") }.sorted()
+    return avds.filter { avd in
+        let config = avdRoot + "/" + avd + "/config.ini"
+        guard FileManager.default.fileExists(atPath: config) else { return false }   // no settings: it can't start at all
+        guard let text = try? String(contentsOfFile: config, encoding: .utf8) else { return true }
+        return text.split(whereSeparator: \.isNewline).contains { line in
+            line.hasPrefix("image.sysdir.") && line.split(separator: "=", maxSplits: 1).last.map { $0.trimmingCharacters(in: .whitespaces).hasPrefix("system-images/" + api + "/") } == true
+        }
+    }.map { String($0.dropLast(4)) }
+}
 /// One game version PadMint downloaded and built: ~/.padmint/games/kartpad-v0.7.9.
 func isPadMintGame(_ path: String) -> Bool { (path as NSString).deletingLastPathComponent.hasSuffix("/.padmint/games") }
 /// "kartpad-v0.7.9" → ("kartpad", [0, 7, 9]).
@@ -1518,6 +1561,20 @@ func nameAndVersion(_ name: String) -> (name: String, version: [Int])? {
     let parts = name[range.upperBound...].split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
     guard !parts.isEmpty, parts.allSatisfy({ $0 != nil }) else { return nil }
     return (String(name[..<range.lowerBound]), parts.compactMap { $0 })
+}
+/// A folder from Everything else Context Cleaner can scan item by item: in your home folder, not a projects folder
+/// (each project there is already looked at), and where every item inside could go in a Trash command.
+func mayItemize(_ path: String, home: String) -> Bool {
+    guard path.hasPrefix(home + "/"), pathFitsCommand(path + "/item", home: home, temporary: []) else { return false }
+    let relative = String(path.dropFirst(home.count + 1)), first = String(relative.split(separator: "/").first ?? "")
+    // Apps keep their own libraries and data here; they're managed in the apps.
+    let appData = ["Library/Application Support", "Library/Containers", "Library/Group Containers", "Library/Mail", "Library/Messages"]
+    return !Coverage.projectRoots.contains(first) && relative != "Library" && !appData.contains { relative == $0 || relative.hasPrefix($0 + "/") }
+}
+/// A library an app manages as one item (Photos, Music, iMovie, Final Cut): never a Trash suggestion.
+func isAppLibrary(_ name: String) -> Bool {
+    let n = name.lowercased()
+    return [".photoslibrary", ".musiclibrary", ".imovielibrary", ".fcpbundle", ".tvlibrary", ".aplibrary", ".migratedphotolibrary"].contains { n.hasSuffix($0) }
 }
 /// The newest folder beside this one with the same name and a higher version: "kartpad-v0.7.9" for kartpad-v0.7.8.
 func newerVersionBeside(_ path: String) -> String? {

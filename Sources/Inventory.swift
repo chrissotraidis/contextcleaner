@@ -61,7 +61,7 @@ struct Inventory {
             let root = entry.path(home: home)
             switch entry.kind {
             case .folder: add(root)
-            case .children: for p in children(root) { add(p) }
+            case .children: for folder in Coverage.roots(entry, home: home) where !preferences.excluded(folder) { for p in children(folder) { add(p) } }
             case .projects, .workspaces:
                 for project in children(root) {
                     var st = stat(); guard lstat(project, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR else { continue }

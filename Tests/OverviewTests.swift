@@ -390,6 +390,49 @@ import Foundation
         runningVM.processes = [ProcessEvidence(pid: 1, command: "prl_vm_app", access: "open", path: "/Users/x/Parallels/Windows 11.pvm/harddisk.hdd")]
         check(advice(for: runningVM, policy: LocationPolicy(), devices: [:], now: now).short == "Running at last scan",
               "a virtual machine its app has open says it was running, not just open")
+        // 0.24: finding more over time.
+        check(codexScratchArea("/Users/x/.codex/work-bluewake-triage/run1") == "work-bluewake-triage" && codexScratchArea("/Users/x/.codex/work/a") == "work"
+              && codexScratchArea("/Users/x/.codex/work") == nil && codexScratchArea("/Users/x/.codex/worktrees/kp") == nil && codexScratchArea("/Users/x/.codex/sessions/a") == nil,
+              "Codex work folders, work and work-…, are scratch like ~/.codex/scratch; worktrees and conversations aren't")
+        let sdkHome = "/private/tmp/cc-sdk-" + UUID().uuidString
+        let images = sdkHome + "/Library/Android/sdk/system-images", avds = sdkHome + "/.android/avd"
+        for dir in [images + "/android-28", images + "/android-36", sdkHome + "/Library/Android/sdk/ndk/29.0.1", avds + "/Phone.avd", avds + "/Empty.avd"] { try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
+        try? Data("avd.ini.encoding=UTF-8\nimage.sysdir.1=system-images/android-36/google_apis/arm64-v8a/\n".utf8).write(to: URL(fileURLWithPath: avds + "/Phone.avd/config.ini"))
+        func sdkItem(_ path: String) -> FolderMeasurement {
+            var m = FolderMeasurement(profile: Classifier.profile(path: path, home: sdkHome, readMetadata: false), observedAt: now, state: .measured, allocatedBytes: 3 * gib, fileCount: 1, processes: [], activityCheckAvailable: false, elapsedSeconds: 0)
+            m.latestModifiedAt = now.addingTimeInterval(-60 * 86400); return m
+        }
+        let unusedImage = sdkItem(images + "/android-28"), usedImage = sdkItem(images + "/android-36"), ndk = sdkItem(sdkHome + "/Library/Android/sdk/ndk/29.0.1")
+        check(unusedImage.profile.displayName == "Android 28 system image" && ndk.profile.displayName == "NDK 29.0.1" && emulatorsUsing(images + "/android-36", avdRoot: avds) == ["Phone"]
+              && emulatorsUsing(images + "/android-28", avdRoot: avds).isEmpty,
+              "system images and NDKs are named for their version; an emulator folder with no settings doesn't count as using an image")
+        let usedAdvice = advice(for: usedImage, policy: LocationPolicy(), devices: [:], now: now)
+        check(advice(for: unusedImage, policy: LocationPolicy(), devices: [:], now: now).verdict == .safe && usedAdvice.verdict == .keep && usedAdvice.short == "Used by Phone"
+              && advice(for: ndk, policy: LocationPolicy(), devices: [:], now: now).verdict == .safe
+              && suggestions([unusedImage, usedImage, ndk], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 3 * 86400, now: now).map(\.name).sorted() == ["Android 28 system image", "NDK 29.0.1"],
+              "a system image no emulator uses is Safe to remove; one an emulator uses is never suggested and names it; an old NDK is Safe")
+        try? FileManager.default.createDirectory(atPath: sdkHome + "/.codex/work-release/run", withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: sdkHome + "/.codex/work/run", withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(atPath: sdkHome + "/.codex/worktrees/kp", withIntermediateDirectories: true)
+        let workEntry = Coverage.entries.first { $0.relativePath == ".codex/work" }!
+        check(Coverage.roots(workEntry, home: sdkHome) == [sdkHome + "/.codex/work", sdkHome + "/.codex/work-release"],
+              "the work entry covers work and every work-… folder beside it, new ones included, and not worktrees")
+        var backupsRoot = aged("/Users/x/Backups", .unknown, hours: 2, gib: 180), movies = aged("/Users/x/Movies", .unknown, hours: 24 * 90, gib: 75)
+        backupsRoot.contents = FolderContents(children: [ChildSummary(name: "kartpad", directory: true, identity: "1", bytes: 160 * gib, files: 9, modifiedAt: now.addingTimeInterval(-40 * 86400)),
+                                                     ChildSummary(name: "today", directory: true, identity: "2", bytes: 20 * gib, files: 9, modifiedAt: now.addingTimeInterval(-3600))],
+                                          fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        movies.contents = FolderContents(children: [ChildSummary(name: "Old cut", directory: true, identity: "3", bytes: 70 * gib, files: 9, modifiedAt: now.addingTimeInterval(-90 * 86400)),
+                                                    ChildSummary(name: "iMovie Library.imovielibrary", directory: true, identity: "4", bytes: 5 * gib, files: 9, modifiedAt: now.addingTimeInterval(-90 * 86400))],
+                                         fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
+        let trackedList = suggestions([backupsRoot, movies], advice: adviseFor, gone: [], quiet: 7 * 86400, now: now, itemized: [backupsRoot.profile.path, movies.profile.path])
+        check(trackedList.map(\.name) == ["kartpad", "Old cut"] && trackedList.allSatisfy { $0.cost == .check && $0.owner != nil } && trackedList[0].backup && !trackedList[1].backup
+              && suggestions([backupsRoot, movies], advice: adviseFor, gone: [], quiet: 7 * 86400, now: now).isEmpty,
+              "a folder you track is listed item by item, never whole: untouched items only, Review first, every item in a backups folder marked a backup, and an app's library never")
+        check(mayItemize("/Users/x/Backups", home: "/Users/x") && mayItemize("/Users/x/Library/Caches", home: "/Users/x") && !mayItemize("/Users/x/GitHub", home: "/Users/x")
+              && !mayItemize("/Users/x/GitHub/app", home: "/Users/x") && !mayItemize("/Users/x/Library", home: "/Users/x") && !mayItemize("/Applications", home: "/Users/x")
+              && !mayItemize("/Users/x/.ssh", home: "/Users/x") && !mayItemize("/Users/x/Library/Mobile Documents", home: "/Users/x")
+              && !mayItemize("/Users/x/Library/Application Support", home: "/Users/x") && !mayItemize("/Users/x/Library/Containers/com.x", home: "/Users/x"),
+              "Track is offered only where every item inside could go in a Trash command, and not for projects folders, which are already looked at")
         check(isProjectBuildOutput("/Users/x/GitHub/site/.next") && isProjectBuildOutput("/Users/x/GitHub/game/obj") && !isProjectBuildOutput("/Users/x/Documents/obj"),
               "Next.js's .next and .NET's obj inside a project are build output; elsewhere they're just names")
         let codexPrivate = aged("/Users/x/.codex/private/kartpad-release-084", .workspace, hours: 24 * 4, gib: 48)

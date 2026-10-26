@@ -43,8 +43,8 @@ struct Classifier {
             assign(.debugSymbols, url.lastPathComponent, "Xcode", "Debugging support for the device and OS version named by this directory.", "Old crash reports may need these symbols. A newer folder does not prove this version is unused.")
         } else if containsPath(home + "/.codex/backups", path) {
             assign(.backup, url.lastPathComponent + " recovery backup", "Codex workspace", "Recovery copy associated with Codex. Its contents and creation process have not been independently verified.", "Preserve unless another complete recovery copy has been verified. Uncommitted source and device saves may be unique.")
-        } else if let scratch = [home + "/.codex/scratch", home + "/.codex/private"].first(where: { containsPath($0, path) && path != $0 }) {
-            let app = scratch.hasSuffix("/private") ? "Codex private work" : "Codex scratch"
+        } else if path.hasPrefix(home + "/.codex/"), let area = codexScratchArea(path) {
+            let app = area == "scratch" ? "Codex scratch" : area == "private" ? "Codex private work" : "Codex work folder"
             if url.lastPathComponent.lowercased().contains("backup") {
                 assign(.backup, url.lastPathComponent, app, "A backup a Codex task saved, such as app data copied off a device.", "It may be the only copy. Check you have these files elsewhere first.")
             } else {
@@ -52,6 +52,10 @@ struct Classifier {
             }
         } else if isPadMintGame(path) {
             assign(.workspace, url.lastPathComponent, "PadMint", "A game's source PadMint downloaded to build one version, with its build output and any game files you gave it.", "PadMint downloads it again if you build this version again. Game files you gave it may be inside; keep your own copy.")
+        } else if let sdk = androidSDKItem(path) {
+            assign(.packageCache, sdk.kind == "ndk" ? "NDK " + url.lastPathComponent : "Android " + url.lastPathComponent.replacingOccurrences(of: "android-", with: "") + " system image", "Android Studio",
+                   sdk.kind == "ndk" ? "A native development kit Gradle downloaded for projects that build C and C++ code." : "The Android system an emulator boots, for one Android version.",
+                   sdk.kind == "ndk" ? "Gradle downloads it again for a project that asks for this version." : "Android Studio downloads it again for an emulator that needs it.")
         } else if containsPath(home + "/.ollama/models", path) {
             assign(.model, "Ollama models", "Ollama", "Language models downloaded with Ollama.", "Removing a model means downloading it again to use it.")
         } else if containsPath(home + "/.diffusionbee", path) {

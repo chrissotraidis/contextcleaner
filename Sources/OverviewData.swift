@@ -823,7 +823,8 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         if isCodexScratch(path) { return Advice(verdict: .check, reason: "Left behind by a Codex task: builds, downloads, logs or test copies. Codex doesn't clean these up.", howTo: "If the task is done, look for anything you made by hand, then move the folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         if isPadMintGame(path), let newer = newerVersionBeside(path) {
             var older = Advice(verdict: .check, reason: "Source PadMint downloaded to build this version. It builds the latest release, \(newer), which sits beside it, and downloads this one again only if you build this version again.", howTo: "Game files you gave PadMint may be inside. If you have your own copy of them, move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
-            older.quietLabel = "Older PadMint version, \(newer) beside it"
+            // The part before " · " is the kind Free up space groups by, so every older version is one group.
+            older.quietLabel = "Older PadMint version · \(newer) beside it"
             return older
         }
         if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch space for \(project): logs, test installs and experiments. It can also hold files you made by hand.", howTo: "Remove the experiment folders you're done with. Keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }

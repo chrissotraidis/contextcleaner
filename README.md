@@ -42,7 +42,7 @@ Coding agents, Xcode, simulators and package managers write a lot to disk and ne
 
 1. **Scan.** It measures the places where these tools pile up data (sizes and dates only), and reads git, read-only, for project folders.
 2. **Answer.** Every folder gets one answer, with the reason and evidence on its card.
-3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or group **By kind**, tick what you want gone, and copy one command (⇧⌘C). Review first folders with a plain reason they may go are listed too, such as a folder git ignores that nothing has touched (Not in git) or a game version PadMint has replaced; they're never ticked for you. Big commands, and any with Review first items, ask once before copying. Folders works the same way: tick folders, copy one command.
+3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or group **By kind**, tick what you want gone, and copy one command (⇧⌘C). Review first folders with a plain reason they may go are listed too, such as a folder git ignores that nothing has touched (Not in git) or a game version PadMint has replaced. They start unticked; Select All includes them, and copying any of them asks first. Big commands, and any with Review first items, ask once before copying. Folders works the same way: tick folders, copy one command.
 4. **You run it.** Paste it in your terminal (Terminal, Ghostty, iTerm and others; the button beside Copy opens the one you pick in Settings). It moves each item to the Trash, prints what happened to each, and Context Cleaner records the cleanup in **History**. Put Back works.
 
 | Answer | What removing it costs |
@@ -142,7 +142,7 @@ No dependencies; needs Xcode on Apple silicon.
 ```sh
 git clone https://github.com/chrissotraidis/contextcleaner.git && cd contextcleaner
 bash build-version.sh /absolute/path/to/new-output      # app, DMG and SHA-256
-bash test-preserving.sh /absolute/path/to/new-tests     # 393 checks, fixtures only
+bash test-preserving.sh /absolute/path/to/new-tests     # 394 checks, fixtures only
 ```
 
 More: [changelog](docs/CHANGELOG.md) · [design notes](docs/DESIGN.md) · [validation records](docs/validation)

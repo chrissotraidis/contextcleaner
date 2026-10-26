@@ -393,9 +393,11 @@ import Foundation
               "an older game version knows the newest one beside it, comparing numbers (0.7.10 comes after 0.7.9)")
         let oldGame = aged(games.path + "/kartpad-v0.7.8", .workspace, hours: 24 * 4, gib: 12), newGame = aged(games.path + "/kartpad-v0.7.10", .workspace, hours: 24 * 4, gib: 12)
         let gameList = suggestions([oldGame, newGame], advice: adviseFor, gone: [], quiet: 3 * 86400, now: now)
-        check(oldGame.profile.associatedApp == "PadMint" && gameList.map(\.name) == ["kartpad-v0.7.8"] && gameList[0].cost == .check && gameList[0].why == "Older PadMint version, kartpad-v0.7.10 beside it · untouched 4 days"
-              && adviseFor(oldGame).short == "Older PadMint version, kartpad-v0.7.10 beside it",
+        check(oldGame.profile.associatedApp == "PadMint" && gameList.map(\.name) == ["kartpad-v0.7.8"] && gameList[0].cost == .check && gameList[0].why == "Older PadMint version · kartpad-v0.7.10 beside it · untouched 4 days"
+              && adviseFor(oldGame).short == "Older PadMint version · kartpad-v0.7.10 beside it",
               "an older PadMint game version is Review first, says which version replaced it, and is listed once untouched; the newest isn't")
+        let olderTwo = suggestions([oldGame, aged(games.path + "/kartpad-v0.7.9", .workspace, hours: 24 * 4, gib: 8)], advice: adviseFor, gone: [], quiet: 3 * 86400, now: now)
+        check(olderTwo.count == 2 && Set(olderTwo.map(\.kind)) == ["Older PadMint version"], "By kind puts every older PadMint version in one group, so one tick box covers them")
         // 0.19: whole Codex worktrees, judged by git.
         func kept(changes: Int? = 0, ignored: [String] = [], branch: String? = "codex/fix", main: String? = "/") -> RepoBackup {
             RepoBackup(hasRemote: true, unpushed: 2, changes: changes, stashes: 0, unkeptIgnored: ignored, lastCommit: nil, isWorktree: true, branch: branch, worktrees: 0, lastActivity: nil, mainRepository: main)

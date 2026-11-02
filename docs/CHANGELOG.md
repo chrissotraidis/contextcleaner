@@ -2,6 +2,12 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.24.1
+
+- **A Parallels drive is never moved.** A machine can keep a drive in another folder; here a Codex worktree held a 36 GiB second drive for Windows 11. With the machine suspended, nothing had it open, so ticking that worktree and copying a command would have broken the machine. Any folder holding a drive a Parallels machine uses is now Not for the Trash ("Drive of Windows 11") and refused when a command is copied.
+- **The machine's card says whether Reclaim Disk Space would help.** It lists drives kept elsewhere and, while the machine is stopped or suspended, Parallels' own estimate of what Reclaim Disk Space frees. When Windows is using all of its disk, it says to delete files inside Windows first.
+- **"Not running now"**, on the row and the card, for a machine that was running at the last scan but isn't any more.
+
 ## 0.24.0
 
 Finding more to delete, and more over time.

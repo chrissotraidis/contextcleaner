@@ -433,6 +433,23 @@ import Foundation
               && !mayItemize("/Users/x/.ssh", home: "/Users/x") && !mayItemize("/Users/x/Library/Mobile Documents", home: "/Users/x")
               && !mayItemize("/Users/x/Library/Application Support", home: "/Users/x") && !mayItemize("/Users/x/Library/Containers/com.x", home: "/Users/x"),
               "Track is offered only where every item inside could go in a Trash command, and not for projects folders, which are already looked at")
+        // 0.24.1: Parallels drives kept outside the machine.
+        let pHome = "/private/tmp/cc-prl-" + UUID().uuidString, winPvm = pHome + "/Parallels/Win & Co.pvm", outside = pHome + "/.codex/worktrees/route/vm/build.hdd"
+        for dir in [winPvm + "/harddisk.hdd", outside] { try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
+        try? Data("<Hdd id=\"0\"><SystemName>harddisk.hdd</SystemName></Hdd><CdRom><SystemName>/Users/x/Downloads/win.iso</SystemName></CdRom><Hdd id=\"1\"><SystemName>\(outside.replacingOccurrences(of: "&", with: "&amp;"))</SystemName></Hdd>".utf8).write(to: URL(fileURLWithPath: winPvm + "/config.pvs"))
+        try? Data().write(to: URL(fileURLWithPath: winPvm + "/vm.lock"))
+        let machines = parallelsMachines(home: pHome)
+        check(parallelsDisks(winPvm) == [winPvm + "/harddisk.hdd", outside] && machines.disks[outside] == "Win & Co" && machines.running == [winPvm],
+              "a machine's drives come from its settings, in the machine or elsewhere, CDs left out; a vm.lock means it's running")
+        check(vmDisk(in: pHome + "/.codex/worktrees/route", disks: machines.disks)?.vm == "Win & Co" && vmDisk(in: outside, disks: machines.disks) != nil
+              && vmDisk(in: outside + "/part.hds", disks: machines.disks) != nil && vmDisk(in: pHome + "/.codex/worktrees/other", disks: machines.disks) == nil,
+              "a folder holding a machine's drive, the drive and anything in it are known; folders beside it aren't")
+        check(compactEstimate("Sector size:  512\n Block size:  2048\n Total blocks: 262144\n Allocated blocks: 245703\n Used blocks: 240583\n") == 5120 * 1_048_576
+              && compactEstimate("Operation progress 100 %") == nil,
+              "Parallels' estimate is read as blocks allocated but no longer used")
+        let prlParts = parallelsParts(winPvm)
+        check(prlParts.contains { $0.name == "Disk build.hdd" && $0.detail.contains("Moving that folder to the Trash breaks the machine") } && prlParts.allSatisfy { !$0.detail.contains("frees about") },
+              "a machine's card lists a drive kept elsewhere, and while it runs doesn't ask Parallels for an estimate")
         check(isProjectBuildOutput("/Users/x/GitHub/site/.next") && isProjectBuildOutput("/Users/x/GitHub/game/obj") && !isProjectBuildOutput("/Users/x/Documents/obj"),
               "Next.js's .next and .NET's obj inside a project are build output; elsewhere they're just names")
         let codexPrivate = aged("/Users/x/.codex/private/kartpad-release-084", .workspace, hours: 24 * 4, gib: 48)

@@ -863,7 +863,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         let docker = app == "Docker Desktop"
         let howTo = docker ? "In Docker Desktop, remove images and containers you no longer need, or lower the disk limit in Settings › Resources. This command shows how much is reclaimable:"
             : app == "Android Emulator" ? "In Android Studio, open Device Manager, then delete the device. That removes its disk and snapshots."
-            : app == "Parallels Desktop" ? "In Parallels Desktop's Control Center, delete old snapshots or use Reclaim Disk Space to shrink it. To remove the whole machine, right-click it › Remove."
+            : app == "Parallels Desktop" ? "Delete files inside the machine, then use Reclaim Disk Space in Parallels' Control Center (right-click the machine). Shut it down instead of suspending it to drop its saved memory. To remove the whole machine, right-click it › Remove."
             : "Remove or shrink it inside \(app)."
         // Open files come from the last scan; say when, since the machine may have been shut down or suspended since.
         let running = m.processes.isEmpty ? "" : " It was running at the last scan, \(ageText(m.observedAt, now: now))."
@@ -1458,26 +1458,98 @@ func allocatedSize(_ path: String) -> Int64 {
     }
     return total
 }
-/// What's inside a Parallels virtual machine (.pvm): its disk image and snapshots, suspended memory and logs. Metadata only.
+/// The disks a Parallels machine uses, from its config.pvs: absolute paths to each .hdd. Read-only.
+func parallelsDisks(_ pvm: String) -> [String] {
+    guard let data = MetadataReader.data(pvm + "/config.pvs", preferences: Preferences()) else { return [] }
+    var rest = Substring(String(decoding: data, as: UTF8.self)), disks: [String] = []
+    while let open = rest.range(of: "<SystemName>"), let close = rest.range(of: "</SystemName>", range: open.upperBound..<rest.endIndex) {
+        let value = rest[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&apos;", with: "'").replacingOccurrences(of: "&amp;", with: "&")
+        if value.lowercased().hasSuffix(".hdd") { disks.append(normalized(value.hasPrefix("/") ? value : pvm + "/" + value)) }
+        rest = rest[close.upperBound...]
+    }
+    return disks
+}
+/// Every disk the Parallels machines in ~/Parallels use, with the machine's name, and the machines running now
+/// (Parallels keeps a vm.lock in a machine while it runs).
+func parallelsMachines(home: String) -> (disks: [String: String], running: Set<String>) {
+    let root = home + "/Parallels"
+    var disks: [String: String] = [:], running: Set<String> = []
+    for name in (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? [] where name.hasSuffix(".pvm") {
+        let pvm = root + "/" + name
+        for disk in parallelsDisks(pvm) { disks[disk] = (name as NSString).deletingPathExtension }
+        if FileManager.default.fileExists(atPath: pvm + "/vm.lock") { running.insert(pvm) }
+    }
+    return (disks, running)
+}
+/// A disk a virtual machine uses that's in this folder, or that this folder is part of. Moving it breaks the machine.
+func vmDisk(in path: String, disks: [String: String]) -> (disk: String, vm: String)? {
+    disks.first { containsPath(path, $0.key) || containsPath($0.key, path) }.map { ($0.key, $0.value) }
+}
+/// How much Parallels' Reclaim Disk Space would free on a disk now: prl_disk_tool's estimate, which changes nothing.
+/// Nil when Parallels' tool isn't there or doesn't answer in time.
+func parallelsReclaimable(_ hdd: String) -> Int64? {
+    let tool = "/Applications/Parallels Desktop.app/Contents/MacOS/prl_disk_tool"
+    guard FileManager.default.isExecutableFile(atPath: tool) else { return nil }
+    let process = Process(), pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: tool)
+    process.arguments = ["compact", "-i", "--hdd", hdd]
+    process.standardInput = FileHandle.nullDevice; process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return nil }
+    let pid = process.processIdentifier
+    DispatchQueue.global().asyncAfter(deadline: .now() + 20) { [weak process] in if process?.isRunning == true { process?.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 22) { [weak process] in if process?.isRunning == true { kill(pid, SIGKILL) } }
+    let data = readAll(pipe)
+    process.waitUntilExit()
+    guard process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
+    return compactEstimate(String(decoding: data, as: UTF8.self))
+}
+/// Bytes compacting frees, from prl_disk_tool compact --info: allocated blocks no longer used.
+func compactEstimate(_ text: String) -> Int64? {
+    func value(_ label: String) -> Int64? {
+        text.split(whereSeparator: \.isNewline).first { $0.contains(label + ":") }
+            .flatMap { $0.split(separator: ":").last.flatMap { Int64($0.trimmingCharacters(in: .whitespaces)) } }
+    }
+    guard let sector = value("Sector size"), let block = value("Block size"), let allocated = value("Allocated blocks"), let used = value("Used blocks"),
+          sector > 0, block > 0, allocated >= used else { return nil }
+    return (allocated - used) * block * sector
+}
+/// What's inside a Parallels virtual machine (.pvm): its disks and snapshots, suspended memory and logs, and how much
+/// Reclaim Disk Space would free. Metadata and Parallels' own estimate only.
 func parallelsParts(_ pvm: String) -> [InsidePart] {
     guard let names = try? FileManager.default.contentsOfDirectory(atPath: pvm) else { return [] }
     var parts: [InsidePart] = []
     var memory: Int64 = 0, logs: Int64 = 0
+    // Parallels holds a running machine's disks; it's only asked about them while the machine is stopped or suspended.
+    let running = FileManager.default.fileExists(atPath: pvm + "/vm.lock")
+    func reclaimNote(_ hdd: String) -> String {
+        if running { return " Shut the machine down or suspend it to see how much Reclaim Disk Space would free." }
+        guard let free = parallelsReclaimable(hdd) else { return " Files you delete inside the machine come back to this Mac only after Parallels › Reclaim Disk Space." }
+        if free >= 512 * 1_048_576 { return " Reclaim Disk Space in Parallels frees about \(byteLabel(free)) now." }
+        return " Everything on it is in use inside the machine, so Reclaim Disk Space frees nothing yet. Delete files inside the machine first, then Reclaim Disk Space."
+    }
+    let disks = parallelsDisks(pvm)
     for name in names {
         let path = pvm + "/" + name, lower = name.lowercased()
         if lower.hasSuffix(".hdd") {
             let files = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-            let layers = files.filter { $0.hasSuffix(".hds") }
-            let snapshots = max(0, layers.count - 1)
+            let snapshots = max(0, files.filter { $0.hasSuffix(".hds") }.count - 1)
             parts.append(InsidePart(name: "Disk image" + (snapshots > 0 ? " and \(snapshots) \(snapshots == 1 ? "snapshot" : "snapshots")" : ""),
-                                    detail: snapshots > 0 ? "The virtual drive. Each snapshot keeps an extra layer; delete old ones in Parallels › Manage Snapshots."
-                                                          : "The virtual drive. Files you delete inside the machine come back to this Mac only after Parallels › Reclaim Disk Space.",
+                                    detail: (snapshots > 0 ? "The virtual drive. Each snapshot keeps an extra layer; delete old ones in Parallels › Manage Snapshots." : "The virtual drive.") + reclaimNote(path),
                                     bytes: allocatedSize(path)))
         } else if lower.hasSuffix(".mem") || lower.hasSuffix(".sav") {
             memory += allocatedSize(path)
         } else if lower.hasSuffix(".log") {
             logs += allocatedSize(path)
         }
+    }
+    // A disk kept in another folder is counted there, not in the machine, so it's easy to miss.
+    for disk in disks where !containsPath(pvm, disk) && FileManager.default.fileExists(atPath: disk) {
+        let folder = abbreviatedPath((disk as NSString).deletingLastPathComponent)
+        parts.append(InsidePart(name: "Disk " + (disk as NSString).lastPathComponent,
+                                detail: "A drive this machine uses, kept in \(folder) and counted there. Moving that folder to the Trash breaks the machine; remove the drive in Parallels › Configure › Hardware first." + reclaimNote(disk),
+                                bytes: allocatedSize(disk)))
     }
     if memory > 0 { parts.append(InsidePart(name: "Suspended memory", detail: "Saved when the machine was suspended. Shut it down from inside instead of suspending it, and this goes.", bytes: memory)) }
     if logs > 0 { parts.append(InsidePart(name: "Logs", detail: "Parallels' own logs.", bytes: logs)) }

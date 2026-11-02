@@ -88,6 +88,9 @@ struct FolderRow: Identifiable {
     @Published var showYourFolders = false
     /// Simulators as Xcode reports them, keyed by device ID. Read-only.
     @Published var simDevices: [String: SimDevice] = [:] { didSet { discoveryVersion += 1 } }
+    /// Disks Parallels machines use (path → machine name), and the machines running now. Read from their settings.
+    @Published var vmDisks: [String: String] = [:] { didSet { discoveryVersion += 1 } }
+    @Published var runningVMs: Set<String> = [] { didSet { discoveryVersion += 1 } }
     /// Known folders that no longer exist on disk.
     @Published var gone: Set<String> = [] { didSet { discoveryVersion += 1 } }
     /// Discovered paths that are files, not folders. Hidden from the lists.
@@ -111,10 +114,11 @@ struct FolderRow: Identifiable {
     @Published var created: [String: Date] = [:] { didSet { discoveryVersion += 1 } }
     /// Checks which known folders are gone, and when each was created. Metadata only.
     func refreshGone() {
-        let paths = Array(Set(discovery.profiles.map(\.path) + latest.map(\.profile.path)))
+        let paths = Array(Set(discovery.profiles.map(\.path) + latest.map(\.profile.path))), home = home
         DispatchQueue.global(qos: .utility).async {
             let missing = missingPaths(paths)
             let files = fileOnlyPaths(paths)
+            let machines = parallelsMachines(home: home)
             var born: [String: Date] = [:]
             for path in paths where !missing.contains(path) {
                 if let date = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.creationDateKey]).creationDate { born[path] = date }
@@ -123,6 +127,8 @@ struct FolderRow: Identifiable {
                 if missing != self.gone { self.gone = missing }
                 if files != self.fileOnly { self.fileOnly = files }
                 if born != self.created { self.created = born }
+                if machines.disks != self.vmDisks { self.vmDisks = machines.disks }
+                if machines.running != self.runningVMs { self.runningVMs = machines.running }
             }
         }
     }
@@ -136,6 +142,15 @@ struct FolderRow: Identifiable {
         let path = m.profile.path
         let worktree: WorktreeGit? = isWorktreeFolder(path) ? (worktrees[path].map { .read($0) } ?? (projectsRead ? .noRepository : .unread)) : nil
         var value = advice(for: m, policy: preferences.policy(path), devices: simDevices, project: project(for: path), worktree: worktree)
+        if m.profile.category != .virtualMachine, let held = vmDisk(in: path, disks: vmDisks) {
+            // Never in a Trash command: the machine wouldn't start or resume without it.
+            value = Advice(verdict: .keep, reason: "Holds \((held.disk as NSString).lastPathComponent), a drive the Parallels machine \(held.vm) uses. Without it, \(held.vm) won't start or resume.",
+                           howTo: "Remove the drive from \(held.vm) in Parallels › Configure › Hardware first; then this folder can go.", command: nil, lastUsed: value.lastUsed)
+            value.short = "Drive of \(held.vm)"
+        } else if path.hasSuffix(".pvm"), !m.processes.isEmpty, !runningVMs.contains(path) {
+            value.short = "Not running now"
+            value.reason += " It isn't running now."
+        }
         // Until git activity has been read, a project folder can't be called safe: it may be work in progress.
         if !projectsRead, value.verdict == .safe, [.workspace, .buildOutput].contains(m.profile.category), !m.profile.path.contains("/DerivedData") {
             var held = Advice(verdict: .check, reason: "Checking its project's git activity before answering. " + value.reason, howTo: value.howTo, command: value.command, lastUsed: value.lastUsed)
@@ -781,7 +796,8 @@ struct FolderRow: Identifiable {
         let byPath = Dictionary(items.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
         let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600, minimum: Self.suggestionMinimum,
                                 itemized: Set(preferences.customRoots.map(normalized)))
-            .filter { !trashedSinceScan.contains($0.path) && !vanished.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false) }
+            .filter { !trashedSinceScan.contains($0.path) && !vanished.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false)
+                && vmDisk(in: $0.path, disks: vmDisks) == nil }
         suggestionCache = (key, value)
         return value
     }
@@ -879,8 +895,11 @@ struct FolderRow: Identifiable {
         if paths.count == 1, let bytes, sizes[paths[0]] == 0 { sizes[paths[0]] = bytes }
         // Paths that may never be in a command are left out before anything is read.
         let roots = Coverage.temporaryRoots()
-        let refused = paths.filter { !pathFitsCommand($0, home: home, temporary: roots) }
-        let items = paths.filter { pathFitsCommand($0, home: home, temporary: roots) }.map { (path: $0, seen: knownSeen[$0] ?? seenDate($0)) }
+        // A virtual machine's drive is never moved, however it was ticked: read the machines' settings now.
+        let machineDisks = parallelsMachines(home: home).disks
+        let allowed = { (path: String) in pathFitsCommand(path, home: self.home, temporary: roots) && vmDisk(in: path, disks: machineDisks) == nil }
+        let refused = paths.filter { !allowed($0) }
+        let items = paths.filter(allowed).map { (path: $0, seen: knownSeen[$0] ?? seenDate($0)) }
         // Worktrees offered because git had everything in them get the same git check again, in full.
         let cleanTrees = paths.filter { isWorktreeFolder($0) && worktrees[$0]?.keepsEverything == true }
         state.start(paths)

@@ -2,10 +2,14 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
-## 0.24.1
+## 0.25.0
 
-- **A Parallels drive is never moved.** A machine can keep a drive in another folder; here a Codex worktree held a 36 GiB second drive for Windows 11. With the machine suspended, nothing had it open, so ticking that worktree and copying a command would have broken the machine. Any folder holding a drive a Parallels machine uses is now Not for the Trash ("Drive of Windows 11") and refused when a command is copied.
-- **The machine's card says whether Reclaim Disk Space would help.** It lists drives kept elsewhere and, while the machine is stopped or suspended, Parallels' own estimate of what Reclaim Disk Space frees. When Windows is using all of its disk, it says to delete files inside Windows first.
+- **Look Inside Windows.** A running Windows machine in Parallels was a 240 GiB box Context Cleaner couldn't open. Its card now lists the biggest folders on Windows' drives and in each user folder, biggest first, with when each was made, plus Windows Update's downloads, and says how much of it is outside Windows, its apps and their data. It asks through Parallels Tools, reads sizes only, works in any Windows language, and saves nothing. On this Mac it found about 210 GiB of old build and test folders inside Windows.
+- **BitLocker-aware advice.** Windows 11 encrypts its drive with BitLocker, so nothing on the Mac, Parallels' Reclaim Disk Space estimate included, can see what's free inside. Context Cleaner now recognizes a BitLocker drive and stops quoting that estimate. It says what works instead: delete files inside Windows, then run Optimize Drives there, and Parallels gives the space back to the Mac right away (checked here: a 2 GiB file written, deleted and trimmed left the image smaller than before).
+- **Answers settle sooner after launch.** Git was asked about each project one after another; now several at a time. Here the projects' part fell from 74 s to 4 s for 80 projects, and the whole read from 84 s to 33 s after launch.
+- **Overview says when its totals are still settling.** For the first minute or two after launch, while git is asked about every project, nothing in a project counts as safe yet; here the totals then rose from 127 GiB to 236 GiB with no note. Overview now says it's still asking git, as Free Up Space already did.
+- **A Parallels drive is never moved.** A machine can keep a drive in another folder; here a Codex worktree held a 36 GiB second drive for Windows 11. With the machine suspended, nothing had it open, so ticking that worktree and copying a command would have broken the machine. Any folder holding a drive a Parallels machine uses, including machines Parallels keeps outside ~/Parallels, is now Not for the Trash ("Drive of Windows 11") and refused when a command is copied.
+- **The machine's card lists drives kept elsewhere** and, for a drive that isn't encrypted, Parallels' own estimate of what Reclaim Disk Space frees while the machine is stopped or suspended.
 - **"Not running now"**, on the row and the card, for a machine that was running at the last scan but isn't any more.
 
 ## 0.24.0

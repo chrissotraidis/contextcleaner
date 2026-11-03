@@ -306,7 +306,7 @@ private func prettyRuntime(_ value: String) -> String {
     guard let first = parts.first else { return value }
     return parts.count > 1 ? first + " " + parts.dropFirst().joined(separator: ".") : first
 }
-/// Short, human age: "today", "yesterday", "3 days ago", "5 weeks ago", "4 months ago".
+/// Short, human age: "today", "yesterday", "3 days ago", "5 weeks ago", "4 months ago", "4 years ago".
 func ageText(_ date: Date?, now: Date = Date()) -> String {
     guard let date else { return "unknown" }
     let seconds = max(0, now.timeIntervalSince(date))
@@ -316,7 +316,8 @@ func ageText(_ date: Date?, now: Date = Date()) -> String {
     if days == 1 { return "yesterday" }
     if days < 14 { return "\(days) days ago" }
     if days < 60 { return "\(days / 7) weeks ago" }
-    return "\(days / 30) months ago"
+    if days < 730 { return "\(days / 30) months ago" }
+    return "\(days / 365) years ago"
 }
 struct Advice: Equatable {
     let verdict: Verdict
@@ -863,7 +864,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         let docker = app == "Docker Desktop"
         let howTo = docker ? "In Docker Desktop, remove images and containers you no longer need, or lower the disk limit in Settings › Resources. This command shows how much is reclaimable:"
             : app == "Android Emulator" ? "In Android Studio, open Device Manager, then delete the device. That removes its disk and snapshots."
-            : app == "Parallels Desktop" ? "Delete files inside the machine, then use Reclaim Disk Space in Parallels' Control Center (right-click the machine). Shut it down instead of suspending it to drop its saved memory. To remove the whole machine, right-click it › Remove."
+            : app == "Parallels Desktop" ? "Delete files inside the machine. In Windows, Defragment and Optimize Drives › Optimize then gives that space back to this Mac right away; Reclaim Disk Space in Parallels' Control Center (right-click the machine) does it too. Shut it down instead of suspending it to drop its saved memory. To remove the whole machine, right-click it › Remove."
             : "Remove or shrink it inside \(app)."
         // Open files come from the last scan; say when, since the machine may have been shut down or suspended since.
         let running = m.processes.isEmpty ? "" : " It was running at the last scan, \(ageText(m.observedAt, now: now))."
@@ -1458,27 +1459,40 @@ func allocatedSize(_ path: String) -> Int64 {
     }
     return total
 }
+/// Text from Parallels' XML settings with its five escapes undone ("Chris&apos;s VMs" → "Chris's VMs").
+private func xmlText(_ value: Substring) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&quot;", with: "\"")
+        .replacingOccurrences(of: "&apos;", with: "'").replacingOccurrences(of: "&amp;", with: "&")
+}
 /// The disks a Parallels machine uses, from its config.pvs: absolute paths to each .hdd. Read-only.
 func parallelsDisks(_ pvm: String) -> [String] {
     guard let data = MetadataReader.data(pvm + "/config.pvs", preferences: Preferences()) else { return [] }
     var rest = Substring(String(decoding: data, as: UTF8.self)), disks: [String] = []
     while let open = rest.range(of: "<SystemName>"), let close = rest.range(of: "</SystemName>", range: open.upperBound..<rest.endIndex) {
-        let value = rest[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&apos;", with: "'").replacingOccurrences(of: "&amp;", with: "&")
+        let value = xmlText(rest[open.upperBound..<close.lowerBound])
         if value.lowercased().hasSuffix(".hdd") { disks.append(normalized(value.hasPrefix("/") ? value : pvm + "/" + value)) }
         rest = rest[close.upperBound...]
     }
     return disks
 }
-/// Every disk the Parallels machines in ~/Parallels use, with the machine's name, and the machines running now
-/// (Parallels keeps a vm.lock in a machine while it runs).
-func parallelsMachines(home: String) -> (disks: [String: String], running: Set<String>) {
+/// Every disk the Parallels machines use, with the machine's name, and the machines running now (Parallels keeps a vm.lock
+/// in a machine while it runs). Machines are those in ~/Parallels and any Parallels has registered elsewhere, from its list.
+func parallelsMachines(home: String, registry: String = "/Library/Preferences/Parallels/vmdirectorylist.desktop.xml") -> (disks: [String: String], running: Set<String>) {
     let root = home + "/Parallels"
+    var machines = Set(((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []).filter { $0.hasSuffix(".pvm") }.map { root + "/" + $0 })
+    if let data = MetadataReader.data(registry, preferences: Preferences()) {
+        var rest = Substring(String(decoding: data, as: UTF8.self))
+        while let open = rest.range(of: "<VmHome>"), let close = rest.range(of: "</VmHome>", range: open.upperBound..<rest.endIndex) {
+            let config = xmlText(rest[open.upperBound..<close.lowerBound])
+            let pvm = config.hasSuffix("/config.pvs") ? String(config.dropLast("/config.pvs".count)) : config
+            if pvm.hasPrefix("/"), pvm.hasSuffix(".pvm"), FileManager.default.fileExists(atPath: pvm) { machines.insert(normalized(pvm)) }
+            rest = rest[close.upperBound...]
+        }
+    }
     var disks: [String: String] = [:], running: Set<String> = []
-    for name in (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? [] where name.hasSuffix(".pvm") {
-        let pvm = root + "/" + name
-        for disk in parallelsDisks(pvm) { disks[disk] = (name as NSString).deletingPathExtension }
+    for pvm in machines {
+        for disk in parallelsDisks(pvm) { disks[disk] = ((pvm as NSString).lastPathComponent as NSString).deletingPathExtension }
         if FileManager.default.fileExists(atPath: pvm + "/vm.lock") { running.insert(pvm) }
     }
     return (disks, running)
@@ -1515,6 +1529,129 @@ func compactEstimate(_ text: String) -> Int64? {
           sector > 0, block > 0, allocated >= used else { return nil }
     return (allocated - used) * block * sector
 }
+/// True when a Parallels disk holds a BitLocker volume. Then nothing on this Mac, Parallels' estimate included, can tell which
+/// space Windows uses. Reads the image's header, block table and each partition's first bytes; changes nothing.
+func bitLockerDisk(_ hdd: String) -> Bool {
+    // A machine with snapshots has one layer per snapshot; any of them may hold the partitions' first sectors.
+    ((try? FileManager.default.contentsOfDirectory(atPath: hdd)) ?? []).filter { $0.hasSuffix(".hds") }.contains { bitLockerLayer(hdd + "/" + $0) }
+}
+private func bitLockerLayer(_ image: String) -> Bool {
+    guard let file = FileHandle(forReadingAtPath: image) else { return false }
+    defer { try? file.close() }
+    func read(_ offset: UInt64, _ count: Int) -> [UInt8] {
+        guard (try? file.seek(toOffset: offset)) != nil, let data = try? file.read(upToCount: count), data.count == count else { return [] }
+        return [UInt8](data)
+    }
+    func number(_ bytes: [UInt8], _ at: Int, _ size: Int) -> UInt64 { (0..<size).reduce(UInt64(0)) { $0 | UInt64(bytes[at + $1]) << (8 * $1) } }
+    let header = read(0, 64)
+    guard header.count == 64 else { return false }
+    let magic = String(decoding: header[0..<16], as: UTF8.self)
+    // Parallels' expanding format: a block table of sector offsets, 0 for blocks never written.
+    guard magic == "WithoutFreeSpace" || magic == "WithouFreSpacExt" else { return false }
+    let tracks = number(header, 0x1c, 4), entries = Int(number(header, 0x20, 4))
+    guard tracks > 0, entries > 0, entries <= 1 << 24 else { return false }
+    let table = read(64, entries * 4)
+    guard table.count == entries * 4 else { return false }
+    let block = tracks * 512, multiplier = magic == "WithouFreSpacExt" ? tracks : 1
+    func disk(_ offset: UInt64, _ count: Int) -> [UInt8] {
+        let index = Int(offset / block)
+        guard index < entries, offset % block + UInt64(count) <= block else { return [] }
+        let entry = number(table, index * 4, 4)
+        return entry == 0 ? [UInt8](repeating: 0, count: count) : read(entry * multiplier * 512 + offset % block, count)
+    }
+    func encrypted(_ sector: UInt64) -> Bool { disk(sector * 512, 11).elementsEqual([0xEB, 0x58, 0x90] + Array("-FVE-FS-".utf8)) }
+    let gpt = disk(512, 512)
+    if gpt.count == 512, gpt[0..<8].elementsEqual("EFI PART".utf8) {
+        let first = number(gpt, 0x48, 8), count = min(Int(number(gpt, 0x50, 4)), 128), size = Int(number(gpt, 0x54, 4))
+        guard (128...1024).contains(size) else { return false }
+        for index in 0..<count {
+            let entry = disk(first * 512 + UInt64(index * size), size)
+            guard entry.count == size, entry[0..<16].contains(where: { $0 != 0 }) else { continue }
+            if encrypted(number(entry, 32, 8)) { return true }
+        }
+        return false
+    }
+    // An older machine that starts Windows the BIOS way keeps four partition entries in its first sector instead.
+    let mbr = disk(0, 512)
+    guard mbr.count == 512, mbr[510] == 0x55, mbr[511] == 0xAA else { return false }
+    return (0..<4).contains { index in
+        let type = mbr[446 + index * 16 + 4]
+        return type != 0 && type != 0xEE && encrypted(number(mbr, 446 + index * 16 + 8, 4))
+    }
+}
+/// A Parallels machine's id when it runs Windows (OsType 8 in its config.pvs), so Parallels Tools can be asked what's inside.
+func parallelsWindowsID(_ pvm: String) -> String? {
+    guard let data = MetadataReader.data(pvm + "/config.pvs", preferences: Preferences()) else { return nil }
+    let text = String(decoding: data, as: UTF8.self)
+    guard text.contains("<OsType>8</OsType>"), let open = text.range(of: "<VmUuid>"),
+          let close = text.range(of: "</VmUuid>", range: open.upperBound..<text.endIndex) else { return nil }
+    let id = text[open.upperBound..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+    return !id.isEmpty && id.allSatisfy({ $0.isHexDigit || "{}-".contains($0) }) ? id : nil
+}
+/// Run inside Windows by Look Inside Windows: the size and creation date of everything at the top of each fixed drive and in
+/// each user's folder, and Windows Update's downloads. robocopy /L only lists; nothing is copied, changed or deleted. Its
+/// summary is read by position (folders, files, bytes), since its labels are translated in other languages.
+let windowsLookScript = #"""
+[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ProgressPreference='SilentlyContinue';$ErrorActionPreference='SilentlyContinue'
+function S($p){$l=@(robocopy $p NUL /L /S /NJH /BYTES /NFL /NDL /NC /XJ /R:0 /W:0 /MT:16|?{$_ -match '^\s*[^:]+:\s+\d+\s+\d+'});if($l.Count -ge 3){(($l[2] -split ':',2)[1].Trim() -split '\s+')[0]}else{0}}
+$i=@(Get-Volume|?{$_.DriveType -eq 'Fixed' -and $_.DriveLetter}|%{gci -Force -LiteralPath "$($_.DriveLetter):\"})+@(gci -Force -Directory C:\Users|?{!($_.Attributes -band 1024)}|%{gci -Force -LiteralPath $_.FullName})+@(gi -Force C:\Windows\SoftwareDistribution\Download)
+$i|?{!($_.Attributes -band 1024)}|%{$s=if($_.PSIsContainer){S $_.FullName}else{$_.Length};"$s|$($_.CreationTime.ToString('s'))|$($_.FullName)"}
+'cc-end'
+"""#
+/// Windows itself, the apps installed in it and their data: shown by Look Inside Windows, but not counted as yours.
+func windowsOwn(_ path: String) -> Bool {
+    let key = path.lowercased()
+    return ["c:\\windows", "c:\\program files", "c:\\program files (x86)", "c:\\program files (arm)", "c:\\programdata"].contains(key)
+        || key.hasPrefix("c:\\windows\\") || (key.hasPrefix("c:\\users\\") && key.hasSuffix("\\appdata"))
+}
+/// Space in Look Inside Windows' answer outside Windows, its apps and their data: what you or your tools put there.
+func outsideWindows(_ parts: [InsidePart]) -> Int64 {
+    parts.filter { !windowsOwn($0.name) }.reduce(0) { $0 + $1.bytes }
+}
+/// The biggest folders and files in Look Inside Windows' answer, from lines of "bytes|2026-10-03T13:27:00|C:\path".
+/// Windows' own swap files are left out, and C:\Users, whose folders are listed one by one.
+func windowsFolderParts(_ output: String, now: Date = Date()) -> [InsidePart] {
+    let format = DateFormatter()
+    format.locale = Locale(identifier: "en_US_POSIX"); format.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    let skipped: Set<String> = ["c:\\users", "c:\\pagefile.sys", "c:\\hiberfil.sys", "c:\\swapfile.sys"]
+    var seen = Set<String>()
+    return output.split(whereSeparator: \.isNewline).compactMap { line -> InsidePart? in
+        let fields = line.split(separator: "|", maxSplits: 2).map { $0.trimmingCharacters(in: .whitespaces) }
+        guard fields.count == 3, let bytes = Int64(fields[0]), bytes >= 256 * 1_048_576, fields[2].count > 3 else { return nil }
+        let key = fields[2].lowercased()
+        guard !skipped.contains(key), seen.insert(key).inserted else { return nil }
+        let detail = key == "c:\\windows\\softwaredistribution\\download" ? "Windows Update's downloads. Disk Cleanup › Clean up system files › Windows Update Cleanup removes them."
+            : key.hasPrefix("c:\\users\\") && key.hasSuffix("\\appdata") ? "Apps' settings and caches for this user. Clean them up in each app, or with Disk Cleanup."
+            : windowsOwn(key) ? "Windows and the apps installed in it" : "Created " + ageText(format.date(from: fields[1]), now: now)
+        return InsidePart(name: fields[2], detail: detail, bytes: bytes)
+    }.sorted { $0.bytes > $1.bytes }.prefix(25).map { $0 }
+}
+/// Whether Look Inside Windows' script ran to its last line. Without that, whatever came back is incomplete.
+func windowsLookFinished(_ output: String) -> Bool {
+    output.split(whereSeparator: \.isNewline).last?.trimmingCharacters(in: .whitespaces) == "cc-end"
+}
+/// Windows' biggest folders in a running Parallels machine, asked through Parallels Tools (prlctl exec), or why it couldn't ask.
+/// Reads sizes only and saves nothing.
+func windowsFolders(machine id: String, now: Date = Date()) -> (parts: [InsidePart], problem: String?) {
+    let tool = "/Applications/Parallels Desktop.app/Contents/MacOS/prlctl"
+    guard FileManager.default.isExecutableFile(atPath: tool) else { return ([], "Parallels Desktop isn't in Applications, so the machine can't be asked.") }
+    var utf16 = Data()
+    for unit in windowsLookScript.utf16 { utf16.append(UInt8(unit & 0xff)); utf16.append(UInt8(unit >> 8)) }
+    let process = Process(), pipe = Pipe()
+    process.executableURL = URL(fileURLWithPath: tool)
+    process.arguments = ["exec", id, "powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", utf16.base64EncodedString()]
+    process.standardInput = FileHandle.nullDevice; process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+    do { try process.run() } catch { return ([], "Parallels couldn't be started to ask the machine.") }
+    let pid = process.processIdentifier
+    DispatchQueue.global().asyncAfter(deadline: .now() + 300) { [weak process] in if process?.isRunning == true { process?.terminate() } }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 305) { [weak process] in if process?.isRunning == true { kill(pid, SIGKILL) } }
+    let data = readAll(pipe)
+    process.waitUntilExit()
+    let output = String(decoding: data, as: UTF8.self)
+    if process.terminationReason == .exit, process.terminationStatus == 0, windowsLookFinished(output) { return (windowsFolderParts(output, now: now), nil) }
+    if process.terminationReason == .uncaughtSignal { return ([], "Windows took longer than 5 minutes to answer. Try again once it's idle.") }
+    return ([], "Parallels couldn't run it inside Windows. Make sure Windows has finished starting and Parallels Tools are installed, then try again.")
+}
 /// What's inside a Parallels virtual machine (.pvm): its disks and snapshots, suspended memory and logs, and how much
 /// Reclaim Disk Space would free. Metadata and Parallels' own estimate only.
 func parallelsParts(_ pvm: String) -> [InsidePart] {
@@ -1523,7 +1660,12 @@ func parallelsParts(_ pvm: String) -> [InsidePart] {
     var memory: Int64 = 0, logs: Int64 = 0
     // Parallels holds a running machine's disks; it's only asked about them while the machine is stopped or suspended.
     let running = FileManager.default.fileExists(atPath: pvm + "/vm.lock")
+    var bitLockerSaid = false
     func reclaimNote(_ hdd: String) -> String {
+        if bitLockerDisk(hdd) {
+            defer { bitLockerSaid = true }
+            return bitLockerSaid ? " Encrypted with BitLocker too; the same steps free it." : " Windows encrypts it with BitLocker, so nothing on this Mac, Parallels included, can tell how much of it is free. Delete files inside Windows, then run Optimize Drives there, and Parallels gives that space back right away."
+        }
         if running { return " Shut the machine down or suspend it to see how much Reclaim Disk Space would free." }
         guard let free = parallelsReclaimable(hdd) else { return " Files you delete inside the machine come back to this Mac only after Parallels › Reclaim Disk Space." }
         if free >= 512 * 1_048_576 { return " Reclaim Disk Space in Parallels frees about \(byteLabel(free)) now." }

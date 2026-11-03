@@ -178,12 +178,15 @@ struct FolderRow: Identifiable {
             DispatchQueue.main.async { self.gitBlocked = blocked }
             var roots: [String: String] = [:]
             for path in paths { if let root = repositoryRoot(for: path, home: home) { roots[path] = root } }
-            var activity: [String: ProjectActivity] = [:]
-            for root in Set(roots.values) {
+            // Several projects at a time: each read waits on git, and one after another took minutes after every launch.
+            let found = roots, projectRoots = Array(Set(roots.values))
+            let read = parallelMap(projectRoots) { root -> ProjectActivity in
                 var project = readProjectActivity(root)
-                project.ignored = ignoredByGit(root, paths: roots.filter { $0.value == root }.map(\.key))
-                activity[root] = project
+                project.ignored = ignoredByGit(root, paths: found.filter { $0.value == root }.map(\.key))
+                return project
             }
+            var activity: [String: ProjectActivity] = [:]
+            for (index, root) in projectRoots.enumerated() { activity[root] = read[index] }
             // Whole worktree folders: is everything in them kept by git? A few at a time; git status reads every file.
             let folders = paths.filter(isWorktreeFolder)
             let backups = parallelMap(folders) { worktreeRepository($0).map(readRepoBackup) }

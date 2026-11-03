@@ -455,7 +455,8 @@ struct MainView: View {
                                     confirm: trashConfirmation(count: all.paths.count, bytes: allBytes, review: review.count, reviewBytes: review.reduce(Int64(0)) { $0 + model.knownBytes($1) }))
                     Text(all.paths.isEmpty ? "None of these can go in a Trash command: places you remove in their own apps, ignored folders, and the places Context Cleaner looks in."
                          : (review.isEmpty ? "One command for \(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders"). Nothing is lost." : "One command for \(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders"), \(review.count) of them Review first, so it asks before copying.")
-                            + (all.skipped > 0 ? " Leaves out \(all.skipped): folders inside others, and places you remove in their own apps." : ""))
+                            + (all.skipped > 0 ? " Leaves out \(all.skipped): folders inside others, and places you remove in their own apps"
+                               + (model.selection.contains { vmDisk(in: $0, disks: model.vmDisks) != nil } ? ", such as a folder holding a virtual machine's drive." : ".") : ""))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Divider()
                     let byCategory = Dictionary(grouping: summary.items.filter { $0.state == .measured }, by: { $0.profile.category })
@@ -997,6 +998,34 @@ struct InsideBreakdown: View {
     let item: FolderMeasurement
     @State private var parts: [InsidePart] = []
     @State private var copied: String?
+    // Look Inside Windows: asked only when you click, never saved.
+    @State private var windowsID: String?
+    @State private var windows: [InsidePart]?
+    @State private var windowsProblem: String?
+    @State private var lookingFor: String?
+    func row(_ part: InsidePart) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(part.name).font(.callout).lineLimit(1).truncationMode(.middle)
+                Text(part.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text(byteLabel(part.bytes)).font(.callout).monospacedDigit()
+            if let command = part.command {
+                Button { copyToClipboard(command); copied = part.id } label: {
+                    Image(systemName: copied == part.id ? "checkmark" : "doc.on.clipboard")
+                }.buttonStyle(.borderless).help("Copy: " + command + ". Paste it in Terminal to remove just this model.").accessibilityLabel("Copy remove command for " + part.name)
+            }
+        }
+    }
+    func lookInside(_ id: String, path: String) {
+        lookingFor = path; windowsProblem = nil
+        Task {
+            let answer = await Task.detached(priority: .utility) { windowsFolders(machine: id) }.value
+            guard lookingFor == path else { return }
+            lookingFor = nil; windows = answer.problem == nil ? answer.parts : windows; windowsProblem = answer.problem
+        }
+    }
     var body: some View {
         let path = item.profile.path
         // Always a view, even before the parts are read: an empty Group never starts its task.
@@ -1004,30 +1033,49 @@ struct InsideBreakdown: View {
             if !parts.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Inside it").font(.headline)
-                    ForEach(parts) { part in
-                        HStack(alignment: .top, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(part.name).font(.callout).lineLimit(1).truncationMode(.middle)
-                                Text(part.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 8)
-                            Text(byteLabel(part.bytes)).font(.callout).monospacedDigit()
-                            if let command = part.command {
-                                Button { copyToClipboard(command); copied = part.id } label: {
-                                    Image(systemName: copied == part.id ? "checkmark" : "doc.on.clipboard")
-                                }.buttonStyle(.borderless).help("Copy: " + command + ". Paste it in Terminal to remove just this model.").accessibilityLabel("Copy remove command for " + part.name)
-                            }
-                        }
-                    }
+                    ForEach(parts) { row($0) }
                     if parts.contains(where: { $0.command != nil }) {
                         Text("Each copy button copies the command that removes just that model, for example \(parts.first(where: { $0.command != nil })?.command ?? ""). Download it again any time.")
                             .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
             } else { Color.clear.frame(height: 0) }
+            if let id = windowsID {
+                let running = FileManager.default.fileExists(atPath: path + "/vm.lock"), looking = lookingFor == path
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Inside Windows").font(.headline)
+                        Spacer()
+                        if looking { ProgressView().controlSize(.small).accessibilityLabel("Sizing Windows' folders") }
+                        else if running {
+                            Button(windows == nil ? "Look Inside Windows" : "Look Again") { lookInside(id, path: path) }
+                                .help("Lists the biggest folders on Windows' drives through Parallels Tools. Reads sizes only; nothing is changed or saved.")
+                        }
+                    }
+                    if looking {
+                        Text("Sizing the folders on Windows' drives. It reads sizes only and can take a minute or two.").font(.caption).foregroundStyle(.secondary)
+                    } else if let windowsProblem {
+                        Text(windowsProblem).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let windows, !looking {
+                        let outside = outsideWindows(windows)
+                        if windows.isEmpty { Text("Nothing on Windows' drives takes 256 MiB or more.").font(.callout) }
+                        if outside > 0 { Text("\(byteLabel(outside)) of this is outside Windows, its apps and their data.").font(.callout) }
+                        ForEach(windows) { row($0) }
+                        Text("Delete what you no longer need inside Windows, then run Defragment and Optimize Drives › Optimize there. Parallels gives that space back to this Mac right away. These sizes aren't saved.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    } else if !looking, windowsProblem == nil {
+                        Text(running ? "See which folders fill Windows, biggest first, with when each was made. Context Cleaner reads sizes through Parallels Tools and changes nothing."
+                                     : "Start the machine in Parallels, then Look Inside Windows lists the biggest folders on its drives.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+                .padding(.top, parts.isEmpty ? 0 : 8)
+            }
         }
         .task(id: path) {
-            copied = nil
+            copied = nil; windows = nil; windowsProblem = nil; lookingFor = nil
+            windowsID = path.hasSuffix(".pvm") ? parallelsWindowsID(path) : nil
             parts = await Task.detached(priority: .utility) { insideParts(path) }.value
         }
     }

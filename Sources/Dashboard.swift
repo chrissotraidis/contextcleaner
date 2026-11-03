@@ -544,6 +544,10 @@ struct DiskMap: View {
                     Text(r.total > 0 ? "\(byteLabel(r.safe.bytes)) safe to remove · \(byteLabel(r.inside.bytes)) old items · \(byteLabel(r.rebuild.bytes)) rebuildable"
                          : "Scan your folders so Context Cleaner can see when each was last used.")
                         .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                    if !model.projectsRead, r.total > 0 {
+                        Label("Still asking git about your projects. These totals grow when it's done.", systemImage: "hourglass")
+                            .font(.caption).foregroundStyle(Color.caution)
+                    }
                 }
                 Spacer(minLength: 8)
                 Picker("Map", selection: $byType) { Text("By answer").tag(false); Text("By type").tag(true) }

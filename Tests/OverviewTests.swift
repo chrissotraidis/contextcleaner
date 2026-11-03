@@ -438,9 +438,18 @@ import Foundation
         for dir in [winPvm + "/harddisk.hdd", outside] { try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
         try? Data("<Hdd id=\"0\"><SystemName>harddisk.hdd</SystemName></Hdd><CdRom><SystemName>/Users/x/Downloads/win.iso</SystemName></CdRom><Hdd id=\"1\"><SystemName>\(outside.replacingOccurrences(of: "&", with: "&amp;"))</SystemName></Hdd>".utf8).write(to: URL(fileURLWithPath: winPvm + "/config.pvs"))
         try? Data().write(to: URL(fileURLWithPath: winPvm + "/vm.lock"))
-        let machines = parallelsMachines(home: pHome)
+        let machines = parallelsMachines(home: pHome, registry: pHome + "/no-registry.xml")
         check(parallelsDisks(winPvm) == [winPvm + "/harddisk.hdd", outside] && machines.disks[outside] == "Win & Co" && machines.running == [winPvm],
               "a machine's drives come from its settings, in the machine or elsewhere, CDs left out; a vm.lock means it's running")
+        let elsewhere = pHome + "/.codex/worktrees/vmtask/Chris's \"Lab\".pvm", registry = pHome + "/vmdirectorylist.desktop.xml"
+        try? FileManager.default.createDirectory(atPath: elsewhere + "/harddisk.hdd", withIntermediateDirectories: true)
+        try? Data("<Hdd><SystemName>harddisk.hdd</SystemName></Hdd>".utf8).write(to: URL(fileURLWithPath: elsewhere + "/config.pvs"))
+        try? Data("<VmHome>\(elsewhere.replacingOccurrences(of: "'", with: "&apos;").replacingOccurrences(of: "\"", with: "&quot;"))/config.pvs</VmHome><VmHome>/Users/gone/Old.pvm/config.pvs</VmHome><VmHome>\(winPvm.replacingOccurrences(of: "&", with: "&amp;"))/config.pvs</VmHome>".utf8)
+            .write(to: URL(fileURLWithPath: registry))
+        let registered = parallelsMachines(home: pHome, registry: registry)
+        check(registered.disks[elsewhere + "/harddisk.hdd"] == "Chris's \"Lab\"" && registered.disks[outside] == "Win & Co" && registered.running == [winPvm]
+              && vmDisk(in: pHome + "/.codex/worktrees/vmtask", disks: registered.disks)?.vm == "Chris's \"Lab\"",
+              "a machine Parallels registered outside ~/Parallels is known too, so the worktree holding it never goes in a Trash command; machines gone from disk are skipped")
         check(vmDisk(in: pHome + "/.codex/worktrees/route", disks: machines.disks)?.vm == "Win & Co" && vmDisk(in: outside, disks: machines.disks) != nil
               && vmDisk(in: outside + "/part.hds", disks: machines.disks) != nil && vmDisk(in: pHome + "/.codex/worktrees/other", disks: machines.disks) == nil,
               "a folder holding a machine's drive, the drive and anything in it are known; folders beside it aren't")
@@ -450,6 +459,58 @@ import Foundation
         let prlParts = parallelsParts(winPvm)
         check(prlParts.contains { $0.name == "Disk build.hdd" && $0.detail.contains("Moving that folder to the Trash breaks the machine") } && prlParts.allSatisfy { !$0.detail.contains("frees about") },
               "a machine's card lists a drive kept elsewhere, and while it runs doesn't ask Parallels for an estimate")
+        // 0.25.0: BitLocker drives and Look Inside Windows.
+        func fakeDisk(_ hdd: String, boot: [UInt8], mbr: Bool = false) {
+            try? FileManager.default.createDirectory(atPath: hdd, withIntermediateDirectories: true)
+            var file = [UInt8](repeating: 0, count: 12288)
+            func put(_ value: UInt64, _ at: Int, _ size: Int) { for i in 0..<size { file[at + i] = UInt8((value >> (8 * UInt64(i))) & 0xff) } }
+            file.replaceSubrange(0..<16, with: Array("WithoutFreeSpace".utf8))
+            put(2, 0x10, 4); put(8, 0x1c, 4); put(16, 0x20, 4); put(128, 0x24, 8)
+            put(8, 64, 4); put(16, 64 + 8, 4)                       // 4 KiB blocks: block 0 at sector 8, block 2 at sector 16, block 1 never written
+            if mbr {
+                file[4096 + 510] = 0x55; file[4096 + 511] = 0xAA; file[4096 + 446 + 4] = 0x07; put(16, 4096 + 446 + 8, 4)  // BIOS layout, partition at sector 16
+            } else {
+                file.replaceSubrange(4096 + 512..<4096 + 520, with: Array("EFI PART".utf8))
+                put(2, 4096 + 512 + 0x48, 8); put(4, 4096 + 512 + 0x50, 4); put(128, 4096 + 512 + 0x54, 4)
+                file[4096 + 1024] = 0xA2; put(16, 4096 + 1024 + 32, 8)  // one partition, starting at sector 16 (block 2)
+            }
+            file.replaceSubrange(8192..<8192 + boot.count, with: boot)
+            try? Data(file).write(to: URL(fileURLWithPath: hdd + "/" + (hdd as NSString).lastPathComponent + ".0.{5fbaabe3}.hds"))
+        }
+        fakeDisk(pHome + "/locked.hdd", boot: [0xEB, 0x58, 0x90] + Array("-FVE-FS-".utf8))
+        fakeDisk(pHome + "/open.hdd", boot: [0xEB, 0x52, 0x90] + Array("NTFS    ".utf8))
+        // A snapshot layer that sorts first and never wrote the partition's first sector.
+        var layer = [UInt8](repeating: 0, count: 4096)
+        layer.replaceSubrange(0..<16, with: Array("WithoutFreeSpace".utf8)); layer[0x1c] = 8; layer[0x20] = 16
+        try? Data(layer).write(to: URL(fileURLWithPath: pHome + "/locked.hdd/locked.hdd.0.{00000000}.hds"))
+        fakeDisk(pHome + "/bios.hdd", boot: [0xEB, 0x58, 0x90] + Array("-FVE-FS-".utf8), mbr: true)
+        fakeDisk(pHome + "/bios-open.hdd", boot: [0xEB, 0x52, 0x90] + Array("NTFS    ".utf8), mbr: true)
+        check(bitLockerDisk(pHome + "/bios.hdd") && !bitLockerDisk(pHome + "/bios-open.hdd"), "BitLocker is found on an older machine that starts the BIOS way too")
+        check(bitLockerDisk(pHome + "/locked.hdd") && !bitLockerDisk(pHome + "/open.hdd") && !bitLockerDisk(winPvm + "/harddisk.hdd") && !bitLockerDisk(pHome + "/none.hdd"),
+              "a BitLocker volume is found through Parallels' block table; plain NTFS, an empty disk folder and a missing one aren't BitLocker")
+        try? Data("<VmUuid>{ab97fc7b-c690-4b31-b99f-041872ae27c6}</VmUuid><OsType>8</OsType>".utf8).write(to: URL(fileURLWithPath: winPvm + "/config.pvs"))
+        let macPvm = pHome + "/Parallels/mac.pvm"
+        try? FileManager.default.createDirectory(atPath: macPvm, withIntermediateDirectories: true)
+        try? Data("<VmUuid>{11111111-2222-3333-4444-555555555555}</VmUuid><OsType>7</OsType>".utf8).write(to: URL(fileURLWithPath: macPvm + "/config.pvs"))
+        let badPvm = pHome + "/Parallels/bad.pvm"
+        try? FileManager.default.createDirectory(atPath: badPvm, withIntermediateDirectories: true)
+        try? Data("<VmUuid>{1}; rm -rf ~</VmUuid><OsType>8</OsType>".utf8).write(to: URL(fileURLWithPath: badPvm + "/config.pvs"))
+        check(parallelsWindowsID(winPvm) == "{ab97fc7b-c690-4b31-b99f-041872ae27c6}" && parallelsWindowsID(macPvm) == nil && parallelsWindowsID(badPvm) == nil,
+              "only a Windows machine is offered Look Inside Windows, and only with an id made of hex digits")
+        let oneGiB: Int64 = 1_073_741_824
+        let answer = "\(41 * oneGiB)|2026-09-29T12:28:39|C:\\Windows\n\(33 * oneGiB)|2026-09-30T22:26:46|C:\\kpiosm\n\(27 * oneGiB)|2022-07-22T10:42:27|C:\\Users\n\(3 * oneGiB)|2026-10-30T08:03:09|C:\\pagefile.sys\n"
+            + "\(2 * oneGiB)|2026-10-26T08:58:53|V:\\PadMint validation\n\(10 * oneGiB)|2021-06-05T10:00:00|C:\\Windows\\SoftwareDistribution\\Download\n\(1 * oneGiB)|2022-07-22T10:42:27|C:\\Users\\chris\\AppData\n12345|2026-10-01T00:00:00|C:\\tiny\n\(33 * oneGiB)|2026-09-30T22:26:46|C:\\KPIOSM\nnoise without fields\n#< CLIXML"
+        let found = windowsFolderParts(answer, now: now)
+        check(found.map(\.name) == ["C:\\Windows", "C:\\kpiosm", "C:\\Windows\\SoftwareDistribution\\Download", "V:\\PadMint validation", "C:\\Users\\chris\\AppData"]
+              && found[0].detail == "Windows and the apps installed in it" && found[1].detail.hasPrefix("Created ") && found[1].bytes == 33 * oneGiB
+              && found[2].detail.hasPrefix("Windows Update's downloads") && found[4].detail.hasPrefix("Apps' settings") && outsideWindows(found) == 35 * oneGiB,
+              "Look Inside Windows lists the biggest first, labels Windows itself, and leaves out C:\\Users, swap files, small items, repeats and noise")
+        check(windowsLookFinished(answer + "\ncc-end\r\n") && !windowsLookFinished(answer) && !windowsLookFinished("") && windowsFolderParts("cc-end").isEmpty,
+              "Look Inside Windows trusts an answer only when its script ran to the end; one that ran with nothing big lists nothing")
+        check(windowsLookScript.utf16.count <= 1200,
+              "Look Inside Windows' script stays well under Parallels' command limit (about 1,460 characters), past which it fails as if Parallels Tools were missing")
+        check(ageText(now.addingTimeInterval(-52 * 30 * 86400), now: now) == "4 years ago" && ageText(now.addingTimeInterval(-400 * 86400), now: now) == "13 months ago",
+              "ages past two years read in years, not \"52 months ago\"")
         check(isProjectBuildOutput("/Users/x/GitHub/site/.next") && isProjectBuildOutput("/Users/x/GitHub/game/obj") && !isProjectBuildOutput("/Users/x/Documents/obj"),
               "Next.js's .next and .NET's obj inside a project are build output; elsewhere they're just names")
         let codexPrivate = aged("/Users/x/.codex/private/kartpad-release-084", .workspace, hours: 24 * 4, gib: 48)

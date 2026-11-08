@@ -10,8 +10,8 @@ What did you expect to see, and what did you see instead? Include the steps if y
 ## Your setup
 
 - Context Cleaner version (Context Cleaner › About):
-- macOS version and Mac model:
-- Full Disk Access on or off:
+- macOS version and Mac model, or Windows version (Settings › System › About):
+- Full Disk Access on or off (Mac):
 
 ## The folder, if it's about one
 

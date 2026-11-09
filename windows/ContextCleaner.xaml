@@ -421,6 +421,7 @@
               <Button.ContextMenu><ContextMenu>
                 <MenuItem x:Name="MenuExport" Header="Export Cleanup List…" Tag="&#xE9F9;" InputGestureText="Ctrl+E"/>
                 <MenuItem x:Name="MenuBin" Header="Open Recycle Bin" Tag="&#xE74D;"/>
+                <MenuItem x:Name="MenuCopy" Header="Copy as Command Instead" Tag="&#xE8C8;" InputGestureText="Ctrl+Shift+C" ToolTip="For Free Up Space's ticked items: one command to paste in a terminal"/>
                 <MenuItem x:Name="MenuStorage" Header="Open Storage Settings" Tag="&#xEDA2;"/>
                 <Separator/>
                 <MenuItem x:Name="MenuData" Header="Open Context Cleaner's Data Folder" Tag="&#xE838;"/>
@@ -438,6 +439,29 @@
           <!-- Overview -->
           <ScrollViewer x:Name="PageOverview" VerticalScrollBarVisibility="Auto" Padding="32,4,24,24">
             <StackPanel>
+              <!-- What you can do first: what you could get back, and what waits in the Recycle Bin. -->
+              <Grid Margin="0,0,0,12">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
+                <Border Style="{StaticResource CardBox}">
+                  <DockPanel>
+                    <Button x:Name="OvGoFree" DockPanel.Dock="Bottom" Style="{StaticResource AccentButton}" Content="Open Free Up Space" HorizontalAlignment="Left" Margin="0,12,0,0"/>
+                    <StackPanel>
+                      <TextBlock x:Name="OvBack" Style="{StaticResource Subtitle}" TextWrapping="Wrap"/>
+                      <TextBlock x:Name="OvBackSub" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
+                    </StackPanel>
+                  </DockPanel>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource CardBox}">
+                  <DockPanel>
+                    <Button x:Name="OvOpenBin" DockPanel.Dock="Bottom" Content="Open Recycle Bin" HorizontalAlignment="Left" Margin="0,12,0,0"/>
+                    <StackPanel>
+                      <DockPanel><TextBlock DockPanel.Dock="Left" Text="&#xE74D;" Style="{StaticResource Glyph}" Margin="0,0,8,0" Foreground="{DynamicResource Bin}" VerticalAlignment="Top"/><TextBlock x:Name="OvBin" Style="{StaticResource Strong}" TextWrapping="Wrap"/></DockPanel>
+                      <TextBlock x:Name="OvBinSub" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
+                    </StackPanel>
+                  </DockPanel>
+                </Border>
+              </Grid>
+
               <Border Style="{StaticResource CardBox}" Margin="0,0,0,12">
                 <Grid>
                   <Grid.ColumnDefinitions><ColumnDefinition Width="320"/><ColumnDefinition/></Grid.ColumnDefinitions>
@@ -474,28 +498,6 @@
 
               <UniformGrid x:Name="OvTiles" Columns="4" Margin="0,0,-10,12"/>
 
-              <Grid Margin="0,0,0,12">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="3*"/><ColumnDefinition Width="12"/><ColumnDefinition Width="2*"/></Grid.ColumnDefinitions>
-                <Border Style="{StaticResource CardBox}">
-                  <DockPanel>
-                    <Button x:Name="OvGoFree" DockPanel.Dock="Right" Style="{StaticResource AccentButton}" Content="Open Free Up Space" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                    <StackPanel>
-                      <TextBlock x:Name="OvBack" Style="{StaticResource Subtitle}" TextWrapping="Wrap"/>
-                      <TextBlock x:Name="OvBackSub" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
-                    </StackPanel>
-                  </DockPanel>
-                </Border>
-                <Border Grid.Column="2" Style="{StaticResource CardBox}">
-                  <DockPanel>
-                    <Button x:Name="OvOpenBin" DockPanel.Dock="Right" Content="Open Recycle Bin" VerticalAlignment="Center" Margin="12,0,0,0"/>
-                    <StackPanel>
-                      <DockPanel><TextBlock DockPanel.Dock="Left" Text="&#xE74D;" Style="{StaticResource Glyph}" Margin="0,0,8,0" Foreground="{DynamicResource Bin}" VerticalAlignment="Top"/><TextBlock x:Name="OvBin" Style="{StaticResource Strong}" TextWrapping="Wrap"/></DockPanel>
-                      <TextBlock x:Name="OvBinSub" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
-                    </StackPanel>
-                  </DockPanel>
-                </Border>
-              </Grid>
-
               <Border x:Name="OvGrowCard" Style="{StaticResource CardBox}" Margin="0,0,0,12">
                 <StackPanel>
                   <TextBlock Text="Growing" Style="{StaticResource Strong}"/>
@@ -529,8 +531,8 @@
                 <TextBlock x:Name="FreeHeadSub" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
                 <WrapPanel Margin="0,12,0,0">
                   <RadioButton x:Name="ChipAll" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,8,8"/>
-                  <RadioButton x:Name="ChipLossless" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,8,8"/>
-                  <RadioButton x:Name="ChipReview" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,16,8"/>
+                  <RadioButton x:Name="ChipLossless" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,8,8" ToolTip="Safe to remove, or recreated by the next build or download"/>
+                  <RadioButton x:Name="ChipReview" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,16,8" ToolTip="May hold something that's only here, so look inside first. These start unticked."/>
                   <Border Style="{StaticResource SegBox}" Margin="0,0,16,8">
                     <StackPanel Orientation="Horizontal">
                       <RadioButton x:Name="OrderBig" Style="{StaticResource Seg}" Content="Biggest first" GroupName="order"/>
@@ -550,8 +552,7 @@
                     </Border>
                   </StackPanel>
                 </WrapPanel>
-                <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0" Text="Nothing lost: safe to remove, or recreated by the next build or download. Review first: may hold something that's only here, so look inside first. Review first items start unticked."/>
-                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                   <TextBlock Text="&#xE74D;" Style="{StaticResource Glyph}" FontSize="13" Foreground="{DynamicResource Bin}" Margin="0,0,6,0"/>
                   <TextBlock x:Name="FreeBinNote" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
                   <Button x:Name="FreeOpenBin" Style="{StaticResource Link}" Content="Open Recycle Bin" FontSize="12"/>
@@ -563,8 +564,7 @@
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                   <TextBlock x:Name="FreeTicked" Style="{StaticResource Strong}" VerticalAlignment="Center" Margin="0,0,12,0"/>
                   <Button x:Name="FreeClear" Content="Clear" Margin="0,0,8,0"/>
-                  <Button x:Name="FreeTerminal" Margin="0,0,8,0" ToolTip="Opens your terminal. Paste with Ctrl+V and press Enter."><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE756;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock Text="Open Terminal"/></StackPanel></Button>
-                  <Button x:Name="FreeCopy" Style="{StaticResource AccentButton}" ToolTip="Copies one command that moves the ticked items to the Recycle Bin (Ctrl+Shift+C)"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8C8;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock Text="Copy Command"/></StackPanel></Button>
+                  <Button x:Name="FreeMove" Style="{StaticResource AccentButton}" ToolTip="Moves the ticked items to the Recycle Bin after you confirm. Restore puts them back until you empty the bin. (Delete)"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock Text="Move to Recycle Bin"/></StackPanel></Button>
                 </StackPanel>
                 <CheckBox x:Name="FreeAll" VerticalAlignment="Center" Margin="2,0,0,0"><TextBlock x:Name="FreeAllText"/></CheckBox>
               </DockPanel>
@@ -663,7 +663,7 @@
                     </StackPanel>
                   </DockPanel>
                   <WrapPanel Margin="0,10,0,0">
-                    <Button x:Name="InCopy" Style="{StaticResource AccentButton}" Margin="0,0,6,6" Visibility="Collapsed" ToolTip="Copies one command that moves these to the Recycle Bin"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8C8;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InCopyText" Text="Copy Command"/></StackPanel></Button>
+                    <Button x:Name="InMove" Style="{StaticResource AccentButton}" Margin="0,0,6,6" Visibility="Collapsed" ToolTip="Moves this to the Recycle Bin after you confirm"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InMoveText" Text="Move to Recycle Bin"/></StackPanel></Button>
                     <Button x:Name="InWatch" Margin="0,0,6,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE890;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InWatchText" Text="Watch"/></StackPanel></Button>
                     <Button x:Name="InIgnore" Margin="0,0,6,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xED1A;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InIgnoreText" Text="Ignore"/></StackPanel></Button>
                     <Button x:Name="InMore" Style="{StaticResource IconButton}" Content="&#xE712;" Margin="0,0,6,6" ToolTip="More actions" AutomationProperties.Name="More actions for this folder"/>
@@ -816,7 +816,7 @@
                     <StackPanel x:Name="SetTerminal" Orientation="Horizontal"/>
                   </Border>
                   <TextBlock Text="&#xE756;" Style="{StaticResource Glyph}" FontSize="20" Margin="0,0,16,0"/>
-                  <StackPanel><TextBlock Text="Open commands in"/><TextBlock Text="Open Terminal opens this. You paste the copied command with Ctrl+V and press Enter; Context Cleaner never runs it." Style="{StaticResource Caption}"/></StackPanel>
+                  <StackPanel><TextBlock Text="Open commands in"/><TextBlock Text="Only for Copy as Command Instead in the … menu: after copying, Open Terminal opens this, and you paste with Ctrl+V." Style="{StaticResource Caption}"/></StackPanel>
                 </DockPanel>
               </Border>
               <Border Style="{StaticResource CardBox}" Margin="0,0,0,4">
@@ -906,6 +906,32 @@
         </Border>
       </Grid>
     </Border>
+
+    <!-- One dialog, like Windows 11's: confirm a move, show its progress, then what happened. -->
+    <Grid x:Name="Dialog" Grid.ColumnSpan="2" Visibility="Collapsed">
+      <Border Background="#73000000"/>
+      <Border Background="{DynamicResource Menu}" BorderBrush="{DynamicResource MenuStroke}" BorderThickness="1" CornerRadius="8" MaxWidth="600" MinWidth="440" Margin="40" VerticalAlignment="Center" HorizontalAlignment="Center" KeyboardNavigation.TabNavigation="Cycle">
+        <Border.Effect><DropShadowEffect BlurRadius="32" ShadowDepth="8" Direction="270" Opacity="0.3" Color="Black"/></Border.Effect>
+        <DockPanel>
+          <Border DockPanel.Dock="Bottom" Background="{DynamicResource Subtle}" CornerRadius="0,0,8,8" Padding="24,16">
+            <DockPanel LastChildFill="False">
+              <Button x:Name="DialogExtra" DockPanel.Dock="Left" Visibility="Collapsed"/>
+              <Button x:Name="DialogPrimary" DockPanel.Dock="Right" Style="{StaticResource AccentButton}" MinWidth="120" Margin="8,0,0,0" IsDefault="True"/>
+              <Button x:Name="DialogCancel" DockPanel.Dock="Right" Content="Cancel" MinWidth="100"/>
+            </DockPanel>
+          </Border>
+          <StackPanel Margin="24,22,24,16">
+            <TextBlock x:Name="DialogTitle" Style="{StaticResource Subtitle}" TextWrapping="Wrap"/>
+            <TextBlock x:Name="DialogBody" TextWrapping="Wrap" Foreground="{DynamicResource Text2}" Margin="0,8,0,0"/>
+            <StackPanel x:Name="DialogWarnings" Margin="0,4,0,0"/>
+            <ProgressBar x:Name="DialogProgress" Height="4" Margin="0,14,0,0" Visibility="Collapsed" Foreground="{DynamicResource Accent}" Background="{DynamicResource Divider}" BorderThickness="0"/>
+            <ScrollViewer x:Name="DialogScroll" MaxHeight="280" VerticalScrollBarVisibility="Auto" Margin="0,14,0,0">
+              <StackPanel x:Name="DialogList"/>
+            </ScrollViewer>
+          </StackPanel>
+        </DockPanel>
+      </Border>
+    </Grid>
   </Grid>
 </Window>
 

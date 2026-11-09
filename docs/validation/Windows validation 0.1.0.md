@@ -95,6 +95,21 @@ The new rules were checked against the real drive: a scan into a separate data f
 
 93 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
 
+## Fifth pass: Move to Recycle Bin in the window
+
+Copying a command and pasting it in a terminal was the slowest, least Windows-like step, and a pasted command once failed with a raw PowerShell error ("Cannot find path" for its plan file, which existed and read normally afterwards; not reproduced).
+
+| Change | Checked |
+|---|---|
+| Free Up Space's main button and each folder's card say Move to Recycle Bin; Delete does the same. A Windows 11 style dialog lists the items with answer and size, flags Review first, warns when the Recycle Bin would overflow (the button then says Move Anyway), and Esc cancels | Opened from the button, from Delete on a selected folder and from several selected; Esc closed it and nothing moved; light and dark |
+| Confirming runs the same `Move-ToRecycleBin.ps1` in a hidden process with -Yes and -Log; the dialog shows progress and a line per item, then what moved, what stayed and why, with Open Recycle Bin; History and the lists update | On a fixture project (two 110 MB builds, every other place turned off, a separate data folder): one build moved, its row left the list, the plan's log read `Moved:`, and the fixture was then removed from the Recycle Bin |
+| A missing or unreadable plan says so in one line instead of a PowerShell error | Test |
+| Copy as Command Instead stays in the … menu (Ctrl+Shift+C); Open Terminal left Free Up Space | Settings explains it |
+| Overview opens with what you could get back and the Recycle Bin, above the chart; both cards have their button under the text | Real data and demo data |
+| Free Up Space lost its explanation paragraph; the chips explain themselves in tooltips | Screenshot |
+
+95 checks pass on Windows PowerShell 5.1 and PowerShell 7.6. The docs screenshots were retaken from demo data.
+
 ## Not checked
 
 Windows 10, a non-English Windows, high-contrast themes, other display scalings, and a Recycle Bin with thousands of items (the size query reads each one). The mover test sends one fixture folder to the Recycle Bin on the runner.

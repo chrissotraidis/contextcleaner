@@ -176,6 +176,15 @@ Check 'records the cleanup in History' ($history.Count -eq 1 -and @($history[0].
 [IO.File]::WriteAllText($planFile, (ConvertTo-Json -Depth 4 -InputObject ([pscustomobject]@{ Id = 'old'; Expires = [datetime]::UtcNow.AddHours(-1).ToString('o'); Items = @((Entry "$mv\changed")) })))
 $old = & $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan $planFile | Out-String
 Check 'an hour-old command moves nothing' ((Test-Path "$mv\changed") -and $old -match 'over an hour old')
+# The window's Move to Recycle Bin runs the same script with -Yes and -Log, and reads its progress from the log.
+New-Item -ItemType Directory -Path "$mv\logged" -Force | Out-Null; Set-Content "$mv\logged\c.txt" 'fixture'
+[IO.File]::WriteAllText($planFile, (ConvertTo-Json -Depth 4 -InputObject ([pscustomobject]@{ Id = 'logged'; Expires = [datetime]::UtcNow.AddHours(1).ToString('o'); Items = @((Entry "$mv\logged")) })))
+$log = Join-Path $work 'move.log'
+& $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan $planFile -Yes -Log $log | Out-Null
+$logged = Get-Content -LiteralPath $log -Raw
+Check 'the window''s move logs each item and the total' (-not (Test-Path "$mv\logged") -and $logged -match 'Moved: .*logged' -and $logged -match 'Moved 1 of 1') $logged
+$missingOut = & $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan (Join-Path $work 'no-such-plan.json') 2>&1 | Out-String
+Check 'a missing list says so plainly, with no PowerShell error' ($missingOut -match 'could not read the list' -and $missingOut -notmatch 'Get-Content') $missingOut
 
 # Clean up: the fixture that went to the Recycle Bin, then everything else this run made.
 $shell = New-Object -ComObject Shell.Application

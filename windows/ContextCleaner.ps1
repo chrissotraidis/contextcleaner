@@ -375,8 +375,8 @@ function Show-Overview {
     $back = @($offered | Where-Object { $_.Answer -ne 'Review first' })
     $review = @($offered | Where-Object { $_.Answer -eq 'Review first' })
     if ($items) {
-        $ui.OvBack.Text = (Size (Sum $back)) + ' you could get back, nothing lost'
-        $ui.OvBackSub.Text = (Plural $back.Count 'item is' 'items are') + ' safe to remove or rebuildable. ' + (Size (Sum $review)) + ' more is Review first: look inside before removing it.'
+        $ui.OvBack.Text = (Size (Sum $back)) + ' you could get back'
+        $ui.OvBackSub.Text = 'Nothing lost: ' + (Plural $back.Count 'item is' 'items are') + ' safe to remove or rebuildable. ' + (Size (Sum $review)) + ' more is Review first: look inside before removing it.'
     } else { $ui.OvBack.Text = 'Scan to see what you can get back'; $ui.OvBackSub.Text = 'A scan reads folder sizes and dates for about a minute. It changes nothing.' }
     # Before the first scan there is nothing to free yet, so the button scans.
     $ui.OvGoFree.Content = $(if ($items) { 'Open Free Up Space' } else { 'Scan Now' })
@@ -448,24 +448,24 @@ function Get-FreeTicked { @(Get-FreeShown | Where-Object { $_.Selected }) }
 function Update-FreeTotal {
     $shown = @(Get-FreeShown); $ticked = @($shown | Where-Object { $_.Selected })
     $ui.FreeTicked.Text = $(if ($ticked) { [string]$ticked.Count + ' ticked · ' + (Size (Sum $ticked)) } else { 'Nothing ticked' })
-    $ui.FreeCopy.IsEnabled = [bool]$ticked; $ui.FreeClear.IsEnabled = [bool]$ticked
+    $ui.FreeMove.IsEnabled = [bool]$ticked; $ui.FreeClear.IsEnabled = [bool]$ticked
     $ui.FreeAllText.Text = 'Select all ' + $shown.Count + ' shown'
     $ui.FreeAll.IsChecked = $(if ($shown -and $ticked.Count -eq $shown.Count) { $true } elseif ($ticked) { $null } else { $false })
     $script:Confirm = $null
 }
 function Invoke-Copy($Items) {
     $ticked = if ($Items) { @($Items) } else { Get-FreeTicked }
-    if (-not $ticked) { return }
+    if (-not $ticked) { Set-Message 'Tick items in Free Up Space first.'; return }
     $review = @($ticked | Where-Object { $_.Answer -eq 'Review first' })
     $total = Sum $ticked; $shared = [long]0; foreach ($t in $ticked) { $shared += $t.SharedBytes }
     $capacity = Get-BinCapacity
     $key = (@($ticked | ForEach-Object { $_.Path }) -join '|')
-    # Ask in place, never in a pop-up: a second click on Copy Command confirms.
+    # Ask in place: choosing Copy as Command Instead a second time confirms.
     if ($script:Confirm -ne $key) {
         $asks = @()
         if ($review) { $asks += (Plural $review.Count 'item is' 'items are') + ' Review first and may hold something that exists only there' }
         if ($capacity -gt 0 -and ($total + $shared) -gt $capacity) { $asks += 'together they are more than the Recycle Bin holds (' + (Size $capacity) + '), so Windows would permanently delete the oldest things in it; empty the bin first or tick fewer' }
-        if ($asks) { $script:Confirm = $key; Set-Message (($asks -join '; ') + '. Click Copy Command again to copy anyway.'); return }
+        if ($asks) { $script:Confirm = $key; Set-Message (($asks -join '; ') + '. Choose Copy as Command Instead again to copy anyway.'); return }
     }
     $script:Confirm = $null
     $window.Cursor = [Windows.Input.Cursors]::Wait
@@ -474,6 +474,138 @@ function Invoke-Copy($Items) {
     if (-not $plan.Command) { Set-Message ('Nothing to copy.' + $left); return }
     [Windows.Clipboard]::SetText($plan.Command)
     Set-Message ('Copied a command for ' + (Plural $plan.Count 'item' 'items') + ' (' + (Size $plan.Bytes) + '). Paste it in your terminal and press Enter; it prints a line for each and stops working in an hour.' + $left) -Terminal
+}
+
+# ---------- Move to Recycle Bin, from the window ----------
+# The button runs the same Move-ToRecycleBin.ps1 a copied command runs, with every check, after you confirm here.
+# It runs in its own hidden process and writes each result to a log this window reads, so the window stays responsive.
+function New-DialogText([string]$Text, [string]$Brush, [string]$Margin = '0,8,0,0') {
+    $t = New-Object Windows.Controls.TextBlock; $t.Text = $Text; $t.TextWrapping = 'Wrap'; $t.Margin = $Margin
+    $t.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, $Brush); $t
+}
+function New-DialogRow([string]$Name, [string]$Detail, [string]$Brush, [string]$SizeText) {
+    $row = New-Object Windows.Controls.DockPanel; $row.Margin = '0,0,8,10'
+    $size = New-Object Windows.Controls.TextBlock; $size.Text = $SizeText; $size.FontWeight = 'SemiBold'; $size.Margin = '16,0,0,0'
+    [Windows.Controls.DockPanel]::SetDock($size, 'Right'); $row.Children.Add($size) | Out-Null
+    $panel = New-Object Windows.Controls.StackPanel
+    $n = New-Object Windows.Controls.TextBlock; $n.Text = $Name; $n.TextTrimming = 'CharacterEllipsis'; $n.ToolTip = $Name
+    $panel.Children.Add($n) | Out-Null
+    $panel.Children.Add((New-DialogText $Detail $Brush '0,1,0,0')) | Out-Null
+    $row.Children.Add($panel) | Out-Null
+    $row
+}
+function Get-AnswerBrush($Item) { switch ($Item.AnswerKey) { 'safe' { 'Safe' } 'rebuild' { 'Rebuild' } 'review' { 'Review' } 'keep' { 'Keep' } default { 'Text2' } } }
+function Show-Dialog([string]$Title, [string]$Body, [object[]]$Warnings, [object[]]$Rows, [string]$Primary, [scriptblock]$OnPrimary, [string]$Cancel = 'Cancel', [string]$Extra = '', [scriptblock]$OnExtra = $null) {
+    $ui.DialogTitle.Text = $Title; $ui.DialogBody.Text = $Body
+    $ui.DialogWarnings.Children.Clear(); foreach ($w in @($Warnings | Where-Object { $_ })) { $ui.DialogWarnings.Children.Add($w) | Out-Null }
+    $ui.DialogList.Children.Clear(); foreach ($r in @($Rows | Where-Object { $_ })) { $ui.DialogList.Children.Add($r) | Out-Null }
+    $ui.DialogScroll.Visibility = $(if ($ui.DialogList.Children.Count) { 'Visible' } else { 'Collapsed' }); $ui.DialogScroll.ScrollToTop()
+    $ui.DialogProgress.Visibility = 'Collapsed'
+    $script:DialogPrimaryAction = $OnPrimary; $script:DialogExtraAction = $OnExtra
+    $ui.DialogPrimary.Content = $Primary; $ui.DialogPrimary.Visibility = $(if ($Primary) { 'Visible' } else { 'Collapsed' }); $ui.DialogPrimary.IsEnabled = $true
+    $ui.DialogCancel.Content = $Cancel; $ui.DialogCancel.Visibility = $(if ($Cancel) { 'Visible' } else { 'Collapsed' }); $ui.DialogCancel.IsEnabled = $true
+    $ui.DialogExtra.Content = $Extra; $ui.DialogExtra.Visibility = $(if ($Extra) { 'Visible' } else { 'Collapsed' })
+    $ui.Dialog.Visibility = 'Visible'
+    $focus = if ($Primary) { $ui.DialogPrimary } else { $ui.DialogCancel }
+    $window.Dispatcher.BeginInvoke([Action]({ $focus.Focus() | Out-Null }.GetNewClosure()), [Windows.Threading.DispatcherPriority]::Input) | Out-Null
+}
+function Close-Dialog { if (-not $script:Mover) { $ui.Dialog.Visibility = 'Collapsed' } }
+function Request-Move($Items) {
+    $ticked = @($Items | Where-Object { $_ -and $_.Removable -and -not $_.Withheld -and -not $_.Ignored })
+    if (-not $ticked -or $script:Mover) { return }
+    $total = Sum $ticked; $shared = [long]0; foreach ($t in $ticked) { $shared += $t.SharedBytes }
+    $review = @($ticked | Where-Object { $_.Answer -eq 'Review first' })
+    $warnings = @()
+    if ($review) { $warnings += New-DialogText ((Plural $review.Count 'is' 'are') + ' Review first: ' + $(if ($review.Count -eq 1) { 'it' } else { 'they' }) + ' may hold something that exists only there. Look inside first if you aren''t sure.') 'Review' }
+    $capacity = Get-BinCapacity; $inBin = [math]::Max([long]0, [long](Get-BinBytes))
+    $overflow = $capacity -gt 0 -and ($total + $shared + $inBin) -gt $capacity
+    if ($overflow) {
+        $warnings += New-DialogText ('The Recycle Bin holds at most ' + (Size $capacity) + ' and already has ' + (Size $inBin) + '. To make room, Windows will permanently delete the oldest things in it. Empty it first, or move fewer.') 'Growing'
+    }
+    $rows = foreach ($i in $ticked | Sort-Object Bytes -Descending) { New-DialogRow $i.Name ($i.Answer + ' · ' + $i.Reason) (Get-AnswerBrush $i) $i.SizeText }
+    $script:MoveItems = $ticked
+    $them = if ($ticked.Count -eq 1) { 'it' } else { 'them' }
+    # Overflowing the bin loses older things for good, so going ahead reads as a choice.
+    Show-Dialog ('Move ' + (Plural $ticked.Count 'item' 'items') + ' to the Recycle Bin?') ((Size $total) + '. Each is checked again first: anything changed since the scan, open in a program or already gone stays where it is. Restore puts ' + $them + ' back until you empty the bin.') $warnings $rows $(if ($overflow) { 'Move Anyway' } else { 'Move to Recycle Bin' }) { Start-Move $script:MoveItems }
+}
+function Start-Move($Items) {
+    $window.Cursor = [Windows.Input.Cursors]::Wait
+    try { $plan = New-CCPlan $Items $moverPath } finally { $window.Cursor = $null }
+    if (-not $plan.Command) {
+        $rows = foreach ($l in $plan.LeftOut) { New-DialogRow $l.Name $l.Why 'Review' '' }
+        Show-Dialog 'Nothing was moved' 'Each item was checked again, and none of them can go right now.' @() $rows '' $null 'Close'
+        return
+    }
+    $script:MoveLog = $plan.PlanPath + '.log'; $script:MovePlan = $plan; $script:MoveSeen = 0
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = Get-CCPowerShell
+    $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $moverPath + '" -Plan "' + $plan.PlanPath + '" -Yes -Log "' + $script:MoveLog + '"'
+    $start.UseShellExecute = $false; $start.CreateNoWindow = $true; $start.WorkingDirectory = $script:CCHome
+    $script:Mover = [Diagnostics.Process]::Start($start)
+    $ui.DialogTitle.Text = 'Moving ' + (Plural $plan.Count 'item' 'items') + ' to the Recycle Bin'
+    $ui.DialogBody.Text = 'Checking each one again, then moving it. Big folders take a moment.'
+    $ui.DialogWarnings.Children.Clear(); $ui.DialogList.Children.Clear(); $ui.DialogScroll.Visibility = 'Collapsed'
+    $ui.DialogProgress.Visibility = 'Visible'; $ui.DialogProgress.Maximum = $plan.Count; $ui.DialogProgress.Value = 0
+    $ui.DialogPrimary.Visibility = 'Collapsed'; $ui.DialogExtra.Visibility = 'Collapsed'; $ui.DialogCancel.IsEnabled = $false
+    $window.TaskbarItemInfo.ProgressState = 'Normal'; $window.TaskbarItemInfo.ProgressValue = 0
+    $script:MoveTimer.Start()
+}
+function Read-MoveLog {
+    if (-not $script:MoveLog -or -not (Test-Path -LiteralPath $script:MoveLog)) { return @() }
+    try {
+        $stream = New-Object IO.FileStream $script:MoveLog, ([IO.FileMode]::Open), ([IO.FileAccess]::Read), ([IO.FileShare]::ReadWrite)
+        $reader = New-Object IO.StreamReader $stream, ([Text.Encoding]::UTF8)
+        $text = $reader.ReadToEnd(); $reader.Dispose()
+    } catch { return @() }
+    @($text -split '\r?\n' | Where-Object { $_ })
+}
+function New-ResultRow([string]$Line) {
+    if ($Line -notmatch '^(Moved|NOT moved|Already gone): (.+?)( \((.+)\))?$') { return $null }
+    $path = $Matches[2]; $why = $Matches[4]
+    $known = $script:Items | Where-Object { $_.Path -eq $path } | Select-Object -First 1
+    $name = if ($known) { $known.Name } else { Split-Path $path -Leaf }
+    $size = if ($known) { $known.SizeText } else { '' }
+    switch ($Matches[1]) {
+        'Moved' { New-DialogRow $name 'Moved' 'Safe' $size }
+        'NOT moved' { New-DialogRow $name ('Not moved: ' + $why) 'Review' $size }
+        default { New-DialogRow $name 'Already gone' 'Text2' '' }
+    }
+}
+$script:MoveTimer = New-Object Windows.Threading.DispatcherTimer
+$script:MoveTimer.Interval = [TimeSpan]::FromMilliseconds(250)
+$script:MoveTimer.add_Tick({
+    $lines = Read-MoveLog
+    $done = @($lines | Where-Object { $_ -match '^(Moved|NOT moved|Already gone): ' })
+    if ($done.Count -gt $script:MoveSeen) {
+        $ui.DialogScroll.Visibility = 'Visible'
+        foreach ($line in $done[$script:MoveSeen..($done.Count - 1)]) { $row = New-ResultRow $line; if ($row) { $ui.DialogList.Children.Add($row) | Out-Null } }
+        $script:MoveSeen = $done.Count; $ui.DialogScroll.ScrollToEnd()
+        $ui.DialogProgress.Value = $done.Count; $window.TaskbarItemInfo.ProgressValue = $done.Count / [double][math]::Max(1, $script:MovePlan.Count)
+    }
+    if (-not $script:Mover.HasExited) { return }
+    $script:MoveTimer.Stop(); $script:Mover.Dispose(); $script:Mover = $null
+    $window.TaskbarItemInfo.ProgressState = 'None'
+    Complete-Move (Read-MoveLog)
+})
+function Complete-Move([string[]]$Lines) {
+    $moved = @($Lines | Where-Object { $_ -like 'Moved: *' }); $not = @($Lines | Where-Object { $_ -like 'NOT moved: *' })
+    $summary = $Lines | Where-Object { $_ -match '^Moved \d+ of \d+ \((.+)\) to the Recycle Bin' } | Select-Object -First 1
+    $freed = if ($summary -and $summary -match '\(([^)]+)\) to the Recycle Bin') { $Matches[1] } else { $null }
+    $rows = foreach ($line in $Lines) { New-ResultRow $line }
+    $warnings = @()
+    if ($not) { $warnings += New-DialogText ((Plural $not.Count 'item stayed' 'items stayed') + ' where ' + $(if ($not.Count -eq 1) { 'it was' } else { 'they were' }) + '; the reason is beside each.') 'Review' }
+    if ($script:MovePlan.LeftOut) { $warnings += New-DialogText ('Left out after checking again: ' + (($script:MovePlan.LeftOut | ForEach-Object { $_.Name + ' (' + $_.Why.ToLower() + ')' }) -join ', ') + '.') 'Review' }
+    if ($moved) {
+        $title = 'Moved ' + (Plural $moved.Count 'item' 'items') + ' to the Recycle Bin'
+        $body = 'Empty the Recycle Bin to get ' + $(if ($freed) { $freed } else { 'the space' }) + ' back. Until then, Restore puts anything back.'
+    } else {
+        $title = 'Nothing was moved'
+        $other = @($Lines | Where-Object { $_ -notmatch '^(Moved|NOT moved|Already gone)' -and $_ -notlike 'The space comes back*' })
+        $body = $(if ($other) { $other -join ' ' } else { 'Each item was checked again, and none of them could go.' })
+    }
+    Show-Dialog $title $body $warnings $rows 'Done' { Close-Dialog } '' 'Open Recycle Bin' { Open-Bin }
+    Set-Message $(if ($moved) { $title + $(if ($freed) { ' (' + $freed + ').' } else { '.' }) + ' Empty the bin to get the space back.' } else { $title + '.' })
+    Remove-Gone; Update-Views
 }
 function Get-BinCapacity {
     try {
@@ -563,7 +695,7 @@ function Show-Inspector($Item) {
         $ui.InGrowth.Text = $(if ($copyable) { (Plural $copyable.Count 'can' 'can') + ' go to the Recycle Bin: ' + (Size (Sum $copyable)) } else { 'None of these can go to the Recycle Bin' })
         $ui.InGrowth.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'Text2')
         foreach ($n in 'InPath', 'InWatch', 'InIgnore', 'InReveal', 'InMore', 'InLook', 'InAction', 'InTrack', 'InAnswerBox', 'InChartHead', 'InChart', 'InChartSub', 'InNoteBox') { $ui[$n].Visibility = 'Collapsed' }
-        $ui.InCopy.Visibility = $(if ($copyable) { 'Visible' } else { 'Collapsed' }); $ui.InCopyText.Text = 'Copy Command for ' + $copyable.Count
+        $ui.InMove.Visibility = $(if ($copyable) { 'Visible' } else { 'Collapsed' }); $ui.InMoveText.Text = 'Move ' + $copyable.Count + ' to Recycle Bin'
         $script:NoteItem = $null
         return
     }
@@ -572,7 +704,7 @@ function Show-Inspector($Item) {
     $ui.Inspector.Visibility = 'Visible'
     foreach ($n in 'InPath', 'InWatch', 'InIgnore', 'InReveal', 'InMore', 'InAnswerBox', 'InChartHead', 'InChart', 'InChartSub', 'InNoteBox') { $ui[$n].Visibility = 'Visible' }
     $copyable = $Item.Removable -and -not $Item.Withheld -and -not $Item.Ignored
-    $ui.InCopy.Visibility = $(if ($copyable) { 'Visible' } else { 'Collapsed' }); $ui.InCopyText.Text = 'Copy Command'
+    $ui.InMove.Visibility = $(if ($copyable) { 'Visible' } else { 'Collapsed' }); $ui.InMoveText.Text = 'Move to Recycle Bin'
     $script:NoteItem = $null; $ui.InNote.Text = [string]$Item.Note; $script:NoteItem = $Item
     $ui.InNoteBox.Visibility = $(if ($Item.Rule -eq 'off') { 'Collapsed' } else { 'Visible' })
     $ui.InName.Text = $Item.Name
@@ -864,7 +996,7 @@ function Add-FolderSetting([string]$Name, [string]$Title) {
 # ---------- Navigation ----------
 $script:Titles = @{
     overview = @('Overview', 'What fills your drive, what changed, and what you could get back.')
-    free = @('Free Up Space', 'What nothing has touched for a while, biggest first. Tick it, copy one command, paste it in your terminal.')
+    free = @('Free Up Space', 'What nothing has touched for a while, biggest first. Tick what you want gone and move it to the Recycle Bin.')
     folders = @('Folders', 'Every folder Context Cleaner knows, with its answer and why.')
     watch = @('Watchlist', 'Folders you watch, and any that grew since an earlier scan.')
     ignored = @('Ignored', 'Folders you set aside: still scanned and never suggested, or not scanned at all.')
@@ -1021,8 +1153,11 @@ On $ui.FreeAll 'Click' {
     Update-FreeTotal
 }
 On $ui.FreeClear 'Click' { foreach ($i in $script:Items) { $i.Selected = $false }; Update-FreeTotal }
-On $ui.FreeCopy 'Click' { Invoke-Copy }
-On $ui.FreeTerminal 'Click' { Open-Terminal }
+On $ui.FreeMove 'Click' { Request-Move (Get-FreeTicked) }
+On $ui.MenuCopy 'Click' { Invoke-Copy }
+On $ui.DialogPrimary 'Click' { if ($script:DialogPrimaryAction) { & $script:DialogPrimaryAction } }
+On $ui.DialogCancel 'Click' { Close-Dialog }
+On $ui.DialogExtra 'Click' { if ($script:DialogExtraAction) { & $script:DialogExtraAction } }
 On $ui.FreeOpenBin 'Click' { Open-Bin }
 On $ui.FreeGroups 'ContextMenuOpening' { param($s, $e) Open-ItemMenu $s $e }
 On $ui.FreeGroups 'MouseDoubleClick' { param($s, $e) $item = Find-Item $e.OriginalSource; if ($item) { Show-InExplorer $item.Path } }
@@ -1034,7 +1169,7 @@ foreach ($pair in @(@($ui.TileAll, 'all'), @($ui.TileSafe, 'safe'), @($ui.TileRe
 }
 foreach ($rb in $ui.FolderSorts.Children) { On $rb 'Checked' { param($s, $e) $script:Sort = $s.Tag; if ($script:Ready) { Show-Folders } } }
 On $ui.FolderList 'SelectionChanged' { $ui.InScroll.ScrollToTop(); Show-Inspector $ui.FolderList.SelectedItem }
-On $ui.InCopy 'Click' { Invoke-Copy @($ui.FolderList.SelectedItems | Where-Object { $_.Removable -and -not $_.Withheld -and -not $_.Ignored }) }
+On $ui.InMove 'Click' { Request-Move @($ui.FolderList.SelectedItems) }
 On $ui.InNote 'TextChanged' { if ($script:NoteItem) { $script:NoteSaving = $script:NoteItem; $script:NoteText = $ui.InNote.Text; $script:NoteTimer.Stop(); $script:NoteTimer.Start() } }
 On $ui.RescanAll 'Click' { Start-Rescan (Get-FolderRows) }
 On $ui.FolderList 'ContextMenuOpening' { param($s, $e) Open-ItemMenu $s $e }
@@ -1119,7 +1254,12 @@ On $window 'PreviewKeyDown' {
     $ctrl = [Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Control
     $shift = [Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Shift
     $pages = @('overview', 'free', 'folders', 'watch', 'ignored', 'unread', 'history')
+    # While the dialog is open, Esc closes it and the page's shortcuts wait; Tab, Enter and Space work its buttons.
+    if ($ui.Dialog.Visibility -eq 'Visible') { if ($e.Key -eq 'Escape') { Close-Dialog; $e.Handled = $true }; return }
+    $typing = $e.OriginalSource -is [Windows.Controls.TextBox]
     if ($e.Key -eq 'F5' -or ($ctrl -and $e.Key -eq 'R')) { Start-Scan; $e.Handled = $true }
+    elseif ($e.Key -eq 'Delete' -and -not $typing -and $script:Page -eq 'free') { Request-Move (Get-FreeTicked); $e.Handled = $true }
+    elseif ($e.Key -eq 'Delete' -and -not $typing -and $script:Page -ne 'overview' -and $script:Page -ne 'history' -and $script:Page -ne 'settings') { Request-Move @($ui.FolderList.SelectedItems); $e.Handled = $true }
     elseif ($e.Key -eq 'Escape') { if ($script:Worker) { Stop-Scan; $e.Handled = $true } elseif ($ui.SearchBox.Text) { $ui.SearchBox.Text = ''; $e.Handled = $true } }
     elseif ($ctrl -and $e.Key -eq 'F') { $ui.SearchBox.Focus() | Out-Null; $ui.SearchBox.SelectAll(); $e.Handled = $true }
     elseif ($ctrl -and $shift -and $e.Key -eq 'C') { if ($script:Page -eq 'free') { Invoke-Copy }; $e.Handled = $true }

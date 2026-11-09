@@ -1,10 +1,10 @@
 # Context Cleaner for Windows
 
-Find the gigabytes that Codex, build tools, WSL, Docker and games pile up on your Windows drive, and clear them in one go. It shows what each folder is and what removing it costs. **It never deletes a thing; you do.**
+Find the gigabytes that Codex, build tools, WSL, Docker and games pile up on your Windows drive, and clear them in one go. It shows what each folder is and what removing it costs. **It never deletes a thing:** it moves what you choose to the Recycle Bin, after you confirm, and the space comes back when you empty it.
 
 Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11 has. It follows Windows' light or dark mode and your accent color, with Mica on Windows 11.
 
-![Free Up Space grouped by kind: 66.1 GB untouched for a day or longer, build output and package downloads ticked, Copy Command and Open Terminal beside the total](../docs/images/windows-free-up-space.png)
+![Free Up Space grouped by kind: 66.1 GB untouched for a day or longer, build output and package downloads ticked, and Move to Recycle Bin beside the total](../docs/images/windows-free-up-space.png)
 
 <table>
   <tr>
@@ -12,8 +12,12 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
     <td width="50%"><img src="../docs/images/windows-history.png" alt="History: space moved to the Recycle Bin each day, and each cleanup with what it moved and left alone"><br><sub><b>History.</b> What you moved to the Recycle Bin, and what each cleanup left alone.</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="../docs/images/windows-overview.png" alt="Overview: free space over the last 7 days, one bar for the drive by answer, and the four answer tiles"><br><sub><b>Overview.</b> Free space over time, what fills the drive, and what you could get back.</sub></td>
+    <td width="50%"><img src="../docs/images/windows-overview.png" alt="Overview: what you could get back and what waits in the Recycle Bin first, then free space over the last 7 days and one bar for the drive by answer"><br><sub><b>Overview.</b> What you could get back, free space over time, and what fills the drive.</sub></td>
+    <td width="50%"><img src="../docs/images/windows-move.png" alt="The Move to Recycle Bin dialog: seven items with their answers and sizes, a warning that the Recycle Bin would overflow, and Move Anyway"><br><sub><b>Move to Recycle Bin.</b> Confirm in the window; each item is checked again first.</sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="../docs/images/windows-folders-light.png" alt="Folders in light mode"><br><sub><b>Light or dark,</b> following Windows.</sub></td>
+    <td width="50%"></td>
   </tr>
 </table>
 
@@ -30,8 +34,8 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
 
 1. **Scan.** It measures the places these tools pile up data (sizes and dates only), and reads git, read-only and offline, for worktrees and build folders.
 2. **Answer.** Every folder gets one answer, with the reason, what removing it costs, and how to get the space back yourself.
-3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or **Review first**, list **Biggest first** or **By kind**, tick what you want gone and choose **Copy Command** (Ctrl+Shift+C). Review first items start unticked, and copying any of them asks first, in the window.
-4. **You run it.** Paste the command in Windows Terminal or PowerShell (**Open Terminal** opens the one you choose in Settings). It checks each item again, moves it to the Recycle Bin, and prints `Moved`, `Already gone` or `NOT moved` with the reason. **History** lists every cleanup. Restore works until you empty the bin; that's when the space comes back.
+3. **Free Up Space.** Pick how long something must have sat untouched, filter to **Nothing lost** or **Review first**, list **Biggest first** or **By kind**, and tick what you want gone. Review first items start unticked.
+4. **Move to Recycle Bin** (or press Delete). A dialog lists what you ticked, says which are Review first, and warns if the Recycle Bin would overflow. Confirm, and each item is checked again and moved, with progress and a line for each: moved, already gone, or not moved and why. **History** lists every cleanup. Restore works until you empty the bin; that's when the space comes back. To run it yourself instead, choose **… › Copy as Command Instead** and paste it in a terminal.
 
 | Answer | What removing it costs |
 |---|---|
@@ -65,9 +69,9 @@ Turn any group off in **Settings › Where Context Cleaner looks**.
 - **The Recycle Bin is part of the picture:** what's waiting in it, its size limit (a command that would overflow it asks first, because Windows would permanently delete the oldest things to make room), and Open Recycle Bin.
 - **Growth.** Each scan is compared with the newest one at least 6 hours old. Folders that grew show on the **Watchlist**, with a size-over-time chart on their card. **Scan once a day** (Settings) adds a reading every day through Task Scheduler, in your account, sizes only.
 
-## Is it safe to paste its commands?
+## What a move checks
 
-The command names no files, only a plan file Context Cleaner saved. When you run it, it:
+Move to Recycle Bin and a copied command run the same script, `Move-ToRecycleBin.ps1`, on a list of items Context Cleaner saved. It:
 
 - does nothing if the command is over an hour old;
 - refuses to run if the Recycle Bin on the drive is set to delete files immediately;
@@ -84,13 +88,14 @@ Add `-WhatIf` to a copied command to run every check and see what it would move,
 | Ctrl+R or F5 | Scan |
 | Esc | Stop the scan, or clear the search |
 | Ctrl+F | Search |
-| Ctrl+Shift+C | Copy Command (Free Up Space) |
+| Delete | Move what's ticked in Free Up Space, or the selected folders, to the Recycle Bin (asks first) |
+| Ctrl+Shift+C | Copy as Command Instead (Free Up Space) |
 | Ctrl+E | Export the cleanup list |
 | Ctrl+1 … Ctrl+7 | Overview, Free Up Space, Folders, Watchlist, Ignored, Couldn't Scan, History |
 | Ctrl+, | Settings |
 | Alt+Left, Alt+Right, mouse back and forward | Back and forward between pages |
 
-Right-click any folder for Show in Explorer, Copy Path, Scan Again, Watch for Growth, Its Growth Is Normal, Remind Me Tomorrow, Ignore, Track and Stop Scanning. In Folders, Ctrl+click or Shift+click several folders to see their total and copy one command for those that can go. Each folder's card has a note field; search finds folders by their notes.
+Right-click any folder for Show in Explorer, Copy Path, Scan Again, Watch for Growth, Its Growth Is Normal, Remind Me Tomorrow, Ignore, Track and Stop Scanning. In Folders, Ctrl+click or Shift+click several folders to see their total and move those that can go in one step. Each folder's card has a note field; search finds folders by their notes.
 
 The window opens where you left it, shows scan progress on its taskbar button, collapses its sidebar to icons when narrow, and follows Windows' high-contrast themes.
 

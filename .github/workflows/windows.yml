@@ -1,0 +1,21 @@
+name: Windows
+
+on:
+  push:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  pull_request:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests on Windows PowerShell 5.1 (built into Windows)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File windows\Tests\Run-Tests.ps1
+      - name: Tests on PowerShell 7
+        shell: pwsh
+        run: pwsh -NoProfile -STA -File windows/Tests/Run-Tests.ps1
+

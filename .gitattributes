@@ -1,0 +1,4 @@
+# The Windows app: batch files need CRLF, and Windows tools expect it in scripts and XAML.
+*.cmd text eol=crlf
+windows/**/*.ps1 text eol=crlf
+windows/*.xaml text eol=crlf

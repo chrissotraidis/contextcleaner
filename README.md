@@ -6,13 +6,14 @@
 
 <p align="center">
   <strong>Find the gigabytes that Codex, Xcode and your build tools pile up on your Mac, and clear them in one go.</strong><br>
-  A native macOS app. It shows what each folder is and what removing it costs. It never deletes a thing; you do.
+  A native macOS app, and now a Windows app too. It shows what each folder is and what removing it costs. It never deletes a thing; you do.
 </p>
 
 <p align="center">
   <a href="https://github.com/chrissotraidis/contextcleaner/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/chrissotraidis/contextcleaner?label=release&color=5E5CE6"></a>
   <img alt="macOS 14 or later" src="https://img.shields.io/badge/macOS-14%2B-0A84FF?logo=apple">
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-0A84FF?logo=apple">
+  <a href="windows/README.md"><img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%26%2011-0078D4?logo=windows"></a>
   <img alt="Native SwiftUI" src="https://img.shields.io/badge/SwiftUI-native-FF9F0A?logo=swift&logoColor=white">
   <img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-8E8E93">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-8E8E93"></a>
@@ -69,6 +70,8 @@ Before copying, every item is checked again: anything gone, open in an app or ch
 4. Open **Free Up Space**, second in the sidebar.
 
 Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses Finder to move items; on 15 and later it uses macOS's `trash` tool.
+
+**On Windows 10 or 11:** download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.0), unblock and extract it, and double-click **Context Cleaner.cmd**. Nothing to install; it runs on the Windows PowerShell every Windows has. It knows Windows' own places too (WSL and Docker disks, Steam libraries, shader caches, crash dumps, Windows Update downloads), moves what you tick to the Recycle Bin, and suggests moving games and Linux to a roomier drive instead of deleting them. See [Context Cleaner for Windows](windows/README.md).
 
 <details>
 <summary><b>What it looks at</b></summary>

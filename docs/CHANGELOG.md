@@ -2,6 +2,25 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## Windows 0.1.0
+
+Context Cleaner on Windows 10 and 11, with the Mac app's answers, safety rules and pages, and what Windows needs on top.
+
+- **Move to Recycle Bin, in the window.** No command to copy or terminal to open: tick what you want gone and choose Move to Recycle Bin (or press Delete). A dialog lists the items, flags Review first ones, and says Move Anyway when the Recycle Bin would overflow and Windows would permanently delete older things. Each item is checked again and moved with progress, then the dialog shows what moved, what stayed and why. It runs the same checked script a copied command runs; Copy as Command Instead is still in the … menu.
+- **Nothing to install.** It runs on Windows PowerShell 5.1, which every Windows has, and on PowerShell 7. Double-click `Context Cleaner.cmd`, or add a Start menu shortcut in Settings.
+- **Every Mac page.** Overview with free space over time and one bar for the drive; Free Up Space with Untouched for, Nothing lost and Review first, Biggest first or By kind, and one move; Folders with answer tiles, search, sorting, several folders at once and a card with size over time and your note; Watchlist, Ignored, Couldn't Scan with Scan These Again, History and Settings. Right-click any folder to scan it again, watch it, call its growth normal, be reminded tomorrow, ignore, track or stop scanning it.
+- **Feels like a Windows app.** Opens where you left it, back and forward with Alt+arrows and the mouse's side buttons, scan progress on the taskbar button, a sidebar that collapses to icons, high-contrast themes, and names for screen readers.
+- **Looks like Windows 11.** Mica, a dark or light title bar, your accent color and light or dark mode, following Windows as it changes.
+- **Windows places.** WSL distributions (with Look Inside) and Docker Desktop disks, every Steam library, DirectX, NVIDIA and AMD shader caches, crash dumps and error reports, Windows Update downloads, Windows.old, Codex runtimes, and package caches from npm to Cargo.
+- **Old files in a busy folder.** As on the Mac, a Temp folder something still writes to offers the files in it that have sat untouched, and only those move. Here that was the Remote Desktop client's trace files, which grew by about 5 GB a day.
+- **Games say when you last played them**, from Steam's own records ("never played", "last played Mar 2024"), and each card has Uninstall in Steam, which asks in Steam before it removes anything.
+- **Quick to scan.** About 700,000 files in 23 s here: every core measures from one shared list of folders, and Temp's thousands of small items are sized in one pass.
+- **Move instead of delete.** With room on another drive, a game's card says how Steam moves it there and the WSL card gives `wsl --manage <distro> --move`. Their disks' cards give Microsoft's steps to hand space back after deleting inside them.
+- **The Recycle Bin.** A move puts items there, refuses a bin set to delete at once, and asks before a selection bigger than the bin would make Windows permanently delete older things. Overview and Free Up Space show what's waiting in it now, asked of Windows each time, so emptying the bin shows as soon as you come back.
+- **Checked moves.** Each item is checked again when you choose Move and when it moves: gone, a link or junction anywhere on its path, a program running from it, a worktree git no longer vouches for, or changed since the scan. Hardlinked files count once, so a size is what removing it frees.
+- **Git decides what's output, as on the Mac.** `build` is output by name; `out`, `dist`, `target` and other build-like folders count only when the project's git ignores them, and are Review first in a folder without git, without Git installed, or in a repository git can't read. A big folder a project's git ignores that isn't build output is listed as Not in git, only on this PC.
+- **Daily scan** through Task Scheduler (optional, sizes only), and tests that run on both PowerShell versions in GitHub Actions.
+
 ## 0.25.0
 
 - **Look Inside Windows.** A running Windows machine in Parallels was a 240 GiB box Context Cleaner couldn't open. Its card now lists the biggest folders on Windows' drives and in each user folder, biggest first, with when each was made, plus Windows Update's downloads, and says how much of it is outside Windows, its apps and their data. It asks through Parallels Tools, reads sizes only, works in any Windows language, and saves nothing. On this Mac it found about 210 GiB of old build and test folders inside Windows.

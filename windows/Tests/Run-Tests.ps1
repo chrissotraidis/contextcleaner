@@ -105,6 +105,22 @@ Check 'settings round-trip' ($back.appearance -eq 'Dark' -and $back.untouchedDay
 Save-CCSettings ([pscustomobject]@{ projectRoots = @(); projectRootsFound = $true; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false })
 $raw = Get-Content (Join-Path $script:CCData 'settings.json') -Raw
 Check 'found project folders are not frozen into settings' ($raw -match '"projectRoots":\s*\[\s*\]') $raw.Substring(0, [math]::Min(80, $raw.Length))
+# Reminders, notes, normal growth and window placement round-trip; a reminder that has passed is dropped.
+$s = Get-CCSettings
+$s.remind['C:\later'] = [datetime]::UtcNow.AddDays(1).ToString('o'); $s.remind['C:\past'] = [datetime]::UtcNow.AddDays(-1).ToString('o')
+$s.notes['C:\noted'] = 'keep for the demo'; $s.expected = @('C:\grows'); $s.window = [pscustomobject]@{ Left = 10; Top = 20; Width = 1200; Height = 800; Max = $false }
+Save-CCSettings $s
+$back = Get-CCSettings
+Check 'reminders round-trip, and passed ones drop' ($back.remind.ContainsKey('C:\later') -and -not $back.remind.ContainsKey('C:\past'))
+Check 'notes, normal growth and window placement round-trip' ($back.notes['C:\noted'] -eq 'keep for the demo' -and @($back.expected) -contains 'C:\grows' -and $back.window.Width -eq 1200)
+$it = New-Object ContextCleaner.Item; $it.Path = 'C:\later'; $it.Bytes = 10GB; $it.Growth = 5GB
+Check 'a big change is growing' $it.Growing
+Set-CCItemSettings $it $back
+Check 'Remind Me Tomorrow snoozes the item' $it.IsSnoozed
+$it.Path = 'C:\grows'; Set-CCItemSettings $it $back
+Check 'growth you call normal is not growing' (-not $it.Growing)
+$it.Path = 'C:\noted'; Set-CCItemSettings $it $back
+Check 'a note is attached to its folder' ($it.Note -eq 'keep for the demo')
 
 # The move command: rechecks each item, moves only to the Recycle Bin, and expires.
 $mv = Join-Path $script:CCTemp ('cc-test-move-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -140,7 +156,7 @@ foreach ($item in @($shell.Namespace(10).Items() | Where-Object { $_.ExtendedPro
     Remove-Item -LiteralPath (Join-Path (Split-Path $p -Parent) ('$I' + (Split-Path $p -Leaf).Substring(2))) -Force -ErrorAction SilentlyContinue
 }
 foreach ($j in "$mv\link", "$m\a\junction", "$work\to-home") { if (Test-Path -LiteralPath $j) { [IO.Directory]::Delete($j) } }
-Remove-Item -LiteralPath $mv, $work -Recurse -Force
+Remove-Item -LiteralPath $mv, $work -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
 Write-Host ([string]$script:Checks + ' checks, ' + $script:Failures + ' failed')
 exit $(if ($script:Failures) { 1 } else { 0 })

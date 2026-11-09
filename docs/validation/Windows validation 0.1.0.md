@@ -45,6 +45,21 @@ Two cleanups from Free Up Space's command moved 14 items, 77.6 GB, to the Recycl
 | Look Inside on the Ubuntu disk | Runs in the background; listed the biggest folders inside Linux |
 | Settings toggles | Scan once a day created a Task Scheduler task running Windows PowerShell with `-Scan`, next run 12:30 PM, and removed it; the Start menu shortcut used the icon and a hidden window, and was removed |
 
+## Second parity round
+
+Driven through UI Automation on the real data, at full width and at 1,100 px.
+
+| Found | Fix |
+|---|---|
+| The window took 6.5 s to appear, mostly compiling the C# helper, finding project folders twice and reading every saved scan first | The compiled helper is cached, project folders are found once per run, and the last scan loads after the window shows: 3.0 to 3.7 s to a window, about 4 s to data |
+| At 1,100 to 1,300 px the title collided with the free-space meter, Free Up Space's header overlapped, and Folders' count and sort bar broke apart | Columns, the card and the toolbar shrink with the window; below 1,150 px the sidebar collapses to icons with tooltips |
+| Missing next to the Mac: several folders at once, Scan Again, Scan These Again, Remind Me Tomorrow, Its Growth Is Normal, notes, back and forward, window placement, taskbar progress, high contrast, screen-reader names | Added; each was exercised in the window (a note saved and found by search, a reminder set and cleared, three folders copied as one command, Back across three pages, a scan stopped) |
+| A crash in an event handler only reached a generic log line | Every handler runs through one wrapper that logs the line that failed |
+| `$Item.Snoozed.Value` was null in PowerShell, which unwraps nullable dates | Fixed and searched for elsewhere |
+| PowerShell 7 read reminder dates from JSON as dates and dropped them | Both forms are read as text; tests on both versions cover it |
+
+87 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
+
 ## Not checked
 
 Windows 10, a non-English Windows, high-contrast themes, other display scalings, and the GitHub Actions run (it runs on the pull request). The mover test sends one fixture folder to the Recycle Bin on the runner.

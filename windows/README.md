@@ -89,7 +89,11 @@ Add `-WhatIf` to a copied command to run every check and see what it would move,
 | Ctrl+1 … Ctrl+7 | Overview, Free Up Space, Folders, Watchlist, Ignored, Couldn't Scan, History |
 | Ctrl+, | Settings |
 
-Right-click any folder for Show in Explorer, Copy Path, Watch, Ignore, Track and Stop Scanning.
+| Alt+Left, Alt+Right, mouse back and forward | Back and forward between pages |
+
+Right-click any folder for Show in Explorer, Copy Path, Scan Again, Watch for Growth, Its Growth Is Normal, Remind Me Tomorrow, Ignore, Track and Stop Scanning. In Folders, Ctrl+click or Shift+click several folders to see their total and copy one command for those that can go. Each folder's card has a note field; search finds folders by their notes.
+
+The window opens where you left it, shows scan progress on its taskbar button, collapses its sidebar to icons when narrow, and follows Windows' high-contrast themes.
 
 ## Your data
 
@@ -111,5 +115,5 @@ The tests use a throwaway data folder (`CONTEXT_CLEANER_DATA`) and fixtures in T
 | `ContextCleaner.Core.ps1` | Places, measuring, answers, git checks and plans. Reads only. |
 | `Move-ToRecycleBin.ps1` | The command you run. The only file that moves anything, and only to the Recycle Bin. |
 
-Not on Windows yet: Tags & Notes, Remind Me Tomorrow, "unused inside" items within busy folders, and the Mac-only places (Xcode, simulators, Parallels).
+Not on Windows yet: tags (notes are there), "unused inside" items within busy folders, and the Mac-only places (Xcode, simulators, Parallels).
 

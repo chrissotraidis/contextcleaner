@@ -4,6 +4,8 @@
         Background="{DynamicResource Base}" WindowStartupLocation="CenterScreen" UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Ideal" SnapsToDevicePixels="True">
   <Window.Resources>
+    <GridLength x:Key="ColReason">210</GridLength>
+    <GridLength x:Key="ColSize">130</GridLength>
     <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
     <FontFamily x:Key="Display">Segoe UI Variable Display, Segoe UI</FontFamily>
 
@@ -242,7 +244,7 @@
       <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
       <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
       <Setter Property="ItemContainerStyle"><Setter.Value><Style TargetType="ListBoxItem">
-        <Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Foreground" Value="{DynamicResource Text1}"/>
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Foreground" Value="{DynamicResource Text1}"/><Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
           <Border x:Name="bd" Background="Transparent" CornerRadius="4" Margin="0,1" Padding="10,7">
             <Grid>
@@ -292,7 +294,7 @@
     <DataTemplate x:Key="FreeRow">
       <Grid Height="44" Background="Transparent">
         <Grid.ColumnDefinitions><ColumnDefinition Width="34"/><ColumnDefinition Width="14"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" VerticalAlignment="Center"/>
+        <CheckBox IsChecked="{Binding Selected, Mode=TwoWay}" VerticalAlignment="Center" AutomationProperties.Name="{Binding Name}"/>
         <Border Grid.Column="1" Style="{StaticResource AnswerBar}" Height="32" HorizontalAlignment="Left"/>
         <StackPanel Grid.Column="2" VerticalAlignment="Center">
           <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
@@ -312,7 +314,7 @@
 
     <DataTemplate x:Key="FolderRow">
       <Grid Height="40" Background="Transparent">
-        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="210"/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="{DynamicResource ColReason}"/><ColumnDefinition Width="{DynamicResource ColSize}"/></Grid.ColumnDefinitions>
         <StackPanel VerticalAlignment="Center" Margin="0,0,12,0">
           <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Path}"/>
           <DockPanel>
@@ -345,13 +347,13 @@
   </Window.Resources>
 
   <Grid>
-    <Grid.ColumnDefinitions><ColumnDefinition Width="240"/><ColumnDefinition/></Grid.ColumnDefinitions>
+    <Grid.ColumnDefinitions><ColumnDefinition x:Name="SideColumn" Width="240"/><ColumnDefinition/></Grid.ColumnDefinitions>
 
     <!-- Sidebar: Mica shows through where Windows allows it -->
     <DockPanel Margin="8,10,8,12">
       <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,6,0,16">
         <Image x:Name="AppIcon" Width="20" Height="20" Margin="0,0,12,0"/>
-        <TextBlock Text="Context Cleaner" FontSize="13" VerticalAlignment="Center"/>
+        <TextBlock x:Name="AppName" Text="Context Cleaner" FontSize="13" VerticalAlignment="Center"/>
       </StackPanel>
       <StackPanel DockPanel.Dock="Bottom">
         <ListBox x:Name="NavFooter" Style="{StaticResource Rows}" Margin="0,0,0,8">
@@ -359,7 +361,7 @@
         </ListBox>
         <StackPanel Orientation="Horizontal" Margin="14,0,0,0">
           <TextBlock Text="&#xEA18;" Style="{StaticResource Glyph}" FontSize="13" Foreground="{DynamicResource Text2}" Margin="0,0,10,0"/>
-          <TextBlock Text="Never deletes. You decide." Style="{StaticResource Caption}"/>
+          <TextBlock x:Name="NeverDeletes" Text="Never deletes. You decide." Style="{StaticResource Caption}"/>
         </StackPanel>
       </StackPanel>
       <ListBox x:Name="Nav" Style="{StaticResource Rows}">
@@ -378,7 +380,7 @@
       <Grid>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
-        <DockPanel Margin="32,22,24,12">
+        <DockPanel Margin="32,22,24,0" VerticalAlignment="Top">
           <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Top">
             <StackPanel x:Name="FreeMini" Margin="0,0,18,0" VerticalAlignment="Center" Width="170">
               <TextBlock x:Name="FreeMiniText" FontSize="12" HorizontalAlignment="Right" Foreground="{DynamicResource Text2}"/>
@@ -390,7 +392,7 @@
             <TextBox x:Name="SearchBox" Style="{StaticResource Search}" Tag="Search folders (Ctrl+F)" Width="250" Margin="0,0,8,0" VerticalAlignment="Center"/>
             <Button x:Name="StopButton" Visibility="Collapsed" Margin="0,0,8,0" ToolTip="Stop the scan (Esc)"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE71A;" Style="{StaticResource Glyph}" FontSize="12" Margin="0,0,8,0"/><TextBlock Text="Stop"/></StackPanel></Button>
             <Button x:Name="ScanButton" Style="{StaticResource AccentButton}" ToolTip="Scan your drive. Reads sizes and dates only (Ctrl+R)"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE72C;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock Text="Scan"/></StackPanel></Button>
-            <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Content="&#xE712;" Margin="4,0,0,0" ToolTip="More">
+            <Button x:Name="MoreButton" Style="{StaticResource IconButton}" Content="&#xE712;" Margin="4,0,0,0" ToolTip="More" AutomationProperties.Name="More">
               <Button.ContextMenu><ContextMenu>
                 <MenuItem x:Name="MenuExport" Header="Export Cleanup List…" Tag="&#xE9F9;" InputGestureText="Ctrl+E"/>
                 <MenuItem x:Name="MenuBin" Header="Open Recycle Bin" Tag="&#xE74D;"/>
@@ -400,11 +402,12 @@
               </ContextMenu></Button.ContextMenu>
             </Button>
           </StackPanel>
+          <Button x:Name="BackButton" DockPanel.Dock="Left" Style="{StaticResource IconButton}" Content="&#xE72B;" Margin="-8,4,8,0" VerticalAlignment="Top" Visibility="Collapsed" ToolTip="Back (Alt+Left)" AutomationProperties.Name="Back"/>
           <StackPanel>
-            <TextBlock x:Name="PageTitle" Style="{StaticResource Title}" Text="Overview"/>
-            <TextBlock x:Name="PageSubtitle" Style="{StaticResource Secondary}" Margin="0,2,0,0"/>
+            <TextBlock x:Name="PageTitle" Style="{StaticResource Title}" Text="Overview" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"/>
           </StackPanel>
         </DockPanel>
+        <TextBlock x:Name="PageSubtitle" Style="{StaticResource Secondary}" Margin="32,62,24,12" VerticalAlignment="Top"/>
 
         <Grid Grid.Row="1">
           <!-- Overview -->
@@ -461,7 +464,7 @@
                   <DockPanel>
                     <Button x:Name="OvOpenBin" DockPanel.Dock="Right" Content="Open Recycle Bin" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     <StackPanel>
-                      <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE74D;" Style="{StaticResource Glyph}" Margin="0,0,8,0" Foreground="{DynamicResource Bin}"/><TextBlock x:Name="OvBin" Style="{StaticResource Strong}"/></StackPanel>
+                      <DockPanel><TextBlock DockPanel.Dock="Left" Text="&#xE74D;" Style="{StaticResource Glyph}" Margin="0,0,8,0" Foreground="{DynamicResource Bin}" VerticalAlignment="Top"/><TextBlock x:Name="OvBin" Style="{StaticResource Strong}" TextWrapping="Wrap"/></DockPanel>
                       <TextBlock x:Name="OvBinSub" Style="{StaticResource Caption}" Margin="0,4,0,0"/>
                     </StackPanel>
                   </DockPanel>
@@ -497,8 +500,19 @@
           <DockPanel x:Name="PageFree" Visibility="Collapsed" Margin="32,4,24,12">
             <Border DockPanel.Dock="Top" Style="{StaticResource CardBox}" Margin="0,0,0,10">
               <StackPanel>
-                <DockPanel>
-                  <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock x:Name="FreeHead" Style="{StaticResource Subtitle}"/>
+                <TextBlock x:Name="FreeHeadSub" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+                <WrapPanel Margin="0,12,0,0">
+                  <RadioButton x:Name="ChipAll" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,8,8"/>
+                  <RadioButton x:Name="ChipLossless" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,8,8"/>
+                  <RadioButton x:Name="ChipReview" Style="{StaticResource Chip}" GroupName="chip" Margin="0,0,16,8"/>
+                  <Border Style="{StaticResource SegBox}" Margin="0,0,16,8">
+                    <StackPanel Orientation="Horizontal">
+                      <RadioButton x:Name="OrderBig" Style="{StaticResource Seg}" Content="Biggest first" GroupName="order"/>
+                      <RadioButton x:Name="OrderKind" Style="{StaticResource Seg}" Content="By kind" GroupName="order"/>
+                    </StackPanel>
+                  </Border>
+                  <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
                     <TextBlock Text="Untouched for" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,10,0"/>
                     <Border Style="{StaticResource SegBox}">
                       <StackPanel x:Name="FreeAges" Orientation="Horizontal">
@@ -510,25 +524,8 @@
                       </StackPanel>
                     </Border>
                   </StackPanel>
-                  <StackPanel>
-                    <TextBlock x:Name="FreeHead" Style="{StaticResource Subtitle}"/>
-                    <TextBlock x:Name="FreeHeadSub" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
-                  </StackPanel>
-                </DockPanel>
-                <DockPanel Margin="0,14,0,0">
-                  <WrapPanel>
-                    <RadioButton x:Name="ChipAll" Style="{StaticResource Chip}" GroupName="chip"/>
-                    <RadioButton x:Name="ChipLossless" Style="{StaticResource Chip}" GroupName="chip"/>
-                    <RadioButton x:Name="ChipReview" Style="{StaticResource Chip}" GroupName="chip"/>
-                    <Border Style="{StaticResource SegBox}" Margin="8,0,0,0">
-                      <StackPanel Orientation="Horizontal">
-                        <RadioButton x:Name="OrderBig" Style="{StaticResource Seg}" Content="Biggest first" GroupName="order"/>
-                        <RadioButton x:Name="OrderKind" Style="{StaticResource Seg}" Content="By kind" GroupName="order"/>
-                      </StackPanel>
-                    </Border>
-                  </WrapPanel>
-                </DockPanel>
-                <TextBlock Style="{StaticResource Caption}" Margin="0,10,0,0" Text="Nothing lost: safe to remove, or recreated by the next build or download. Review first: may hold something that's only here, so look inside first. Review first items start unticked."/>
+                </WrapPanel>
+                <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,0" Text="Nothing lost: safe to remove, or recreated by the next build or download. Review first: may hold something that's only here, so look inside first. Review first items start unticked."/>
                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                   <TextBlock Text="&#xE74D;" Style="{StaticResource Glyph}" FontSize="13" Foreground="{DynamicResource Bin}" Margin="0,0,6,0"/>
                   <TextBlock x:Name="FreeBinNote" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
@@ -611,24 +608,25 @@
                     <RadioButton Style="{StaticResource Seg}" Content="Name" Tag="name" GroupName="sort"/>
                   </StackPanel>
                 </Border>
-                <TextBlock x:Name="FolderCount" Style="{StaticResource Caption}" VerticalAlignment="Center"/>
+                <Button x:Name="RescanAll" DockPanel.Dock="Right" Content="Scan These Again" Margin="0,0,10,0" Visibility="Collapsed" ToolTip="Measure these folders again"/>
+                <TextBlock x:Name="FolderCount" Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/>
               </DockPanel>
               <Grid DockPanel.Dock="Top" Margin="10,0,22,4">
-                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="210"/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="{DynamicResource ColReason}"/><ColumnDefinition Width="{DynamicResource ColSize}"/></Grid.ColumnDefinitions>
                 <TextBlock Text="Folder" Style="{StaticResource Caption}"/>
                 <TextBlock Grid.Column="1" Text="Can I remove it?" Style="{StaticResource Caption}"/>
-                <TextBlock Grid.Column="2" Text="Size · last changed" Style="{StaticResource Caption}" HorizontalAlignment="Right" Margin="0,0,10,0"/>
+                <TextBlock x:Name="SizeHeader" Grid.Column="2" Text="Size · last changed" Style="{StaticResource Caption}" HorizontalAlignment="Right" Margin="0,0,10,0" TextWrapping="NoWrap"/>
               </Grid>
               <Border Style="{StaticResource CardBox}" Padding="4">
                 <Grid>
-                  <ListBox x:Name="FolderList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource FolderRow}"/>
+                  <ListBox x:Name="FolderList" Style="{StaticResource Rows}" ItemTemplate="{StaticResource FolderRow}" SelectionMode="Extended" AutomationProperties.Name="Folders"/>
                   <TextBlock x:Name="FolderEmpty" Style="{StaticResource Secondary}" HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" MaxWidth="420" Visibility="Collapsed"/>
                 </Grid>
               </Border>
             </DockPanel>
 
             <Border Grid.Column="2" Grid.Row="1" Style="{StaticResource CardBox}" Padding="0">
-              <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20,18">
+              <ScrollViewer x:Name="InScroll" VerticalScrollBarVisibility="Auto" Padding="20,18">
                 <StackPanel x:Name="Inspector">
                   <TextBlock x:Name="InName" Style="{StaticResource Subtitle}" TextWrapping="Wrap"/>
                   <TextBlock x:Name="InSub" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
@@ -640,9 +638,10 @@
                     </StackPanel>
                   </DockPanel>
                   <WrapPanel Margin="0,10,0,0">
+                    <Button x:Name="InCopy" Style="{StaticResource AccentButton}" Margin="0,0,6,6" Visibility="Collapsed" ToolTip="Copies one command that moves these to the Recycle Bin"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8C8;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InCopyText" Text="Copy Command"/></StackPanel></Button>
                     <Button x:Name="InWatch" Margin="0,0,6,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE890;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InWatchText" Text="Watch"/></StackPanel></Button>
                     <Button x:Name="InIgnore" Margin="0,0,6,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xED1A;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock x:Name="InIgnoreText" Text="Ignore"/></StackPanel></Button>
-                    <Button x:Name="InMore" Style="{StaticResource IconButton}" Content="&#xE712;" Margin="0,0,6,6" ToolTip="More actions"/>
+                    <Button x:Name="InMore" Style="{StaticResource IconButton}" Content="&#xE712;" Margin="0,0,6,6" ToolTip="More actions" AutomationProperties.Name="More actions for this folder"/>
                     <Button x:Name="InReveal" Margin="0,0,6,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE838;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock Text="Show in Explorer"/></StackPanel></Button>
                     <Button x:Name="InLook" Margin="0,0,6,6"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE721;" Style="{StaticResource Glyph}" FontSize="13" Margin="0,0,8,0"/><TextBlock Text="Look Inside"/></StackPanel></Button>
                     <Button x:Name="InAction" Margin="0,0,6,6"/>
@@ -665,7 +664,13 @@
 
                     </StackPanel>
                   </Border>
-                  <DockPanel Margin="0,18,0,0">
+                  <StackPanel x:Name="InNoteBox" Margin="0,14,0,0">
+                    <TextBlock Text="Your note" Style="{StaticResource Caption}" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                    <TextBox x:Name="InNote" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="34" MaxHeight="120" VerticalScrollBarVisibility="Auto" Padding="6,5"
+                             Background="{DynamicResource InputFill}" Foreground="{DynamicResource Text1}" BorderBrush="{DynamicResource ControlStroke}" CaretBrush="{DynamicResource Text1}"
+                             SelectionBrush="{DynamicResource Accent}" AutomationProperties.Name="Your note on this folder" ToolTip="Saved as you type. Search finds folders by their notes."/>
+                  </StackPanel>
+                  <DockPanel x:Name="InChartHead" Margin="0,18,0,0">
                     <TextBlock x:Name="InChartChange" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource AccentLink}"/>
                     <TextBlock Text="Size over time" Style="{StaticResource Strong}"/>
                   </DockPanel>

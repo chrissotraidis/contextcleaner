@@ -54,7 +54,20 @@ function Write-CCLog([string]$Text) {
 }
 # Handlers are plain script blocks, so they see this script's functions. Any failure in one is caught by the
 # dispatcher handler below, logged, and shown in the status line instead of closing the window.
-function On($Control, [string]$EventName, [scriptblock]$Handler) { $Control.('add_' + $EventName)($Handler) }
+$script:Handlers = @{}
+function On($Control, [string]$EventName, [scriptblock]$Handler) {
+    $id = [guid]::NewGuid().ToString('N')
+    $script:Handlers[$id] = $Handler
+    # The wrapper calls a global function, so it runs wherever WPF invokes it; the handler itself still runs in this script.
+    $Control.('add_' + $EventName)([scriptblock]::Create('param($s, $e) Invoke-CCHandler ''' + $id + ''' $s $e'))
+}
+function global:Invoke-CCHandler([string]$Id, $Sender, $EventArgs) {
+    try { & $script:Handlers[$Id] $Sender $EventArgs }
+    catch {
+        Write-CCLog ($_.Exception.Message + ' @ ' + $_.InvocationInfo.ScriptLineNumber + ': ' + $_.InvocationInfo.Line.Trim())
+        Set-Message ('Something went wrong: ' + $_.Exception.Message + ' It''s logged in ' + $script:LogPath)
+    }
+}
 
 # ---------- Theme: Windows' light or dark mode, accent color, Mica and title bar ----------
 function New-Brush([string]$Hex) { $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($Hex)); $b.Freeze(); $b }
@@ -75,6 +88,24 @@ function Set-Theme {
     $mode = $script:Settings.appearance
     $dark = if ($mode -eq 'Dark') { $true } elseif ($mode -eq 'Light') { $false } else { Test-CCDarkMode }
     $script:Dark = $dark
+    # High contrast: Windows' own contrast colors everywhere, no Mica and no answer colors (the answer is always in words).
+    # CONTEXT_CLEANER_CONTRAST=1 shows the high-contrast look without changing Windows, for testing.
+    if ([Windows.SystemParameters]::HighContrast -or $env:CONTEXT_CLEANER_CONTRAST) {
+        $sc = [Windows.SystemColors]
+        $fill = 'Base', 'Layer', 'Card', 'CardHover', 'ControlFill', 'ControlHover', 'ControlPressed', 'InputFill', 'InputFocus', 'Subtle', 'Selected', 'SegOn', 'Menu',
+            'SafeSoft', 'RebuildSoft', 'ReviewSoft', 'KeepSoft', 'OtherSoft', 'AccentSoft'
+        $ink = 'LayerStroke', 'CardStroke', 'ControlStroke', 'CheckStroke', 'Divider', 'MenuStroke', 'Thumb', 'Text1', 'Text2', 'Safe', 'Rebuild', 'Review', 'Keep', 'Other', 'Growing', 'Bin'
+        foreach ($k in $fill) { $window.Resources[$k] = (New-ColorBrush $sc::WindowColor).psobject.BaseObject }
+        foreach ($k in $ink) { $window.Resources[$k] = (New-ColorBrush $sc::WindowTextColor).psobject.BaseObject }
+        $window.Resources['Text3'] = (New-ColorBrush $sc::GrayTextColor).psobject.BaseObject
+        foreach ($k in 'Accent', 'AccentHover', 'AccentStroke') { $window.Resources[$k] = (New-ColorBrush $sc::HighlightColor).psobject.BaseObject }
+        $window.Resources['AccentText'] = (New-ColorBrush $sc::HighlightTextColor).psobject.BaseObject
+        $window.Resources['AccentLink'] = (New-ColorBrush $sc::HotTrackColor).psobject.BaseObject
+        $script:AccentColor = $sc::HighlightColor
+        if ($script:Mica) { $window.Background = $window.Resources['Base'] }
+        Update-Charts
+        return
+    }
     $accent = Get-CCAccent
     # PowerShell wraps values it returns; the resource dictionary must hold the brush itself.
     $r = @{}
@@ -313,6 +344,10 @@ function Show-Overview {
         $def = New-Object Windows.Controls.ColumnDefinition; $def.Width = New-Object Windows.GridLength ([double]$bytes), 'Star'
         $ui.OvBar.ColumnDefinitions.Add($def)
         $part = New-Object Windows.Controls.Border; $part.SetResourceReference([Windows.Controls.Border]::BackgroundProperty, $brushes[$key]); $part.ToolTip = $key + ': ' + (Size $bytes)
+        # Click a part of the bar to see its folders.
+        $tiles = @{ 'Safe to remove' = 'safe'; 'Rebuildable' = 'rebuild'; 'Review first' = 'review'; 'Not for the Recycle Bin' = 'keep'; 'Everything else' = 'all' }
+        if ($tiles.ContainsKey($key)) { $part.Tag = $tiles[$key]; $part.Cursor = [Windows.Input.Cursors]::Hand; $part.add_MouseLeftButtonUp({ param($s, $e) $script:Tile = $s.Tag; Show-Page 'folders' }) }
+        elseif ($key -eq 'Recycle Bin') { $part.Cursor = [Windows.Input.Cursors]::Hand; $part.add_MouseLeftButtonUp({ Open-Bin }) }
         if ($key -ne 'Free') { $part.Margin = '0,0,1,0' }
         [Windows.Controls.Grid]::SetColumn($part, $column); $ui.OvBar.Children.Add($part) | Out-Null; $column++
         $legend = New-Object Windows.Controls.StackPanel; $legend.Orientation = 'Horizontal'; $legend.Margin = '0,0,20,6'
@@ -366,7 +401,7 @@ function Show-Overview {
 function Get-AgeDays { [int]$script:Settings.untouchedDays }
 function Get-FreeCandidates {
     $days = Get-AgeDays
-    @($script:Items | Where-Object { $_.Removable -and -not $_.Ignored -and ($days -eq 0 -or $_.IdleDays -ge $days) })
+    @($script:Items | Where-Object { $_.Removable -and -not $_.Ignored -and -not $_.IsSnoozed -and ($days -eq 0 -or $_.IdleDays -ge $days) })
 }
 function Get-FreeShown {
     $all = Get-FreeCandidates
@@ -406,8 +441,8 @@ function Update-FreeTotal {
     $ui.FreeAll.IsChecked = $(if ($shown -and $ticked.Count -eq $shown.Count) { $true } elseif ($ticked) { $null } else { $false })
     $script:Confirm = $null
 }
-function Invoke-Copy {
-    $ticked = Get-FreeTicked
+function Invoke-Copy($Items) {
+    $ticked = if ($Items) { @($Items) } else { Get-FreeTicked }
     if (-not $ticked) { return }
     $review = @($ticked | Where-Object { $_.Answer -eq 'Review first' })
     $total = Sum $ticked; $shared = [long]0; foreach ($t in $ticked) { $shared += $t.SharedBytes }
@@ -458,7 +493,7 @@ function Get-FolderRows {
                 'review' { @($base | Where-Object { $_.Answer -eq 'Review first' }) } 'keep' { @($base | Where-Object { $_.Answer -eq 'Not for the Recycle Bin' }) } default { $base } }
         }
     }
-    if ($q) { $rows = @($rows | Where-Object { $_.Name.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $_.Path.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or ($_.App -and $_.App.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or ($_.Category -and $_.Category.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) }) }
+    if ($q) { $rows = @($rows | Where-Object { $_.Name.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or $_.Path.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or ($_.App -and $_.App.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or ($_.Category -and $_.Category.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or ($_.Note -and $_.Note.IndexOf($q, [StringComparison]::OrdinalIgnoreCase) -ge 0) }) }
     switch ($script:Sort) {
         'growth' { @($rows | Sort-Object @{ Expression = { if ($_.Growth) { $_.Growth } else { 0 } }; Descending = $true }, @{ Expression = 'Bytes'; Descending = $true }) }
         'idle' { @($rows | Sort-Object @{ Expression = { $_.IdleDays }; Descending = $true }) }
@@ -468,9 +503,10 @@ function Get-FolderRows {
 }
 function Set-TileContent($Tile, [string]$Brush, [string]$Title, [string]$Value, [string]$Sub) {
     $panel = New-Object Windows.Controls.StackPanel
-    $t = New-Object Windows.Controls.TextBlock; $t.Text = $Title; $t.FontWeight = 'SemiBold'; $t.FontSize = 13; $t.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, $Brush)
-    $v = New-Object Windows.Controls.TextBlock; $v.Text = $Value; $v.FontSize = 20; $v.FontWeight = 'SemiBold'; $v.FontFamily = $window.Resources['Display']
-    $s = New-Object Windows.Controls.TextBlock; $s.Text = $Sub; $s.FontSize = 12; $s.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'Text2')
+    $t = New-Object Windows.Controls.TextBlock; $t.Text = $Title; $t.FontWeight = 'SemiBold'; $t.FontSize = 13; $t.TextTrimming = 'CharacterEllipsis'; $t.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, $Brush)
+    $v = New-Object Windows.Controls.TextBlock; $v.Text = $Value; $v.FontSize = $(if ($script:Compact) { 17 } else { 20 }); $v.FontWeight = 'SemiBold'; $v.FontFamily = $window.Resources['Display']; $v.TextTrimming = 'CharacterEllipsis'
+    $s = New-Object Windows.Controls.TextBlock; $s.Text = $Sub; $s.FontSize = 12; $s.TextTrimming = 'CharacterEllipsis'; $s.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'Text2')
+    $Tile.ToolTip = $Title + ': ' + $Value + ', ' + $Sub
     $panel.Children.Add($t) | Out-Null; $panel.Children.Add($v) | Out-Null; $panel.Children.Add($s) | Out-Null
     $Tile.Content = $panel
 }
@@ -485,6 +521,7 @@ function Show-Folders {
     $ui.TileAll.IsChecked = $script:Tile -eq 'all'; $ui.TileSafe.IsChecked = $script:Tile -eq 'safe'; $ui.TileRebuild.IsChecked = $script:Tile -eq 'rebuild'
     $ui.TileReview.IsChecked = $script:Tile -eq 'review'; $ui.TileKeep.IsChecked = $script:Tile -eq 'keep'
     $ui.FolderTiles.Visibility = $(if ($script:Page -eq 'folders') { 'Visible' } else { 'Collapsed' })
+    $ui.RescanAll.Visibility = $(if ($script:Page -eq 'unread' -and $script:Items) { 'Visible' } else { 'Collapsed' })
     $previous = $ui.FolderList.SelectedItem
     $rows = Get-FolderRows
     $ui.FolderList.ItemsSource = Typed $rows
@@ -498,12 +535,32 @@ function Show-Folders {
     }
     $keep = $null
     if ($previous) { $keep = $rows | Where-Object { $_.Path -eq $previous.Path } | Select-Object -First 1 }
-    if ($keep) { $ui.FolderList.SelectedItem = $keep } elseif ($rows) { $ui.FolderList.SelectedIndex = 0 } else { Show-Inspector $null }
+    if ($keep) { $same = $ui.FolderList.SelectedItem -eq $keep -and @($ui.FolderList.SelectedItems).Count -le 1; $ui.FolderList.SelectedItem = $keep; $ui.FolderList.ScrollIntoView($keep); if ($same) { Show-Inspector $keep } } elseif ($rows) { $ui.FolderList.SelectedIndex = 0 } else { Show-Inspector $null }
 }
 function Show-Inspector($Item) {
+    # Several folders selected (Ctrl+click or Shift+click): their total, and one command for those that can go.
+    $selected = @($ui.FolderList.SelectedItems)
+    if ($selected.Count -gt 1) {
+        $copyable = @($selected | Where-Object { $_.Removable -and -not $_.Withheld -and -not $_.Ignored })
+        $ui.InInside.Visibility = 'Collapsed'; $ui.Inspector.Visibility = 'Visible'
+        $ui.InName.Text = (Plural $selected.Count 'folder' 'folders') + ' selected'
+        $ui.InSub.Text = 'Ctrl+click or Shift+click to change the selection'
+        $ui.InSize.Text = Size (Sum $selected)
+        $ui.InGrowth.Text = $(if ($copyable) { (Plural $copyable.Count 'can' 'can') + ' go to the Recycle Bin: ' + (Size (Sum $copyable)) } else { 'None of these can go to the Recycle Bin' })
+        $ui.InGrowth.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'Text2')
+        foreach ($n in 'InPath', 'InWatch', 'InIgnore', 'InReveal', 'InMore', 'InLook', 'InAction', 'InTrack', 'InAnswerBox', 'InChartHead', 'InChart', 'InChartSub', 'InNoteBox') { $ui[$n].Visibility = 'Collapsed' }
+        $ui.InCopy.Visibility = $(if ($copyable) { 'Visible' } else { 'Collapsed' }); $ui.InCopyText.Text = 'Copy Command for ' + $copyable.Count
+        $script:NoteItem = $null
+        return
+    }
     $ui.InInside.Visibility = 'Collapsed'
     if (-not $Item) { $ui.Inspector.Visibility = 'Collapsed'; return }
     $ui.Inspector.Visibility = 'Visible'
+    foreach ($n in 'InPath', 'InWatch', 'InIgnore', 'InReveal', 'InMore', 'InAnswerBox', 'InChartHead', 'InChart', 'InChartSub', 'InNoteBox') { $ui[$n].Visibility = 'Visible' }
+    $copyable = $Item.Removable -and -not $Item.Withheld -and -not $Item.Ignored
+    $ui.InCopy.Visibility = $(if ($copyable) { 'Visible' } else { 'Collapsed' }); $ui.InCopyText.Text = 'Copy Command'
+    $script:NoteItem = $null; $ui.InNote.Text = [string]$Item.Note; $script:NoteItem = $Item
+    $ui.InNoteBox.Visibility = $(if ($Item.Rule -eq 'off') { 'Collapsed' } else { 'Visible' })
     $ui.InName.Text = $Item.Name
     $ui.InSub.Text = $Item.SubLine + $(if ($Item.Group -and $Item.Group -ne $Item.Category -and $Item.Group -ne $Item.App) { ' · ' + $Item.Group } else { '' })
     $ui.InPath.Text = $Item.Path
@@ -517,7 +574,7 @@ function Show-Inspector($Item) {
     $brush = switch ($Item.AnswerKey) { 'safe' { 'Safe' } 'rebuild' { 'Rebuild' } 'review' { 'Review' } 'keep' { 'Keep' } default { 'Other' } }
     $ui.InAnswerBox.SetResourceReference([Windows.Controls.Border]::BorderBrushProperty, $brush)
     $ui.InAnswer.Text = $Item.Answer; $ui.InAnswer.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, $brush)
-    $ui.InReason.Text = $Item.Reason + $(if ($Item.Ignored) { ' · ignored, so never suggested' } else { '' })
+    $ui.InReason.Text = $Item.Reason + $(if ($Item.Ignored) { ' · ignored, so never suggested' } elseif ($Item.IsSnoozed) { ' · suggested again ' + $Item.Snoozed.ToLocalTime().ToString('ddd h:mm tt') } else { '' }) + $(if ($Item.Expected) { ' · its growth is normal' } else { '' })
     $ui.InWhat.Text = $Item.Explanation
     $ui.InCost.Text = $Item.Consequence
     $ui.InHow.Text = $Item.HowTo; $ui.InHowBox.Visibility = $(if ($Item.HowTo) { 'Visible' } else { 'Collapsed' })
@@ -576,6 +633,74 @@ function Switch-Track($Item) {
     Set-Message $(if ($on) { 'Tracking ' + $Item.Path + '. Scan again to see what''s inside it.' } else { 'Stopped tracking ' + $Item.Path + '.' })
     Update-Views
 }
+function Switch-Expected($Item) {
+    $Item.Expected = -not $Item.Expected
+    Set-ListSetting 'expected' $Item.Path $Item.Expected
+    Set-Message $(if ($Item.Expected) { $Item.Name + '''s growth is normal: it stays off your Watchlist unless you watch it.' } else { 'Context Cleaner will say when ' + $Item.Name + ' grows.' })
+    Update-Views
+}
+function Switch-Remind($Item) {
+    if ($Item.IsSnoozed) { $script:Settings.remind.Remove($Item.Path); $Item.Snoozed = $null; Set-Message ($Item.Name + ' can be suggested again now.') }
+    else {
+        $at = [datetime]::UtcNow.AddDays(1); $script:Settings.remind[$Item.Path] = $at.ToString('o'); $Item.Snoozed = $at; $Item.Selected = $false
+        Set-Message ('Free Up Space leaves ' + $Item.Name + ' out until ' + $at.ToLocalTime().ToString('ddd h:mm tt') + '.')
+    }
+    Save-CCSettings $script:Settings
+    Update-Views
+}
+# Notes save a moment after you stop typing.
+$script:NoteTimer = New-Object Windows.Threading.DispatcherTimer
+$script:NoteTimer.Interval = [TimeSpan]::FromMilliseconds(700)
+$script:NoteTimer.add_Tick({
+    $script:NoteTimer.Stop()
+    $item = $script:NoteSaving
+    if (-not $item) { return }
+    $text = $ui.InNote.Text.Trim()
+    if ($text) { $script:Settings.notes[$item.Path] = $text } else { $script:Settings.notes.Remove($item.Path) }
+    $item.Note = $(if ($text) { $text } else { $null })
+    Save-CCSettings $script:Settings
+})
+
+# Scan Again: measure some folders again now, on a background thread. The next full scan saves the sizes.
+function Start-Rescan($Items) {
+    $targets = @($Items | Where-Object { $_ -and $_.Rule -ne 'off' })
+    if (-not $targets) { return }
+    if ($script:Worker -or $script:Rescan) { Set-Message 'Wait until the current scan finishes.'; return }
+    $paths = [string[]]@($targets | ForEach-Object { $_.Path })
+    # Folders inside them that are measured on their own stay out, as in a full scan.
+    $skip = [string[]]@($script:Items | Where-Object { $p = $_.Path; [bool]($paths | Where-Object { Test-CCInside $p $_ }) } | ForEach-Object { $_.Path })
+    $script:RescanItems = $targets
+    $script:Rescan = [powershell]::Create()
+    $script:Rescan.AddScript({ param($p, $s) , [ContextCleaner.Disk]::MeasureAll($p, $s) }).AddArgument($paths).AddArgument($skip) | Out-Null
+    $script:RescanHandle = $script:Rescan.BeginInvoke()
+    $ui.ScanProgress.Visibility = 'Visible'; $ui.Status.Text = 'Measuring ' + (Plural $targets.Count 'folder' 'folders') + ' again…'
+    $script:RescanTimer.Start()
+}
+$script:RescanTimer = New-Object Windows.Threading.DispatcherTimer
+$script:RescanTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+$script:RescanTimer.add_Tick({
+    if (-not $script:RescanHandle.IsCompleted) { return }
+    $script:RescanTimer.Stop()
+    # EndInvoke returns one array of measurements; unwrap it.
+    $results = @(); try { $results = @($script:Rescan.EndInvoke($script:RescanHandle) | ForEach-Object { $_ } | ForEach-Object { $_ }) } catch { Set-Message ('Couldn''t measure again: ' + $_.Exception.Message) }
+    $script:Rescan.Dispose(); $script:Rescan = $null; $ui.ScanProgress.Visibility = 'Collapsed'
+    $gone = @(); $total = [long]0
+    for ($i = 0; $i -lt $results.Count -and $i -lt $script:RescanItems.Count; $i++) {
+        $m = $results[$i]; $item = $script:RescanItems[$i]
+        if (-not $m.Exists) { $gone += $item; continue }
+        # A folder that changed since the full scan can't keep an answer that relied on it sitting untouched.
+        if ($m.Latest -and $item.Latest -and $m.Latest -gt $item.Latest.AddSeconds(2) -and ($item.Answer -eq 'Safe to remove' -or $item.Answer -eq 'Rebuildable')) {
+            $item.Answer = 'Review first'; $item.Reason = 'Changed since the full scan'; $item.Selected = $false
+            $item.Consequence = 'It changed after the scan that gave its answer. Scan again to get a new one.'
+        }
+        $item.Bytes = $m.Bytes; $item.SharedBytes = $m.SharedBytes; $item.Files = $m.Files; $item.Unreadable = $m.Unreadable; $item.Latest = $m.Latest
+        $total += $m.Bytes
+    }
+    if ($gone) { $script:Items = @($script:Items | Where-Object { $gone -notcontains $_ }) }
+    $what = if ($script:RescanItems.Count -eq 1) { $script:RescanItems[0].Name } else { Plural $script:RescanItems.Count 'folder' 'folders' }
+    Set-Message ('Measured ' + $what + ' again: ' + (Size $total) + $(if ($gone) { ', ' + $gone.Count + ' gone' } else { '' }) + '. The next full scan saves this.')
+    Update-Views
+})
 function New-MenuItem([string]$Header, [string]$Glyph, [scriptblock]$Action, $Item) {
     $m = New-Object Windows.Controls.MenuItem
     $m.Header = $Header; $m.Tag = [Net.WebUtility]::HtmlDecode($Glyph); $m.DataContext = @{ Item = $Item; Action = $Action }
@@ -588,8 +713,11 @@ function New-ItemMenu($Item) {
     $menu.Items.Add((New-MenuItem 'Show in Explorer' '&#xE838;' { param($i) Show-InExplorer $i.Path } $Item)) | Out-Null
     $menu.Items.Add((New-MenuItem 'Copy Path' '&#xE8C8;' { param($i) [Windows.Clipboard]::SetText($i.Path); Set-Message ('Copied ' + $i.Path) } $Item)) | Out-Null
     if ($Item.Rule -ne 'off') {
+        $menu.Items.Add((New-MenuItem 'Scan Again' '&#xE72C;' { param($i) Start-Rescan @($i) } $Item)) | Out-Null
         $menu.Items.Add((New-Object Windows.Controls.Separator)) | Out-Null
         $menu.Items.Add((New-MenuItem $(if ($Item.Watched) { 'Stop Watching' } else { 'Watch for Growth' }) '&#xE890;' { param($i) Switch-Watch $i } $Item)) | Out-Null
+        $menu.Items.Add((New-MenuItem $(if ($Item.Expected) { 'Warn Me When It Grows' } else { 'Its Growth Is Normal' }) '&#xE9D9;' { param($i) Switch-Expected $i } $Item)) | Out-Null
+        if ($Item.Removable) { $menu.Items.Add((New-MenuItem $(if ($Item.IsSnoozed) { 'Suggest It Again Now' } else { 'Remind Me Tomorrow' }) '&#xE823;' { param($i) Switch-Remind $i } $Item)) | Out-Null }
         $menu.Items.Add((New-MenuItem $(if ($Item.Ignored) { 'Stop Ignoring' } else { 'Ignore This ' + $noun }) '&#xED1A;' { param($i) Switch-Ignore $i } $Item)) | Out-Null
     }
     if ($Item.Rule -eq 'other' -and (Test-CCInside $Item.Path $script:CCHome)) { $menu.Items.Add((New-MenuItem $(if (@($script:Settings.tracked) -contains $Item.Path) { 'Stop Tracking' } else { 'Track This Folder' }) '&#xE710;' { param($i) Switch-Track $i } $Item)) | Out-Null }
@@ -723,8 +851,13 @@ $script:Titles = @{
     history = @('History', 'What you moved to the Recycle Bin, and what each scan found.')
     settings = @('Settings', 'How Context Cleaner looks, where it looks, and when.')
 }
-function Show-Page([string]$Key) {
+# Back and forward, like a browser or File Explorer: Alt+Left, Alt+Right and the mouse's side buttons.
+$script:Back = New-Object 'Collections.Generic.Stack[string]'
+$script:Forward = New-Object 'Collections.Generic.Stack[string]'
+function Show-Page([string]$Key, [switch]$NoHistory) {
+    if (-not $NoHistory -and $script:Page -and $script:Page -ne $Key -and $script:Ready) { $script:Back.Push($script:Page); $script:Forward.Clear() }
     $script:Page = $Key
+    $ui.BackButton.Visibility = $(if ($script:Back.Count) { 'Visible' } else { 'Collapsed' })
     $ui.PageTitle.Text = $script:Titles[$Key][0]; $ui.PageSubtitle.Text = $script:Titles[$Key][1]
     $panels = @{ overview = 'PageOverview'; free = 'PageFree'; folders = 'PageFolders'; watch = 'PageFolders'; ignored = 'PageFolders'; unread = 'PageFolders'; history = 'PageHistory'; settings = 'PageSettings' }
     foreach ($p in 'PageOverview', 'PageFree', 'PageFolders', 'PageHistory', 'PageSettings') { $ui[$p].Visibility = $(if ($panels[$Key] -eq $p) { 'Visible' } else { 'Collapsed' }) }
@@ -744,7 +877,7 @@ function Update-Status {
     $ui.FreeMiniText.Text = (Size $drive.AvailableFreeSpace) + ' free of ' + (Size $drive.TotalSize)
     $ui.FreeMiniUsed.Width = New-Object Windows.GridLength ([double]($drive.TotalSize - $drive.AvailableFreeSpace)), 'Star'
     $ui.FreeMiniFree.Width = New-Object Windows.GridLength ([double]$drive.AvailableFreeSpace), 'Star'
-    if ($script:Worker) { return }
+    if ($script:Worker -or $script:Loading) { return }
     if ($script:ScanData) {
         $growing = @($script:Items | Where-Object { $_.Growing }).Count
         $ui.Status.Text = 'Scanned ' + [ContextCleaner.Format]::Ago((ConvertTo-CCUtc $script:ScanData.FinishedAt)).ToLower() + ' · ' + (Plural $script:Items.Count 'folder' 'folders') + $(if ($growing) { ' · ' + $growing + ' growing' } else { '' })
@@ -757,11 +890,19 @@ function Update-Views {
         default { Show-Folders }
     }
 }
-function Set-ScanData($Data) {
+function Move-History([int]$Step) {
+    # Assigned directly: an if expression would unroll the stack into an array.
+    $from = $script:Forward; $to = $script:Back
+    if ($Step -lt 0) { $from = $script:Back; $to = $script:Forward }
+    if ($from.Count -eq 0) { return }
+    $to.Push($script:Page); Show-Page $from.Pop() -NoHistory
+    $ui.BackButton.Visibility = $(if ($script:Back.Count) { 'Visible' } else { 'Collapsed' })
+}
+function Set-ScanData($Data, $Index) {
     $script:ScanData = $Data
     $script:Items = @($Data.Items)
     foreach ($item in $script:Items) { $item.add_PropertyChanged({ param($s, $e) if ($e.PropertyName -eq 'Selected' -and $script:Page -eq 'free') { Update-FreeTotal } }) }
-    $script:Index = Get-CCScanIndex
+    $script:Index = if ($Index) { $Index } else { Get-CCScanIndex }
 }
 
 # ---------- Scanning, on its own thread so the window stays responsive ----------
@@ -779,6 +920,7 @@ function Start-Scan {
     }) | Out-Null
     $script:WorkerHandle = $script:Worker.BeginInvoke()
     $script:Started = Get-Date
+    $window.TaskbarItemInfo.ProgressState = 'Indeterminate'
     $script:ScanTimer.Start()
 }
 $script:ScanTimer = New-Object Windows.Threading.DispatcherTimer
@@ -789,6 +931,7 @@ $script:ScanTimer.add_Tick({
     $ui.Status.Text = $sync.Status + ' · ' + ([ContextCleaner.Disk]::FilesRead).ToString('N0') + ' files · ' + $seconds + ' s'
     if (-not $sync.Done) { return }
     $script:ScanTimer.Stop()
+    $window.TaskbarItemInfo.ProgressState = 'None'
     try { $script:Worker.EndInvoke($script:WorkerHandle) | Out-Null } catch { }
     $script:Worker.Runspace.Dispose(); $script:Worker.Dispose(); $script:Worker = $null
     $ui.ScanButton.IsEnabled = $true; $ui.StopButton.Visibility = 'Collapsed'; $ui.ScanProgress.Visibility = 'Collapsed'
@@ -821,6 +964,7 @@ $window.Dispatcher.add_UnhandledException({
 On $ui.Nav 'SelectionChanged' { if (-not $script:Navigating -and $ui.Nav.SelectedItem) { Show-Page $ui.Nav.SelectedItem.Tag } }
 On $ui.NavFooter 'SelectionChanged' { if (-not $script:Navigating -and $ui.NavFooter.SelectedItem) { Show-Page $ui.NavFooter.SelectedItem.Tag } }
 On $ui.ScanButton 'Click' { Start-Scan }
+On $ui.BackButton 'Click' { Move-History -1 }
 On $ui.StopButton 'Click' { Stop-Scan }
 On $ui.MoreButton 'Click' { $menu = $ui.MoreButton.ContextMenu; $menu.PlacementTarget = $ui.MoreButton; $menu.Placement = 'Bottom'; $menu.IsOpen = $true }
 On $ui.MenuExport 'Click' { Export-Report }
@@ -864,10 +1008,14 @@ On $ui.FreeGroups 'MouseDoubleClick' { param($s, $e) $item = Find-Item $e.Origin
 # Folders
 foreach ($pair in @(@($ui.TileAll, 'all'), @($ui.TileSafe, 'safe'), @($ui.TileRebuild, 'rebuild'), @($ui.TileReview, 'review'), @($ui.TileKeep, 'keep'))) {
     $pair[0].Tag = $pair[1]
-    On $pair[0] 'Click' { param($s, $e) $script:Tile = $s.Tag; Show-Folders }
+    # Checked, not Click: arrow keys and screen readers select a tile without clicking it.
+    On $pair[0] 'Checked' { param($s, $e) if ($script:Ready -and $script:Tile -ne $s.Tag) { $script:Tile = $s.Tag; Show-Folders } }
 }
 foreach ($rb in $ui.FolderSorts.Children) { On $rb 'Checked' { param($s, $e) $script:Sort = $s.Tag; if ($script:Ready) { Show-Folders } } }
-On $ui.FolderList 'SelectionChanged' { Show-Inspector $ui.FolderList.SelectedItem }
+On $ui.FolderList 'SelectionChanged' { $ui.InScroll.ScrollToTop(); Show-Inspector $ui.FolderList.SelectedItem }
+On $ui.InCopy 'Click' { Invoke-Copy @($ui.FolderList.SelectedItems | Where-Object { $_.Removable -and -not $_.Withheld -and -not $_.Ignored }) }
+On $ui.InNote 'TextChanged' { if ($script:NoteItem) { $script:NoteSaving = $script:NoteItem; $script:NoteTimer.Stop(); $script:NoteTimer.Start() } }
+On $ui.RescanAll 'Click' { Start-Rescan (Get-FolderRows) }
 On $ui.FolderList 'ContextMenuOpening' { param($s, $e) Open-ItemMenu $s $e }
 On $ui.FolderList 'MouseDoubleClick' { param($s, $e) $item = Find-Item $e.OriginalSource; if ($item) { Show-InExplorer $item.Path } }
 On $ui.InWatch 'Click' { $i = $ui.FolderList.SelectedItem; if ($i) { Switch-Watch $i } }
@@ -957,9 +1105,44 @@ On $window 'PreviewKeyDown' {
     elseif ($ctrl -and $e.Key -eq 'E') { Export-Report; $e.Handled = $true }
     elseif ($ctrl -and $e.Key -eq 'OemComma') { Show-Page 'settings'; $e.Handled = $true }
     elseif ($ctrl -and $e.Key -ge 'D1' -and $e.Key -le 'D7') { Show-Page $pages[[int]$e.Key - [int][Windows.Input.Key]::D1]; $e.Handled = $true }
+    elseif (($e.Key -eq 'System' -and $e.SystemKey -eq 'Left') -or $e.Key -eq 'BrowserBack') { Move-History -1; $e.Handled = $true }
+    elseif (($e.Key -eq 'System' -and $e.SystemKey -eq 'Right') -or $e.Key -eq 'BrowserForward') { Move-History 1; $e.Handled = $true }
 }
+On $window 'PreviewMouseDown' { param($s, $e) if ($e.ChangedButton -eq 'XButton1') { Move-History -1; $e.Handled = $true } elseif ($e.ChangedButton -eq 'XButton2') { Move-History 1; $e.Handled = $true } }
 foreach ($c in 'OvChart', 'InChart', 'HiChart') { On $ui[$c] 'SizeChanged' { param($s, $e) $c = $script:Charts[$s.Name]; if ($c) { if ($c.Kind -eq 'area') { Show-AreaChart $s $c.Points $c.From $c.To $c.Ceiling $c.Empty } else { Show-BarChart $s $c.Days } } } }
 On $window 'Activated' { if ($script:Ready) { Remove-Gone } }
+
+# A narrow window gets narrower columns, a narrower card, a smaller search box and no free-space meter in the toolbar
+# (the Overview and status line still show free space), so nothing collides or disappears.
+$script:Compact = $null
+function Set-Layout {
+    $compact = $window.ActualWidth -lt 1250
+    # Narrower still, the sidebar shows only its icons, like Settings and other Windows 11 apps.
+    $narrow = $window.ActualWidth -lt 1150
+    if ($narrow -ne $script:Narrow) {
+        $script:Narrow = $narrow
+        $ui.SideColumn.Width = New-Object Windows.GridLength $(if ($narrow) { 64 } else { 240 })
+        foreach ($n in 'AppName', 'NeverDeletes') { $ui[$n].Visibility = $(if ($narrow) { 'Collapsed' } else { 'Visible' }) }
+        foreach ($li in @($ui.Nav.Items) + @($ui.NavFooter.Items)) {
+            $panel = $li.Content; $badge = $null
+            if ($panel -is [Windows.Controls.DockPanel]) { $badge = $panel.Children[0]; $panel = $panel.Children[1] }
+            $label = $panel.Children[1]
+            $label.Visibility = $(if ($narrow) { 'Collapsed' } else { 'Visible' })
+            if ($badge) { $badge.Visibility = $label.Visibility }
+            $li.ToolTip = $(if ($narrow) { $label.Text } else { $null })
+        }
+    }
+    if ($compact -eq $script:Compact) { return }
+    $script:Compact = $compact
+    $window.Resources['ColReason'] = (New-Object Windows.GridLength $(if ($compact) { 170 } else { 210 })).psobject.BaseObject
+    $window.Resources['ColSize'] = (New-Object Windows.GridLength $(if ($compact) { 104 } else { 130 })).psobject.BaseObject
+    $ui.InspectorColumn.Width = New-Object Windows.GridLength $(if ($compact) { 300 } else { 360 })
+    $ui.FreeMini.Visibility = $(if ($compact) { 'Collapsed' } else { 'Visible' })
+    $ui.SearchBox.Width = $(if ($compact) { 190 } else { 250 })
+    $ui.SizeHeader.Text = $(if ($compact) { 'Size' } else { 'Size · last changed' })
+    if ($script:Ready -and @('folders', 'watch', 'ignored', 'unread') -contains $script:Page) { Show-Folders }
+}
+On $window 'SizeChanged' { Set-Layout }
 
 # Follow Windows when its light or dark mode or accent changes while the app is open.
 $script:LastSystemTheme = (Test-CCDarkMode).ToString() + (Get-CCAccent)[3].ToString()
@@ -984,17 +1167,68 @@ On $window 'SourceInitialized' {
 }
 On $window 'Closed' { $script:ScanTimer.Stop(); $script:GoneTimer.Stop(); $script:ThemeTimer.Stop(); if ($script:Worker) { [ContextCleaner.Disk]::Cancel = $true } }
 
+# The window comes back where you left it, if that place is still on a screen.
+function Restore-Placement {
+    $p = $script:Settings.window
+    if (-not $p) { return }
+    $screen = New-Object Windows.Rect ([Windows.SystemParameters]::VirtualScreenLeft), ([Windows.SystemParameters]::VirtualScreenTop), ([Windows.SystemParameters]::VirtualScreenWidth), ([Windows.SystemParameters]::VirtualScreenHeight)
+    $w = [double]$p.Width; $h = [double]$p.Height
+    if ($w -lt $window.MinWidth -or $h -lt $window.MinHeight) { return }
+    if ($screen.Contains((New-Object Windows.Point ([double]$p.Left + 40), ([double]$p.Top + 20)))) {
+        $window.WindowStartupLocation = 'Manual'; $window.Left = [double]$p.Left; $window.Top = [double]$p.Top
+    }
+    $window.Width = [math]::Min($w, $screen.Width); $window.Height = [math]::Min($h, $screen.Height)
+    if ($p.Max) { $window.WindowState = 'Maximized' }
+}
+On $window 'Closing' {
+    $b = if ($window.WindowState -eq 'Normal') { New-Object Windows.Rect $window.Left, $window.Top, $window.ActualWidth, $window.ActualHeight } else { $window.RestoreBounds }
+    $script:Settings = Get-CCSettings
+    $script:Settings.window = [pscustomobject]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = ($window.WindowState -eq 'Maximized') }
+    try { Save-CCSettings $script:Settings } catch { }
+}
+
+# The last scan loads on a background thread, so the window opens at once.
+function Start-Load {
+    $script:Loader = [powershell]::Create()
+    $script:Loader.AddScript({ param($core) . $core; [pscustomobject]@{ Scan = (Get-CCLastScan); Index = (Get-CCScanIndex) } }).AddArgument($corePath) | Out-Null
+    $script:LoaderHandle = $script:Loader.BeginInvoke()
+    $script:LoadTimer.Start()
+}
+$script:LoadTimer = New-Object Windows.Threading.DispatcherTimer
+$script:LoadTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+$script:LoadTimer.add_Tick({
+    if (-not $script:LoaderHandle.IsCompleted) { return }
+    $script:LoadTimer.Stop()
+    $result = $null
+    try { $result = @($script:Loader.EndInvoke($script:LoaderHandle))[0] } catch { Write-CCLog ('load: ' + $_.Exception.Message) }
+    $script:Loader.Dispose(); $script:Loader = $null
+    if ($result -and $result.Scan) { Set-ScanData $result.Scan $result.Index } elseif ($result) { $script:Index = $result.Index }
+    if (-not ($result -and $result.Scan)) { Set-Message 'Welcome. Choose Scan to see what fills your drive; it reads folder sizes and dates and changes nothing.' }
+    $script:Loading = $false
+    $ui.PageOverview.Parent.Opacity = 1
+    Update-Views
+})
+
 # ---------- Start ----------
+$window.TaskbarItemInfo = New-Object Windows.Shell.TaskbarItemInfo
+# Screen readers and UI Automation name each page in the sidebar.
+foreach ($li in @($ui.Nav.Items) + @($ui.NavFooter.Items)) {
+    $panel = $li.Content; if ($panel -is [Windows.Controls.DockPanel]) { $panel = $panel.Children[1] }
+    [Windows.Automation.AutomationProperties]::SetName($li, $panel.Children[1].Text)
+    [Windows.Automation.AutomationProperties]::SetAutomationId($li, 'Nav-' + $li.Tag)
+}
+Restore-Placement
 Set-Theme
-$last = Get-CCLastScan
-if ($last) { Set-ScanData $last } else { $script:Index = Get-CCScanIndex }
 $drive = New-Object IO.DriveInfo $script:CCDrive
 $lastReading = Get-CCReadings | Select-Object -Last 1
 if (-not $lastReading -or ([datetime]::UtcNow - $lastReading.At).TotalHours -ge 1) { Add-CCReading $drive.TotalSize $drive.AvailableFreeSpace }
+$script:Loading = $true
+$ui.PageOverview.Parent.Opacity = 0
 $script:Ready = $true
 Show-Page 'overview'
+$ui.Status.Text = 'Opening your last scan…'
 $script:GoneTimer.Start(); $script:ThemeTimer.Start()
-if (-not $last) { Set-Message 'Welcome. Choose Scan to see what fills your drive; it reads folder sizes and dates and changes nothing.' }
+$window.add_ContentRendered({ if ($script:Loading -and -not $script:Loader) { Start-Load } })
 $window.ShowDialog() | Out-Null
 $script:Mutex.ReleaseMutex()
 

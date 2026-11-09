@@ -294,7 +294,14 @@ namespace ContextCleaner {
         public double IdleDays { get { return Latest.HasValue ? (DateTime.UtcNow - Latest.Value).TotalDays : -1; } }
         public string SizeText { get { return Format.Bytes(Bytes); } }
         public string LatestText { get { return Format.Ago(Latest); } }
-        public bool Growing { get { return Growth.HasValue && Growth.Value > Math.Max(256L * 1024 * 1024, (Bytes - Growth.Value) / 20); } }
+        // Growth you said is normal is not called growing.
+        public bool Expected { get; set; }
+        public bool Growing { get { return !Expected && Growth.HasValue && Growth.Value > Math.Max(256L * 1024 * 1024, (Bytes - Growth.Value) / 20); } }
+        // Remind Me Tomorrow: not suggested until this time.
+        public DateTime? Snoozed { get; set; }
+        public bool IsSnoozed { get { return Snoozed.HasValue && Snoozed.Value > DateTime.UtcNow; } }
+        string note;
+        public string Note { get { return note; } set { if (note != value) { note = value; Changed("Note"); } } }
         // Changes under 1 MB are noise from logs and caches, so they aren't shown.
         public string GrowthText { get { return Growth.HasValue && Math.Abs(Growth.Value) >= 1048576 ? Format.Signed(Growth.Value) + " since " + (string.IsNullOrEmpty(GrowthSince) ? "the last scan" : GrowthSince) : ""; } }
         // The same change without the date, for narrow columns.
@@ -377,7 +384,23 @@ namespace ContextCleaner {
     }
 }
 '@
-if (-not ('ContextCleaner.Disk' -as [type])) { Add-Type -TypeDefinition $CCSource }
+# Compiling the helper takes most of a second, so the compiled copy is kept and reused until the source changes.
+if (-not ('ContextCleaner.Disk' -as [type])) {
+    $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($CCSource))).Replace('-', '').Substring(0, 16)
+    # Always in your own AppData, even when tests point the data folder elsewhere: a loaded DLL can't be deleted.
+    $cache = Join-Path $script:CCLocal ('Context Cleaner\cache\ContextCleaner-' + $PSVersionTable.PSEdition + '-' + $hash + '.dll')
+    $loaded = $false
+    if (Test-Path -LiteralPath $cache) { try { Add-Type -LiteralPath $cache; $loaded = $true } catch { } }
+    if (-not $loaded) {
+        try {
+            New-Item -ItemType Directory -Force -Path (Split-Path $cache) | Out-Null
+            $temp = $cache + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+            Add-Type -TypeDefinition $CCSource -OutputAssembly $temp -OutputType Library
+            Move-Item -LiteralPath $temp -Destination $cache -Force -ErrorAction SilentlyContinue
+            Add-Type -LiteralPath $(if (Test-Path -LiteralPath $cache) { $cache } else { $temp })
+        } catch { if (-not ('ContextCleaner.Disk' -as [type])) { Add-Type -TypeDefinition $CCSource } }
+    }
+}
 
 function ConvertTo-CCUtc($Value) {
     if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
@@ -410,13 +433,20 @@ function Test-CCLink([string]$Path) {
 # Settings live in %LOCALAPPDATA%\Context Cleaner\settings.json, next to scans, plans and History.
 function Get-CCSettings {
     $path = Join-Path $script:CCData 'settings.json'
-    $s = [ordered]@{ projectRoots = @(); tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @()
-        appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false; projectRootsFound = $false }
+    $s = [ordered]@{ projectRoots = @(); tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); expected = @()
+        appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false; projectRootsFound = $false
+        remind = @{}; notes = @{}; window = $null }
     if (Test-Path -LiteralPath $path) {
         try { $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { $saved = $null }
         if ($saved) {
             # Only real text counts: an empty list saved by an older version may read back as an empty object.
-            foreach ($list in 'projectRoots', 'tracked', 'ignored', 'scanningOff', 'watched', 'coverageOff') { $s[$list] = @($saved.$list | Where-Object { $_ -is [string] -and $_.Trim() }) }
+            foreach ($list in 'projectRoots', 'tracked', 'ignored', 'scanningOff', 'watched', 'coverageOff', 'expected') { $s[$list] = @($saved.$list | Where-Object { $_ -is [string] -and $_.Trim() }) }
+            # Path-to-text maps: when to suggest a folder again, and your note on it.
+            # PowerShell 7 reads ISO dates in JSON as dates, Windows PowerShell as text; both become text here.
+            foreach ($map in 'remind', 'notes') { if ($saved.$map) { foreach ($p in $saved.$map.PSObject.Properties) {
+                $v = if ($p.Value -is [datetime]) { $p.Value.ToUniversalTime().ToString('o') } else { $p.Value }
+                if ($v -is [string] -and $v) { $s[$map][$p.Name] = $v } } } }
+            if ($saved.window -and $saved.window.Width) { $s.window = $saved.window }
             foreach ($value in 'appearance', 'terminal') { if ($saved.$value) { $s[$value] = [string]$saved.$value } }
             if ($null -ne $saved.untouchedDays) { $s.untouchedDays = [int]$saved.untouchedDays }
             if ($null -ne $saved.byKind) { $s.byKind = [bool]$saved.byKind }
@@ -424,8 +454,10 @@ function Get-CCSettings {
     }
     if (-not $s.projectRoots) {
         # Any folder on the drive, in your home folder or in Documents that holds a git repository.
+        # Looking for them takes a moment, so it happens once per run.
         $s.projectRootsFound = $true
-        $s.projectRoots = @(Find-CCProjectRoots)
+        if ($null -eq $script:CCFoundRoots) { $script:CCFoundRoots = @(Find-CCProjectRoots) }
+        $s.projectRoots = $script:CCFoundRoots
     }
     [pscustomobject]$s
 }
@@ -446,8 +478,13 @@ function Save-CCSettings($Settings) {
     # Project folders found on their own are found again next time, so new ones show up; only ones you set are saved.
     # string[] keeps an empty list as [] in Windows PowerShell's JSON.
     $saved = [ordered]@{ projectRoots = [string[]]@($(if ($Settings.projectRootsFound) { } else { $Settings.projectRoots | Where-Object { $_ } })) }
-    foreach ($key in 'tracked', 'ignored', 'scanningOff', 'watched', 'coverageOff') { $saved[$key] = [string[]]@($Settings.$key | Where-Object { $_ }) }
+    foreach ($key in 'tracked', 'ignored', 'scanningOff', 'watched', 'coverageOff', 'expected') { $saved[$key] = [string[]]@($Settings.$key | Where-Object { $_ }) }
     foreach ($key in 'appearance', 'terminal', 'untouchedDays', 'byKind') { $saved[$key] = $Settings.$key }
+    # Reminders that have passed are dropped.
+    $remind = [ordered]@{}; if ($Settings.remind) { foreach ($k in @($Settings.remind.Keys)) { $at = ConvertTo-CCUtc $Settings.remind[$k]; if ($at -and $at -gt [datetime]::UtcNow) { $remind[$k] = $Settings.remind[$k] } } }
+    $notes = [ordered]@{}; if ($Settings.notes) { foreach ($k in @($Settings.notes.Keys)) { if ($Settings.notes[$k]) { $notes[$k] = $Settings.notes[$k] } } }
+    $saved.remind = [pscustomobject]$remind; $saved.notes = [pscustomobject]$notes
+    if ($Settings.window) { $saved.window = $Settings.window }
     $text = ConvertTo-Json -InputObject $saved -Depth 3
     [IO.File]::WriteAllText($path + '.tmp', $text, [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath ($path + '.tmp') -Destination $path -Force
@@ -841,9 +878,8 @@ function Invoke-CCScan([scriptblock]$Progress = { param($text) }) {
         }
         $item.Removable = ($offerable -contains $item.Answer) -and -not $item.Withheld -and (Test-CCAllowed $item.Path $settings)
         if (-not $item.Removable -and -not $item.Withheld -and $offerable -contains $item.Answer) { $item.Evidence = (@($item.Evidence, 'Outside the places a command may reach.') | Where-Object { $_ }) -join ' ' }
-        $item.Ignored = @($settings.ignored) -contains $item.Path
-        $item.Watched = @($settings.watched) -contains $item.Path
-        $item.Selected = $item.Removable -and $item.Answer -eq $script:Answers.Safe -and -not $item.Ignored -and -not $item.InUse
+        Set-CCItemSettings $item $settings
+        $item.Selected = $item.Removable -and $item.Answer -eq $script:Answers.Safe -and -not $item.Ignored -and -not $item.InUse -and -not $item.IsSnoozed
     }
     $drive = New-Object IO.DriveInfo $script:CCDrive
     $scan = [pscustomobject]@{
@@ -915,8 +951,17 @@ function Get-CCLastScan([switch]$Light) {
         $i
     })
     $settings = Get-CCSettings
-    foreach ($i in $saved.Items) { $i.Ignored = @($settings.ignored) -contains $i.Path; $i.Watched = @($settings.watched) -contains $i.Path; if ($i.Ignored) { $i.Selected = $false } }
+    foreach ($i in $saved.Items) { Set-CCItemSettings $i $settings; if ($i.Ignored -or $i.IsSnoozed) { $i.Selected = $false } }
     $saved
+}
+
+# What you chose for a folder: ignored, watched, its growth is normal, a reminder, a note.
+function Set-CCItemSettings($Item, $Settings) {
+    $Item.Ignored = @($Settings.ignored) -contains $Item.Path
+    $Item.Watched = @($Settings.watched) -contains $Item.Path
+    $Item.Expected = @($Settings.expected) -contains $Item.Path
+    $Item.Snoozed = $(if ($Settings.remind.ContainsKey($Item.Path)) { ConvertTo-CCUtc $Settings.remind[$Item.Path] } else { $null })
+    $Item.Note = $(if ($Settings.notes.ContainsKey($Item.Path)) { $Settings.notes[$Item.Path] } else { $null })
 }
 
 # Every saved scan, summarized, and each folder's size in each: for charts and History.

@@ -25,7 +25,7 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
 
 ## Get it
 
-1. Download `Context-Cleaner-…-windows.zip` from the [latest release](https://github.com/chrissotraidis/contextcleaner/releases/latest), or clone this repository.
+1. Download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.0), or clone this repository.
 2. Right-click the zip, choose **Properties**, tick **Unblock** and choose **OK**, then extract it anywhere.
 3. Double-click **Context Cleaner.cmd**. In **Settings**, turn on **Start menu shortcut** to open it from Start, with its icon and no console window.
 4. Choose **Scan**. It reads folder sizes and dates for about a minute and changes nothing.
@@ -55,9 +55,9 @@ Turn any group off in **Settings › Where Context Cleaner looks**.
 | Claude, AI models | Claude and Claude Code data; Hugging Face, Ollama and LM Studio models |
 | Project build folders | `build`, `dist`, `out`, `target`, `node_modules`, `.next`, `obj` and more, in every folder that holds git repositories (found on their own, or set in Settings). As on the Mac, `build` is output by name; any other name counts as output only when the project's git ignores it, and is Review first otherwise. A build folder holding several builds is listed build by build, and the newest is Rebuildable. A git worktree is offered only when git has everything in it. |
 | Package caches | npm, pnpm, Yarn, Bun, pip, uv, NuGet, Gradle, Cargo, Go, Playwright, Electron; Android system images and NDKs |
-| Temporary files, crash dumps, shader caches | Big items in Temp; crash dumps and error reports; DirectX, NVIDIA and AMD shader caches |
+| Temporary files, crash dumps, shader caches | Big items in Temp, and in a Temp folder something still writes to, the files in it that have sat untouched (such as the Remote Desktop client's traces, which pile up by gigabytes a day); crash dumps and error reports; DirectX, NVIDIA and AMD shader caches |
 | WSL and Docker | Each Linux distribution's disk, with **Look Inside** listing the biggest folders inside Linux, read-only; Docker Desktop's disks |
-| Steam games | Every game in every Steam library |
+| Steam games | Every game in every Steam library, with when Steam says you last played it, and **Uninstall in Steam** on its card |
 | Windows | Page and hibernation files, Windows Update downloads, Windows.old, error reports. These are Windows' to clean; their cards open **Settings › Storage**. |
 | Downloads | Each big item in Downloads |
 
@@ -79,7 +79,7 @@ Move to Recycle Bin and a copied command run the same script, `Move-ToRecycleBin
 - only moves things inside your home folder, your Temp folder or a project folder, and never your home folder itself, anything directly in it or in AppData except a known cache, a whole project, `Documents\Codex`, `.ssh`, OneDrive, chat history, or Context Cleaner and its data;
 - moves through the Windows Recycle Bin, with Windows' own warning if something is too big for it.
 
-Add `-WhatIf` to a copied command to run every check and see what it would move, without moving anything. Git is only ever read, with hooks, fsmonitor and any filter a repository names (such as Git LFS) switched off.
+Add `-WhatIf` to a copied command to run every check and see what it would move, without moving anything. A copied command is for PowerShell and quotes its paths so nothing in a folder name is run. Git is only ever read, with hooks, fsmonitor and any filter a repository names (such as Git LFS) switched off.
 
 ## Keyboard
 
@@ -119,5 +119,5 @@ The tests use a throwaway data folder (`CONTEXT_CLEANER_DATA`) and fixtures in T
 | `ContextCleaner.Core.ps1` | Places, measuring, answers, git checks and plans. Reads only. |
 | `Move-ToRecycleBin.ps1` | The command you run. The only file that moves anything, and only to the Recycle Bin. |
 
-Not on Windows yet: tags (notes are there), "unused inside" items within busy folders, and the Mac-only places (Xcode, simulators, Parallels).
+Not on Windows yet: tags (notes are there), and the Mac-only places (Xcode, simulators, Parallels).
 

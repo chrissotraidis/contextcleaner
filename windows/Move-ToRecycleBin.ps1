@@ -54,6 +54,39 @@ foreach ($entry in $items) {
     $path = [string]$entry.Path
     $item = [pscustomobject]@{ Path = $path; Latest = (ConvertTo-CCUtc $entry.Latest) }
     if (-not (Test-Path -LiteralPath $path)) { $gone += $path; Say ('Already gone: ' + $path); continue }
+    if ($entry.PSObject.Properties['Paths'] -and $entry.Paths) {
+        # Old files inside a busy folder. The folder must still be allowed; each file must still be inside it, reached
+        # through no link, and untouched since Context Cleaner listed it. Only those files move; the folder stays.
+        $why = if (Test-CCLink $path) { 'a link; left alone' } elseif (-not (Test-CCAllowed $path $settings)) { 'not allowed in a command' } else { $null }
+        if ($why) { $notMoved += [pscustomobject]@{ Path = $path; Why = $why }; Say ('NOT moved: ' + $path + ' (' + $why + ')'); continue }
+        $limit = (ConvertTo-CCUtc $entry.Latest).AddSeconds(2)
+        $sizes = @{}
+        foreach ($f in @($entry.Paths | ForEach-Object { [string]$_ })) {
+            if (-not (Test-CCInside $f $path) -or [ContextCleaner.Disk]::ThroughLink($f)) { continue }
+            $info = Get-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+            if (-not $info -or $info.PSIsContainer -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+            if ($info.LastWriteTimeUtc -gt $limit -or $info.CreationTimeUtc -gt $limit) { continue }
+            $sizes[$f] = [long]$info.Length
+        }
+        $files = [string[]]@($sizes.Keys)
+        $total = [long]0; foreach ($v in $sizes.Values) { $total += $v }
+        if (-not $files) { $notMoved += [pscustomobject]@{ Path = $path; Why = 'no old files left to move' }; Say ('NOT moved: ' + $path + ' (no old files left to move)'); continue }
+        $label = $(if ($files.Count -eq 1) { '1 old file' } else { $files.Count.ToString('N0') + ' old files' })
+        if ($WhatIf) { Say ('Would move: ' + $path + ' (' + $label + ', ' + [ContextCleaner.Format]::Bytes($total) + ')'); $moved += $path; $movedBytes += $total; continue }
+        for ($i = 0; $i -lt $files.Count; $i += 200) {
+            $chunk = [string[]]$files[$i..([math]::Min($i + 199, $files.Count - 1))]
+            if ([ContextCleaner.RecycleBin]::SendMany($chunk) -ne 0) {
+                foreach ($f in $chunk) { if (Test-Path -LiteralPath $f) { [ContextCleaner.RecycleBin]::SendMany([string[]]@($f)) | Out-Null } }
+            }
+        }
+        $done = [long]0; $count = 0
+        foreach ($f in $files) { if (-not (Test-Path -LiteralPath $f)) { $done += $sizes[$f]; $count++ } }
+        if ($count) {
+            $moved += $path; $movedBytes += $done
+            Say ('Moved: ' + $path + ' (' + $(if ($count -eq 1) { '1 old file' } else { $count.ToString('N0') + ' old files' }) + ', ' + [ContextCleaner.Format]::Bytes($done) + $(if ($count -lt $files.Count) { '; ' + ($files.Count - $count) + ' in use stayed' } else { '' }) + ')')
+        } else { $notMoved += [pscustomobject]@{ Path = $path; Why = 'its old files are in use' }; Say ('NOT moved: ' + $path + ' (its old files are in use)') }
+        continue
+    }
     $why = $null
     if (Test-CCLink $path) { $why = 'a link; left alone' }
     else {
@@ -65,7 +98,7 @@ foreach ($entry in $items) {
         if ($WhatIf) { Say ('Would move: ' + $path + ' (' + [ContextCleaner.Format]::Bytes($size) + ')'); $moved += $path; $movedBytes += $size; continue }
         $code = [ContextCleaner.RecycleBin]::Send($path)
         if (-not (Test-Path -LiteralPath $path)) { $moved += $path; $movedBytes += $size; Say ('Moved: ' + $path); continue }
-        $why = if ($code -eq -1) { 'cancelled' } else { 'in use or blocked (code ' + $code + ')' }
+        $why = if ($code -eq -1) { 'cancelled' } else { 'in use or blocked, code ' + $code }
     }
     $notMoved += [pscustomobject]@{ Path = $path; Why = $why }
     Say ('NOT moved: ' + $path + ' (' + $why + ')')

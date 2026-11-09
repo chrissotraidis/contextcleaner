@@ -110,6 +110,23 @@ Copying a command and pasting it in a terminal was the slowest, least Windows-li
 
 95 checks pass on Windows PowerShell 5.1 and PowerShell 7.6. The docs screenshots were retaken from demo data.
 
+## Sixth pass: release review
+
+Security, errors, parity with the Mac's remaining features, and speed, on the real data.
+
+| Area | Found | Fix or result |
+|---|---|---|
+| Security | A copied command put paths in double quotes; pasted into PowerShell, a dollar sign or backtick in a folder name would be expanded | Paths go in single quotes, with any quote doubled; a test checks |
+| Security | Every place the code starts a program, opens a link or moves anything | Fixed arguments only; Steam links take a numeric app id from Steam's manifest; git runs with hooks, fsmonitor and filters off; moves only through the checked script |
+| Errors | PSScriptAnalyzer (errors and warnings) | No errors; parameters named like PowerShell's automatic $sender and $EventArgs renamed; the empty catch blocks left are deliberate best-effort reads |
+| Errors | Windows PowerShell read the remembered project folders back as one object, which emptied them | Read as a list on both versions; tested on both |
+| Parity | The Mac offers what has sat untouched inside a folder still in use; Windows did not | A Temp folder something writes to offers its untouched files (Remote Desktop traces after a day, anything else after 3), only they move, and the folder stays. Checked end to end in the window on a fixture: 2 old files moved, the new one stayed |
+| Parity | Games said "untouched 900 days" from file dates | Steam's own last-played date, and Uninstall in Steam on the card |
+| Speed | Opening: 3.8 s from start to the last scan on screen in the script, plus PowerShell starting | Project folders remembered, nothing drawn while hidden, the last scan shown before the scan history: the window shows about a second sooner |
+| Speed | A scan of about 700,000 files took 70 to 88 s: 3,708 tiny Temp items became places (5 s), Plex's 89,791 folders were walked by one core (18 s), and the in-use check ran a PowerShell function 34,000 times (2 s) | Temp sized in one pass, every core works from one list of folders, a plain loop for the in-use check: 23 s in the window. The new measuring matched the old for every place but the five that changed during the comparison |
+
+On the real drive, a scan with these changes gave the same answers as before except the ones meant to change: 68 games now say when they were last played, and the Remote Desktop trace folder is Safe to remove for its 354 old files. 101 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
+
 ## Not checked
 
 Windows 10, a non-English Windows, high-contrast themes, other display scalings, and a Recycle Bin with thousands of items (the size query reads each one). The mover test sends one fixture folder to the Recycle Bin on the runner.

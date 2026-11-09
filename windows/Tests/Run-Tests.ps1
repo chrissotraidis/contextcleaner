@@ -146,6 +146,13 @@ $it.Path = 'C:\grows'; Set-CCItemSettings $it $back
 Check 'growth you call normal is not growing' (-not $it.Growing)
 $it.Path = 'C:\noted'; Set-CCItemSettings $it $back
 Check 'a note is attached to its folder' ($it.Note -eq 'keep for the demo')
+# Project folders found by a scan are remembered, and read back whole on both PowerShell versions.
+$script:CCFoundRoots = $null
+Save-CCSettings ([pscustomobject]@{ projectRoots = @(); projectRootsFound = $true; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false })
+[IO.File]::WriteAllText((Join-Path $script:CCData 'project-folders.json'), '["C:\\one","C:\\two"]')
+$cached = @((Get-CCSettings).projectRoots)
+Check 'remembered project folders read back whole' ($cached.Count -eq 2 -and $cached[0] -eq 'C:\one' -and $cached[1] -eq 'C:\two') (($cached | ForEach-Object { '<' + $_ + '>' }) -join ' ')
+$script:CCFoundRoots = $null; Remove-Item -LiteralPath (Join-Path $script:CCData 'project-folders.json')
 
 # The move command: rechecks each item, moves only to the Recycle Bin, and expires.
 $mv = Join-Path $script:CCTemp ('cc-test-move-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
@@ -185,10 +192,27 @@ $logged = Get-Content -LiteralPath $log -Raw
 Check 'the window''s move logs each item and the total' (-not (Test-Path "$mv\logged") -and $logged -match 'Moved: .*logged' -and $logged -match 'Moved 1 of 1') $logged
 $missingOut = & $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan (Join-Path $work 'no-such-plan.json') 2>&1 | Out-String
 Check 'a missing list says so plainly, with no PowerShell error' ($missingOut -match 'could not read the list' -and $missingOut -notmatch 'Get-Content') $missingOut
+# Old files inside a busy folder: only those untouched since the cutoff are found and moved; the folder and new files stay.
+$busy = "$mv\busy"; New-Item -ItemType Directory -Path "$busy\deep" -Force | Out-Null
+Set-Content "$busy\deep\old.etl" 'old trace'; Set-Content "$busy\new.etl" 'new trace'
+$past = [datetime]::UtcNow.AddDays(-10)
+$oldFile = Get-Item "$busy\deep\old.etl"; $oldFile.CreationTimeUtc = $past; $oldFile.LastWriteTimeUtc = $past
+$found = [ContextCleaner.Disk]::FindOld($busy, [datetime]::UtcNow.AddDays(-3), 100)
+Check 'finds only the old files inside a folder' ($found.Paths.Count -eq 1 -and $found.Paths[0] -eq "$busy\deep\old.etl" -and -not $found.More) (($found.Paths) -join ', ')
+$bundle = [pscustomobject]@{ Path = $busy; Name = 'busy'; Answer = 'Safe to remove'; Bytes = $found.Bytes; SharedBytes = 0; Latest = $found.Latest.ToString('o'); Paths = [string[]]@("$busy\deep\old.etl", "$busy\new.etl") }
+[IO.File]::WriteAllText($planFile, (ConvertTo-Json -Depth 4 -InputObject ([pscustomobject]@{ Id = 'bundle'; Expires = [datetime]::UtcNow.AddHours(1).ToString('o'); Items = @($bundle) })))
+$bundleOut = & $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan $planFile -Yes | Out-String
+Check 'moves only the old files, and keeps the folder and newer files' (-not (Test-Path "$busy\deep\old.etl") -and (Test-Path "$busy\new.etl") -and $bundleOut -match 'Moved: .*busy \(1 old file') $bundleOut
+$to = New-TestItem 'temp-old' 1 "$work\real"; $to.Files = 1200; Resolve-CCAnswer $to ([pscustomobject]@{ Rule = 'temp-old'; Repo = $null; LookInside = $null; Siblings = $null }) $null $null
+Check 'old files in a busy temporary folder are Safe to remove' ($to.Answer -eq 'Safe to remove' -and $to.Reason -like '1,200 old files inside*') $to.Reason
+$gm = New-TestItem 'game' 900 'C:\Program Files (x86)\Steam\steamapps\common\X'
+Resolve-CCAnswer $gm ([pscustomobject]@{ Rule = 'game'; Repo = $null; LookInside = $null; Siblings = $null; AppId = '620'; LastPlayed = [long]1712200000 }) $null $null
+Check 'a Steam game says when it was last played and offers Uninstall in Steam' ($gm.Reason -like 'Last played *' -and $gm.Action -eq 'steam-uninstall:620') ($gm.Reason + ' / ' + $gm.Action)
+Check 'a copied command quotes paths so PowerShell expands nothing' ((ConvertTo-CCQuoted 'C:\a$b\it''s') -eq '''C:\a$b\it''''s''')
 
 # Clean up: the fixture that went to the Recycle Bin, then everything else this run made.
 $shell = New-Object -ComObject Shell.Application
-foreach ($item in @($shell.Namespace(10).Items() | Where-Object { $_.ExtendedProperty('System.Recycle.DeletedFrom') -eq $mv })) {
+foreach ($item in @($shell.Namespace(10).Items() | Where-Object { $from = [string]$_.ExtendedProperty('System.Recycle.DeletedFrom'); $from -eq $mv -or $from.StartsWith($mv + '\') })) {
     $p = $item.Path; Remove-Item -LiteralPath $p -Recurse -Force
     Remove-Item -LiteralPath (Join-Path (Split-Path $p -Parent) ('$I' + (Split-Path $p -Leaf).Substring(2))) -Force -ErrorAction SilentlyContinue
 }

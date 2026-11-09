@@ -1,14 +1,19 @@
 ﻿# Context Cleaner for Windows. See what fills your drive, whether you still use it, and how to remove it yourself.
-# It never deletes a thing: Free Up Space copies a command you run yourself, which moves what you tick to the Recycle Bin.
+# It never deletes a thing: Move to Recycle Bin moves what you tick to the Recycle Bin, after you confirm.
 #   Open:        Context Cleaner.cmd, or the Start menu shortcut it can add (Settings)
 #   Daily scan:  powershell -File ContextCleaner.ps1 -Scan
 #   Report:      powershell -File ContextCleaner.ps1 -Report C:\path\report.md
 param([string]$Report, [switch]$Scan)
 
 $ErrorActionPreference = 'Stop'
+# CONTEXT_CLEANER_TIMING names a file that gets how long each step of opening took, for finding what is slow.
+$script:Clock = [Diagnostics.Stopwatch]::StartNew()
+function Write-CCTiming([string]$Step) { if ($env:CONTEXT_CLEANER_TIMING) { [IO.File]::AppendAllText($env:CONTEXT_CLEANER_TIMING, ('{0,6} ms  {1}' -f $script:Clock.ElapsedMilliseconds, $Step) + [Environment]::NewLine) } }
+if ($env:CONTEXT_CLEANER_TIMING) { Write-CCTiming ('script started, ' + [int]((Get-Date) - (Get-Process -Id $PID).StartTime).TotalMilliseconds + ' ms after PowerShell did') }
 $corePath = Join-Path $PSScriptRoot 'ContextCleaner.Core.ps1'
 $moverPath = Join-Path $PSScriptRoot 'Move-ToRecycleBin.ps1'
 . $corePath
+Write-CCTiming 'core loaded'
 
 if ($Scan -or $Report) {
     $result = Invoke-CCScan -Progress { param($text) Write-Host $text }
@@ -35,6 +40,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 [ContextCleaner.Shell]::AppId('Sotraidis.ContextCleaner')
 $xamlText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ContextCleaner.xaml'))
 $window = [Windows.Markup.XamlReader]::Parse($xamlText)
+Write-CCTiming 'window layout parsed'
 $ui = @{}
 foreach ($m in [regex]::Matches($xamlText, 'x:Name="([^"]+)"')) { $name = $m.Groups[1].Value; $ui[$name] = $window.FindName($name) }
 # Fit the screen: at 125% or 150% scaling the default size can be taller than the screen, which hides the title bar.
@@ -61,8 +67,8 @@ function On($Control, [string]$EventName, [scriptblock]$Handler) {
     # The wrapper calls a global function, so it runs wherever WPF invokes it; the handler itself still runs in this script.
     $Control.('add_' + $EventName)([scriptblock]::Create('param($s, $e) Invoke-CCHandler ''' + $id + ''' $s $e'))
 }
-function global:Invoke-CCHandler([string]$Id, $Sender, $EventArgs) {
-    try { & $script:Handlers[$Id] $Sender $EventArgs }
+function global:Invoke-CCHandler([string]$Id, $control, $eventData) {
+    try { & $script:Handlers[$Id] $control $eventData }
     catch {
         Write-CCLog ($_.Exception.Message + ' @ ' + $_.InvocationInfo.ScriptLineNumber + ': ' + $_.InvocationInfo.Line.Trim())
         Set-Message ('Something went wrong: ' + $_.Exception.Message + ' It''s logged in ' + $script:LogPath)
@@ -190,7 +196,9 @@ function Format-When([datetime]$Utc) {
 function Add-Shape($Canvas, $Shape) { $Canvas.Children.Add($Shape) | Out-Null }
 function New-Text([string]$Text, [double]$X, [double]$Y, [string]$Align = 'Left') {
     $t = New-Object Windows.Controls.TextBlock
-    $t.Text = $Text; $t.FontSize = 11; $t.Foreground = $window.Resources['Text3']
+    # The window's font, set before measuring: a TextBlock not yet in the window would measure in WPF's default font,
+    # which costs loading that font and puts labels a little off once they show in the window's.
+    $t.Text = $Text; $t.FontSize = 11; $t.FontFamily = $window.FontFamily; $t.Foreground = $window.Resources['Text3']
     $t.Measure((New-Object Windows.Size ([double]::PositiveInfinity), ([double]::PositiveInfinity)))
     $left = if ($Align -eq 'Right') { $X - $t.DesiredSize.Width } elseif ($Align -eq 'Center') { $X - $t.DesiredSize.Width / 2 } else { $X }
     [Windows.Controls.Canvas]::SetLeft($t, [math]::Max([double]0, $left)); [Windows.Controls.Canvas]::SetTop($t, $Y); $t
@@ -305,7 +313,7 @@ function New-Tile([string]$Key, [string]$Title, [string]$Glyph, [string]$Brush, 
     $s = New-Object Windows.Controls.TextBlock; $s.Text = $Sub; $s.FontSize = 12; $s.SetResourceReference([Windows.Controls.TextBlock]::ForegroundProperty, 'Text2')
     $panel.Children.Add($head) | Out-Null; $panel.Children.Add($v) | Out-Null; $panel.Children.Add($s) | Out-Null
     $b.Content = $panel
-    $b.add_Click({ param($sender, $e) $script:Tile = $sender.Tag; Show-Page 'folders' })
+    $b.add_Click({ param($control, $e) $script:Tile = $control.Tag; Show-Page 'folders' })
     $b
 }
 $script:AnswerInfo = [ordered]@{
@@ -560,7 +568,7 @@ function Read-MoveLog {
     @($text -split '\r?\n' | Where-Object { $_ })
 }
 function New-ResultRow([string]$Line) {
-    if ($Line -notmatch '^(Moved|NOT moved|Already gone): (.+?)( \((.+)\))?$') { return $null }
+    if ($Line -notmatch '^(Moved|NOT moved|Already gone): (.+?)( \(([^()]+)\))?$') { return $null }
     $path = $Matches[2]; $why = $Matches[4]
     $known = $script:Items | Where-Object { $_.Path -eq $path } | Select-Object -First 1
     $name = if ($known) { $known.Name } else { Split-Path $path -Leaf }
@@ -605,6 +613,10 @@ function Complete-Move([string[]]$Lines) {
     }
     Show-Dialog $title $body $warnings $rows 'Done' { Close-Dialog } '' 'Open Recycle Bin' { Open-Bin }
     Set-Message $(if ($moved) { $title + $(if ($freed) { ' (' + $freed + ').' } else { '.' }) + ' Empty the bin to get the space back.' } else { $title + '.' })
+    # What moved leaves the lists now. A folder that only lost its old files is still there, so it is dropped by name
+    # too; the next scan measures what is left in it.
+    $movedPaths = @($moved | ForEach-Object { if ($_ -match '^Moved: (.+?)( \(([^()]+)\))?$') { $Matches[1] } })
+    if ($movedPaths) { $script:Items = @($script:Items | Where-Object { $movedPaths -notcontains $_.Path }) }
     Remove-Gone; Update-Views
 }
 function Get-BinCapacity {
@@ -732,6 +744,7 @@ function Show-Inspector($Item) {
     switch ($Item.Action) {
         'storage' { $ui.InAction.Content = 'Open Storage Settings' }
         'steam' { $ui.InAction.Content = 'Open Steam' }
+        { $_ -like 'steam-uninstall:*' } { $ui.InAction.Content = 'Uninstall in Steam…' }
         default { $ui.InAction.Visibility = 'Collapsed' }
     }
     $ui.InLook.Visibility = $(if ($Item.LookInside) { 'Visible' } else { 'Collapsed' })
@@ -857,7 +870,7 @@ $script:RescanTimer.add_Tick({
 function New-MenuItem([string]$Header, [string]$Glyph, [scriptblock]$Action, $Item) {
     $m = New-Object Windows.Controls.MenuItem
     $m.Header = $Header; $m.Tag = [Net.WebUtility]::HtmlDecode($Glyph); $m.DataContext = @{ Item = $Item; Action = $Action }
-    $m.add_Click({ param($sender, $e) $ctx = $sender.DataContext; & $ctx.Action $ctx.Item })
+    $m.add_Click({ param($control, $e) $ctx = $control.DataContext; & $ctx.Action $ctx.Item })
     $m
 }
 function New-ItemMenu($Item) {
@@ -887,11 +900,11 @@ function Find-Item($Source) {
     }
     $null
 }
-function Open-ItemMenu($Sender, $E) {
+function Open-ItemMenu($control, $E) {
     $item = Find-Item $E.OriginalSource
     if (-not $item) { return }
     $menu = New-ItemMenu $item
-    $menu.PlacementTarget = $Sender; $menu.IsOpen = $true; $E.Handled = $true
+    $menu.PlacementTarget = $control; $menu.IsOpen = $true; $E.Handled = $true
 }
 
 # ---------- History ----------
@@ -954,7 +967,7 @@ function Show-Settings {
     foreach ($t in Get-Terminals) {
         $rb = New-Object Windows.Controls.RadioButton; $rb.Style = $window.Resources['Seg']; $rb.Content = $t.Name; $rb.Tag = $t.Id; $rb.GroupName = 'terminal'
         $rb.IsChecked = $t.Id -eq $s.terminal
-        $rb.add_Checked({ param($sender, $e) $script:Settings.terminal = $sender.Tag; Save-Settings })
+        $rb.add_Checked({ param($control, $e) $script:Settings.terminal = $control.Tag; Save-Settings })
         $ui.SetTerminal.Children.Add($rb) | Out-Null
     }
     if (-not ($ui.SetTerminal.Children | Where-Object { $_.IsChecked })) { $ui.SetTerminal.Children[0].IsChecked = $true }
@@ -1038,6 +1051,8 @@ function Update-Status {
 }
 function Update-Views {
     Update-Badges; Update-Status
+    # Until the last scan has loaded the page is hidden, so there is nothing to draw yet.
+    if ($script:Loading) { return }
     switch ($script:Page) {
         'overview' { Show-Overview } 'free' { Show-Free } 'history' { Show-History } 'settings' { Show-Settings }
         default { Show-Folders }
@@ -1051,11 +1066,12 @@ function Move-History([int]$Step) {
     $to.Push($script:Page); Show-Page $from.Pop() -NoHistory
     $ui.BackButton.Visibility = $(if ($script:Back.Count) { 'Visible' } else { 'Collapsed' })
 }
-function Set-ScanData($Data, $Index) {
+function Set-ScanData($Data, $Index, [switch]$NoIndex) {
     $script:ScanData = $Data
     $script:Items = @($Data.Items)
     foreach ($item in $script:Items) { $item.add_PropertyChanged({ param($s, $e) if ($e.PropertyName -eq 'Selected' -and $script:Page -eq 'free') { Update-FreeTotal } }) }
-    $script:Index = if ($Index) { $Index } else { Get-CCScanIndex }
+    # -NoIndex: the history of earlier scans is still loading and arrives on its own.
+    $script:Index = if ($Index) { $Index } elseif ($NoIndex) { $script:Index } else { Get-CCScanIndex }
 }
 
 # ---------- Scanning, on its own thread so the window stays responsive ----------
@@ -1090,6 +1106,8 @@ $script:ScanTimer.add_Tick({
     $ui.ScanButton.IsEnabled = $true; $ui.StopButton.Visibility = 'Collapsed'; $ui.ScanProgress.Visibility = 'Collapsed'
     if ($sync.Error) { Set-Message $sync.Error; Update-Status; return }
     # Reload from the saved file, so the window and the saved scan always agree.
+    # The scan also looked for project folders again; read what it found.
+    $script:CCFoundRoots = $null; $script:Settings = Get-CCSettings
     Set-ScanData (Get-CCLastScan)
     Set-Message ('Scanned in ' + $seconds + ' s. ' + (Plural @($script:Items | Where-Object { $_.Growing }).Count 'folder grew' 'folders grew') + ' since the scan before.')
     Update-Views
@@ -1109,7 +1127,7 @@ function Remove-Gone {
 
 # ---------- Wiring ----------
 $window.Dispatcher.add_UnhandledException({
-    param($sender, $e)
+    param($control, $e)
     Write-CCLog ($e.Exception.ToString())
     Set-Message ('Something went wrong: ' + $e.Exception.Message + ' It''s logged in ' + $script:LogPath)
     $e.Handled = $true
@@ -1182,6 +1200,8 @@ On $ui.InTrack 'Click' { $i = $ui.FolderList.SelectedItem; if ($i) { Switch-Trac
 On $ui.InAction 'Click' {
     $i = $ui.FolderList.SelectedItem
     if (-not $i) { return }
+    # Steam asks before it uninstalls anything. Only a numeric app id from Steam's own manifest goes into the link.
+    if ($i.Action -match '^steam-uninstall:(\d+)$') { Start-Process ('steam://uninstall/' + $Matches[1]); Set-Message ('Steam asks before it uninstalls ' + $i.Name + '. Scan again afterwards to update the lists.'); return }
     switch ($i.Action) { 'storage' { Start-Process 'ms-settings:storagesense' } 'steam' { Start-Process 'steam://open/main' } }
 }
 On $ui.InLook 'Click' {
@@ -1354,29 +1374,46 @@ On $window 'Closing' {
     try { Save-CCSettings $script:Settings } catch { }
 }
 
-# The last scan loads on a background thread, so the window opens at once.
+# The last scan loads on a background thread, so the window opens at once. It shows as soon as it is read; the
+# history of earlier scans, for the charts, follows.
 function Start-Load {
+    $script:LoadSync = [hashtable]::Synchronized(@{ Scan = $null; ScanRead = $false; Index = $null; Done = $false; Error = $null })
     $script:Loader = [powershell]::Create()
-    $script:Loader.AddScript({ param($core) . $core; [pscustomobject]@{ Scan = (Get-CCLastScan); Index = (Get-CCScanIndex) } }).AddArgument($corePath) | Out-Null
+    $script:Loader.AddScript({
+        param($core, $sync)
+        try { $sync.Began = [datetime]::UtcNow; . $core; $sync.CoreAt = [datetime]::UtcNow; $sync.Scan = Get-CCLastScan; $sync.ScanAt = [datetime]::UtcNow; $sync.ScanRead = $true; $sync.Index = Get-CCScanIndex }
+        catch { $sync.Error = $_.Exception.Message }
+        finally { $sync.ScanRead = $true; $sync.Done = $true }
+    }).AddArgument($corePath).AddArgument($script:LoadSync) | Out-Null
     $script:LoaderHandle = $script:Loader.BeginInvoke()
     $script:LoadTimer.Start()
 }
 $script:LoadTimer = New-Object Windows.Threading.DispatcherTimer
-$script:LoadTimer.Interval = [TimeSpan]::FromMilliseconds(100)
+$script:LoadTimer.Interval = [TimeSpan]::FromMilliseconds(50)
 $script:LoadTimer.add_Tick({
-    if (-not $script:LoaderHandle.IsCompleted) { return }
+    $sync = $script:LoadSync
+    if ($script:Loading -and $sync.ScanRead) {
+        if ($sync.Began) { Write-CCTiming ('  loader: core ' + [int]($sync.CoreAt - $sync.Began).TotalMilliseconds + ' ms, last scan ' + [int]($sync.ScanAt - $sync.CoreAt).TotalMilliseconds + ' ms') }
+        if ($sync.Scan) { Set-ScanData $sync.Scan $null -NoIndex }
+        else { Set-Message 'Welcome. Choose Scan to see what fills your drive; it reads folder sizes and dates and changes nothing.' }
+        $script:Loading = $false
+        $ui.PageOverview.Parent.Opacity = 1
+        Write-CCTiming 'scan data set'
+        Update-Views
+        Write-CCTiming 'last scan shown'
+    }
+    if (-not $sync.Done) { return }
     $script:LoadTimer.Stop()
-    $result = $null
-    try { $result = @($script:Loader.EndInvoke($script:LoaderHandle))[0] } catch { Write-CCLog ('load: ' + $_.Exception.Message) }
+    try { $script:Loader.EndInvoke($script:LoaderHandle) | Out-Null } catch { }
     $script:Loader.Dispose(); $script:Loader = $null
-    if ($result -and $result.Scan) { Set-ScanData $result.Scan $result.Index } elseif ($result) { $script:Index = $result.Index }
-    if (-not ($result -and $result.Scan)) { Set-Message 'Welcome. Choose Scan to see what fills your drive; it reads folder sizes and dates and changes nothing.' }
-    $script:Loading = $false
-    $ui.PageOverview.Parent.Opacity = 1
-    Update-Views
+    if ($sync.Error) { Write-CCLog ('load: ' + $sync.Error) }
+    # A scan finished meanwhile brings a newer history of its own.
+    if ($sync.Index -and -not $script:Index) { $script:Index = $sync.Index; Update-Views }
+    Write-CCTiming 'scan history loaded'
 })
 
 # ---------- Start ----------
+Write-CCTiming 'handlers wired'
 $window.TaskbarItemInfo = New-Object Windows.Shell.TaskbarItemInfo
 # Screen readers and UI Automation name each page in the sidebar.
 foreach ($li in @($ui.Nav.Items) + @($ui.NavFooter.Items)) {
@@ -1386,6 +1423,7 @@ foreach ($li in @($ui.Nav.Items) + @($ui.NavFooter.Items)) {
 }
 Restore-Placement
 Set-Theme
+Write-CCTiming 'theme set'
 $drive = New-Object IO.DriveInfo $script:CCDrive
 $lastReading = Get-CCReadings | Select-Object -Last 1
 if (-not $lastReading -or ([datetime]::UtcNow - $lastReading.At).TotalHours -ge 1) { Add-CCReading $drive.TotalSize $drive.AvailableFreeSpace }
@@ -1393,9 +1431,10 @@ $script:Loading = $true
 $ui.PageOverview.Parent.Opacity = 0
 $script:Ready = $true
 Show-Page 'overview'
+Write-CCTiming 'first page drawn, showing window'
 $ui.Status.Text = 'Opening your last scan…'
 $script:GoneTimer.Start(); $script:ThemeTimer.Start()
-$window.add_ContentRendered({ if ($script:Loading -and -not $script:Loader) { Start-Load } })
+$window.add_ContentRendered({ Write-CCTiming 'window on screen'; if ($script:Loading -and -not $script:Loader) { Start-Load } })
 $window.ShowDialog() | Out-Null
 $script:Mutex.ReleaseMutex()
 

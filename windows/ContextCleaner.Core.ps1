@@ -174,8 +174,111 @@ namespace ContextCleaner {
         public static Measurement[] MeasureAll(string[] paths, string[] skip) {
             var set = new HashSet<string>(skip ?? new string[0], StringComparer.OrdinalIgnoreCase);
             var results = new Measurement[paths.Length];
-            Parallel.For(0, paths.Length, new ParallelOptions { MaxDegreeOfParallelism = 8 }, i => { results[i] = Measure(paths[i], set); });
+            var latest = new long[paths.Length];
+            // One pile of folders for every place, shared by all cores. A tree of tens of thousands of small folders
+            // (Plex keeps its metadata that way) is then split across cores instead of walked by one.
+            var work = new System.Collections.Concurrent.ConcurrentStack<KeyValuePair<int, string>>();
+            long pending = 0;
+            for (int i = 0; i < paths.Length; i++) {
+                string path = paths[i];
+                uint attributes = GetFileAttributesW(Long(path));
+                if (attributes == 0xFFFFFFFF || (attributes & Directory) == 0 || (attributes & Reparse) != 0) { results[i] = Measure(path, set); continue; }
+                results[i] = new Measurement { Path = path, Exists = true };
+                try { latest[i] = Math.Max(System.IO.Directory.GetLastWriteTimeUtc(path).Ticks, System.IO.Directory.GetCreationTimeUtc(path).Ticks); } catch { }
+                pending++;
+                work.Push(new KeyValuePair<int, string>(i, path.TrimEnd('\\')));
+            }
+            int workers = Math.Max(2, Math.Min(16, Environment.ProcessorCount));
+            var threads = new Thread[workers];
+            for (int t = 0; t < workers; t++) {
+                threads[t] = new Thread(() => {
+                    var spin = new SpinWait();
+                    while (true) {
+                        KeyValuePair<int, string> job;
+                        if (!work.TryPop(out job)) {
+                            if (Interlocked.Read(ref pending) == 0 || Cancel) return;
+                            spin.SpinOnce(); continue;
+                        }
+                        spin.Reset();
+                        if (!Cancel) Walk(job.Key, job.Value, results[job.Key], latest, set, work, ref pending);
+                        Interlocked.Decrement(ref pending);
+                    }
+                });
+                threads[t].IsBackground = true; threads[t].Start();
+            }
+            foreach (var thread in threads) thread.Join();
+            for (int i = 0; i < paths.Length; i++) { if (latest[i] > 0 && results[i].Exists && !results[i].Link && results[i].Latest == null) results[i].Latest = new DateTime(latest[i], DateTimeKind.Utc); }
             return results;
+        }
+        // One folder of a place: its files are added to the place's totals, its folders go on the shared pile.
+        static void Walk(int place, string dir, Measurement m, long[] latest, HashSet<string> skip, System.Collections.Concurrent.ConcurrentStack<KeyValuePair<int, string>> work, ref long pending) {
+            FindData data;
+            IntPtr handle = FindFirstFileExW(Long(dir) + @"\*", 1, out data, 0, IntPtr.Zero, 2);
+            if (handle == Invalid) { Interlocked.Increment(ref m.Unreadable); return; }
+            long bytes = 0, shared = 0, files = 0, cloud = 0, newest = 0;
+            try {
+                do {
+                    string name = data.Name;
+                    if (name == "." || name == "..") continue;
+                    string full = dir + "\\" + name;
+                    uint a = data.Attributes;
+                    long changed = Math.Max(Ticks(data.WrittenLow, data.WrittenHigh), Ticks(data.CreatedLow, data.CreatedHigh));
+                    if ((a & Directory) != 0) {
+                        if ((a & Reparse) != 0) continue;
+                        if (skip != null && skip.Contains(full)) continue;
+                        if (changed > newest) newest = changed;
+                        Interlocked.Increment(ref pending);
+                        work.Push(new KeyValuePair<int, string>(place, full));
+                    } else {
+                        if (skip != null && skip.Contains(full)) continue;
+                        if ((a & CloudOnly) != 0) { cloud++; continue; }
+                        if ((a & Reparse) != 0 && (data.Reserved0 == TagSymlink || data.Reserved0 == TagMountPoint)) continue;
+                        long size = OnDisk(full, a, ((long)data.SizeHigh << 32) | data.SizeLow);
+                        if (size >= LinkCheckMinimum && Links(full) > 1) shared += size; else bytes += size;
+                        files++;
+                        if (changed > newest) newest = changed;
+                    }
+                } while (FindNextFileW(handle, out data));
+            } finally { FindClose(handle); }
+            if (bytes != 0) Interlocked.Add(ref m.Bytes, bytes);
+            if (shared != 0) Interlocked.Add(ref m.SharedBytes, shared);
+            if (files != 0) { Interlocked.Add(ref m.Files, files); Interlocked.Add(ref FilesRead, files); }
+            if (cloud != 0) Interlocked.Add(ref m.CloudOnly, cloud);
+            long seen = Interlocked.Read(ref latest[place]);
+            while (newest > seen) { long was = Interlocked.CompareExchange(ref latest[place], newest, seen); if (was == seen) break; seen = was; }
+        }
+
+        // Files at any depth in a folder that nothing has written or created since the cutoff, up to max of them.
+        // Links and junctions are not followed, and files kept only in the cloud are left out.
+        public static OldFiles FindOld(string path, DateTime cutoffUtc, int max) {
+            var r = new OldFiles();
+            long cut = cutoffUtc.Ticks, latest = 0;
+            var stack = new Stack<string>();
+            stack.Push(path.TrimEnd('\\'));
+            while (stack.Count > 0 && r.Paths.Count < max) {
+                string dir = stack.Pop();
+                FindData data;
+                IntPtr handle = FindFirstFileExW(Long(dir) + @"\*", 1, out data, 0, IntPtr.Zero, 2);
+                if (handle == Invalid) continue;
+                try {
+                    do {
+                        string name = data.Name;
+                        if (name == "." || name == "..") continue;
+                        string full = dir + "\\" + name;
+                        uint a = data.Attributes;
+                        if ((a & Reparse) != 0 || (a & CloudOnly) != 0) continue;
+                        if ((a & Directory) != 0) { stack.Push(full); continue; }
+                        long changed = Math.Max(Ticks(data.WrittenLow, data.WrittenHigh), Ticks(data.CreatedLow, data.CreatedHigh));
+                        if (changed >= cut) continue;
+                        r.Paths.Add(full);
+                        r.Bytes += OnDisk(full, a, ((long)data.SizeHigh << 32) | data.SizeLow);
+                        if (changed > latest) latest = changed;
+                        if (r.Paths.Count >= max) { r.More = true; break; }
+                    } while (FindNextFileW(handle, out data));
+                } finally { FindClose(handle); }
+            }
+            if (latest > 0) r.Latest = new DateTime(latest, DateTimeKind.Utc);
+            return r;
         }
 
         // The full, long form of a path: C:\Users\you\DOCUME~1 becomes C:\Users\you\Documents.
@@ -198,6 +301,11 @@ namespace ContextCleaner {
         }
     }
 
+    public sealed class OldFiles {
+        public List<string> Paths = new List<string>();
+        public long Bytes; public DateTime? Latest; public bool More;
+    }
+
     public static class RecycleBin {
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         struct FileOp {
@@ -209,6 +317,13 @@ namespace ContextCleaner {
         // something is too big for the bin and would be deleted for good (FOF_WANTNUKEWARNING).
         public static int Send(string path) {
             var op = new FileOp { wFunc = 3, pFrom = path + "\0\0", fFlags = 0x0040 | 0x0010 | 0x4000 | 0x0004 };
+            int result = SHFileOperationW(ref op);
+            return result != 0 ? result : (op.fAnyOperationsAborted ? -1 : 0);
+        }
+        // Several files in one operation. No error dialog (FOF_NOERRORUI): a file in use stops it, and the caller sends
+        // what is left one at a time.
+        public static int SendMany(string[] paths) {
+            var op = new FileOp { wFunc = 3, pFrom = string.Join("\0", paths) + "\0\0", fFlags = 0x0040 | 0x0010 | 0x4000 | 0x0004 | 0x0400 };
             int result = SHFileOperationW(ref op);
             return result != 0 ? result : (op.fAnyOperationsAborted ? -1 : 0);
         }
@@ -463,13 +578,26 @@ function Get-CCSettings {
         }
     }
     if (-not $s.projectRoots) {
-        # Any folder on the drive, in your home folder or in Documents that holds a git repository.
-        # Looking for them takes a moment, so it happens once per run.
+        # Any folder on the drive, in your home folder or in Documents that holds a git repository. Each scan looks for
+        # them and remembers what it found, so opening the window and a move use the same folders without looking again.
         $s.projectRootsFound = $true
-        if ($null -eq $script:CCFoundRoots) { $script:CCFoundRoots = @(Find-CCProjectRoots) }
-        $s.projectRoots = $script:CCFoundRoots
+        if ($null -eq $script:CCFoundRoots) {
+            $cache = Join-Path $script:CCData 'project-folders.json'
+            $known = $null
+            # Windows PowerShell hands a JSON array back as one object, so it is unwrapped with @() before filtering.
+            if (Test-Path -LiteralPath $cache) { try { $parsed = [IO.File]::ReadAllText($cache) | ConvertFrom-Json; $known = [string[]]@(@($parsed) | Where-Object { $_ -is [string] -and $_ }) } catch { $known = $null } }
+            if ($null -ne $known) { $script:CCFoundRoots = $known } else { Update-CCFoundRoots }
+        }
+        $s.projectRoots = [string[]]@($script:CCFoundRoots)
     }
     [pscustomobject]$s
+}
+function Update-CCFoundRoots {
+    $script:CCFoundRoots = [string[]]@(Find-CCProjectRoots)
+    try {
+        New-Item -ItemType Directory -Force -Path $script:CCData | Out-Null
+        [IO.File]::WriteAllText((Join-Path $script:CCData 'project-folders.json'), (ConvertTo-Json -InputObject ([string[]]$script:CCFoundRoots) -Compress), [Text.UTF8Encoding]::new($false))
+    } catch { }
 }
 
 function Find-CCProjectRoots {
@@ -576,14 +704,22 @@ function Get-CCPlaces($Settings) {
         foreach ($sdk in Get-CCChildren (Join-CC $l ('Android\Sdk\' + $kind))) { & $add (New-CCPlace $sdk.FullName ('Android ' + $kind + ' ' + $sdk.Name) 'Android Studio' android 'Developer tools' 'Package downloads' 'cache') }
     }
     foreach ($avd in Get-CCChildren (Join-CC $h '.android\avd')) { & $add (New-CCPlace $avd.FullName ($avd.BaseName + ' emulator') 'Android Emulator' android 'Virtual machines' 'Virtual machines' 'vm-android') }
-    # Temporary files: each top-level item, kept only when big.
-    foreach ($tmp in Get-CCChildren $script:CCTemp -IncludeFiles) { & $add (New-CCPlace $tmp.FullName ('Temp · ' + $tmp.Name) 'Apps and tools' temp 'Developer tools' 'Temporary files' 'temp' @{ MinBytes = 50MB }) }
+    # Temporary files: each top-level item of 50 MB or more. Temp can hold thousands of small items, so they are sized
+    # in one quick pass and only the big ones become places; the rest counts toward Temp under Everything else.
+    $temps = @(Get-CCChildren $script:CCTemp -IncludeFiles)
+    if ($temps) {
+        $sized = [ContextCleaner.Disk]::MeasureAll([string[]]@($temps | ForEach-Object { $_.FullName }), [string[]]@())
+        for ($i = 0; $i -lt $temps.Count; $i++) {
+            if ($sized[$i].Bytes + $sized[$i].SharedBytes -lt 50MB) { continue }
+            & $add (New-CCPlace $temps[$i].FullName ('Temp · ' + $temps[$i].Name) 'Apps and tools' temp 'Developer tools' 'Temporary files' 'temp' @{ MinBytes = 50MB })
+        }
+    }
     # Crash dumps and error reports
     foreach ($dump in Get-CCChildren (Join-CC $l 'CrashDumps') -IncludeFiles) { & $add (New-CCPlace $dump.FullName ('Crash dump · ' + $dump.Name) 'Windows Error Reporting' crash 'Windows' 'Crash dumps' 'crash' @{ MinBytes = 20MB }) }
     foreach ($wer in 'ReportArchive', 'ReportQueue') { & $add (New-CCPlace (Join-CC $l ('Microsoft\Windows\WER\' + $wer)) ('Error reports · ' + $wer) 'Windows Error Reporting' crash 'Windows' 'Crash dumps' 'crash' @{ MinBytes = 20MB }) }
 
     # Projects: build folders inside each repository, item by item when a build folder holds several builds.
-    foreach ($root in $Settings.projectRoots) {
+    foreach ($root in @($Settings.projectRoots | Where-Object { $_ })) {
         foreach ($project in Get-CCChildren $root) {
             $git = Join-Path $project.FullName '.git'
             if (Test-Path -LiteralPath $git -PathType Leaf) { & $add (New-CCPlace $project.FullName ('Worktree ' + $project.Name) 'git' projects 'Projects' 'Worktrees' 'worktree'); continue }
@@ -636,7 +772,19 @@ function Get-CCPlaces($Settings) {
     $vdf = Join-Path $steam 'steamapps\libraryfolders.vdf'
     if (Test-Path -LiteralPath $vdf) { $libraries += Select-String -LiteralPath $vdf -Pattern '"path"\s+"([^"]+)"' | ForEach-Object { $_.Matches[0].Groups[1].Value -replace '\\\\', '\' } }
     foreach ($library in $libraries | ForEach-Object { [IO.Path]::GetFullPath($_) } | Sort-Object -Unique) {
-        foreach ($game in Get-CCChildren (Join-Path $library 'steamapps\common')) { & $add (New-CCPlace $game.FullName $game.Name 'Steam' games 'Games' 'Games' 'game') }
+        # Steam's manifest for each game: its app id (for Uninstall in Steam), its name and when it was last played.
+        $apps = @{}
+        foreach ($acf in Get-ChildItem -LiteralPath (Join-Path $library 'steamapps') -Filter 'appmanifest_*.acf' -ErrorAction SilentlyContinue) {
+            $text = try { [IO.File]::ReadAllText($acf.FullName) } catch { '' }
+            $f = @{}
+            foreach ($m in [regex]::Matches($text, '"(appid|name|installdir|LastPlayed)"\s+"([^"]*)"')) { if (-not $f.ContainsKey($m.Groups[1].Value)) { $f[$m.Groups[1].Value] = $m.Groups[2].Value } }
+            if ($f.installdir) { $apps[$f.installdir] = $f }
+        }
+        foreach ($game in Get-CCChildren (Join-Path $library 'steamapps\common')) {
+            $f = $apps[$game.Name]; $extra = @{}; $name = $game.Name
+            if ($f -and $f.appid -match '^\d+$') { $extra.AppId = $f.appid; $extra.LastPlayed = [long]('0' + ($f.LastPlayed -replace '\D', '')); if ($f.name) { $name = $f.name } }
+            & $add (New-CCPlace $game.FullName $name 'Steam' games 'Games' 'Games' 'game' $extra)
+        }
     }
 
     # Windows itself.
@@ -731,11 +879,11 @@ function Test-CCAllowed([string]$Path, $Settings) {
     $parent = Split-Path $full -Parent
     $direct = [bool](@($script:CacheEntries) + @($script:ShaderEntries) | Where-Object { $_.Path -ieq $full })
     if (-not $direct -and ($parent -ieq $h -or $parent -ieq $script:CCLocal -or $parent -ieq $script:CCRoaming)) { return $false }
-    $roots = @($h, $script:CCTemp) + @($Settings.projectRoots | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') })
+    $roots = @($h, $script:CCTemp) + @($Settings.projectRoots | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') })
     # Folders you track count only inside your home folder, so tracking never opens Program Files or Windows to a command.
     $roots += @($Settings.tracked | ForEach-Object { [IO.Path]::GetFullPath($_).TrimEnd('\') } | Where-Object { Test-CCInside $_ $h })
     if (-not ($roots | Where-Object { Test-CCInside $full $_ })) { return $false }
-    foreach ($root in $Settings.projectRoots) {
+    foreach ($root in @($Settings.projectRoots | Where-Object { $_ })) {
         $root = [IO.Path]::GetFullPath($root).TrimEnd('\')
         # A whole project is never offered; a worktree is, after git says everything in it is pushed.
         if ($full -ieq $root) { return $false }
@@ -751,7 +899,11 @@ function Get-CCRunning {
         ForEach-Object { [pscustomobject]@{ Name = $_.Name; Path = $_.ExecutablePath } })
 }
 function Get-CCInUse([string]$Path, $Running) {
-    $names = @($Running | Where-Object { Test-CCInside $_.Path $Path -OrSame } | ForEach-Object { $_.Name -replace '\.exe$', '' } | Sort-Object -Unique)
+    # The same test as Test-CCInside -OrSame, in a plain loop: it runs for every item against every program.
+    $folder = $Path.TrimEnd('\'); $prefix = $folder + '\'
+    $names = @(foreach ($r in $Running) {
+        if ($r.Path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or $r.Path.Equals($folder, [StringComparison]::OrdinalIgnoreCase)) { $r.Name -replace '\.exe$', '' }
+    }) | Sort-Object -Unique
     if ($names) { ($names | Select-Object -First 3) -join ', ' } else { $null }
 }
 
@@ -830,6 +982,12 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
             if ($idle -ge 3) { Set-CCAnswer $Item Safe ('Temporary, ' + $quiet) 'Work files an app or tool left in your temporary folder.' 'Nothing. Nothing keeps temporary files.' }
             else { Set-CCAnswer $Item Review 'In use recently' 'Work files an app or tool left in your temporary folder.' 'Something may still be using it. Wait a few days.' }
         }
+        'temp-old' {
+            $count = if ($Item.Files -eq 1) { '1 old file' } else { $Item.Files.ToString('N0') + ' old files' }
+            $traces = if ($Item.Path -like '*\DiagOutputDir') { 'They are diagnostic traces from the Remote Desktop client. If you run Linux apps with windows in WSL, wsl --update, then wsl --shutdown and a restart, stops them piling up. ' } else { '' }
+            $age = if ($Item.Path -like '*\DiagOutputDir') { 'a day' } else { '3 days' }
+            Set-CCAnswer $Item Safe ($count + ' inside, untouched ' + $age + ' or more') ('Something still writes to this temporary folder, but these files in it have sat untouched for ' + $age + ' or more. Only they move; the folder and its newer files stay.') 'Nothing. Nothing keeps temporary files.' ($traces + 'Their size is what you get back; the folder holds a little more.')
+        }
         'download' { Set-CCAnswer $Item Review ('Download, ' + $quiet) 'Something you or an app downloaded.' 'Being in Downloads does not mean another copy exists.' }
         'tracked' { Set-CCAnswer $Item Review $(if ($idle -lt 7) { 'In a tracked folder, used this week' } else { 'In a tracked folder, ' + $quiet }) 'An item in a folder you chose to track. Context Cleaner has no rule for what it is.' 'It may be the only copy. Look inside first.' }
         'vm-wsl' {
@@ -845,8 +1003,11 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
         'game' {
             $onSystem = Test-CCInside $Item.Path $script:CCDrive
             $move = if ($roomyText -and $onSystem) { 'To keep it but free this drive, move it to ' + $roomyText + ': Steam > Settings > Storage, add a drive, select the game and choose Move. Steam moves the files without downloading them again. ' } else { '' }
-            Set-CCAnswer $Item Keep ('Installed game, ' + $quiet) 'A game installed through Steam.' 'Steam would still list it as installed, and saves kept only on this PC may be lost.' ($move + 'Or uninstall it in Steam (right-click > Manage > Uninstall); you can download it again later.')
-            $Item.Action = 'steam'
+            # Steam's own record of when it was last played beats file dates, which updates change.
+            $played = if ($Place.AppId -and $Place.LastPlayed -gt 0) { [DateTimeOffset]::FromUnixTimeSeconds($Place.LastPlayed).LocalDateTime } else { $null }
+            $reason = if (-not $Place.AppId) { 'Installed game, ' + $quiet } elseif (-not $played) { 'Installed game, never played' } elseif ($played -gt (Get-Date).AddDays(-30)) { 'Played this month' } else { 'Last played ' + $played.ToString('MMM yyyy') }
+            Set-CCAnswer $Item Keep $reason 'A game installed through Steam. Moving its folder to the Recycle Bin would leave Steam listing it as installed.' 'Saves kept only on this PC may be lost; the game itself downloads again from Steam.' ($move + 'Or Uninstall in Steam, which frees the space at once; you can download it again later.')
+            $Item.Action = $(if ($Place.AppId) { 'steam-uninstall:' + $Place.AppId } else { 'steam' })
         }
         'system' { Set-CCAnswer $Item Keep 'Windows uses it' 'A file Windows uses for memory or hibernation.' 'Windows needs it or recreates it.' $(if ($Item.Name -eq 'hiberfil.sys') { 'If you never hibernate, powercfg /h off in an admin terminal removes it (Fast Startup goes too).' } else { 'System > About > Advanced system settings > Performance > Advanced > Virtual memory sets its size and drive.' }) }
         'windows-old' { Set-CCAnswer $Item Keep 'Previous Windows' 'Your previous Windows installation, kept to roll back an upgrade.' 'You can no longer go back to the previous version.' 'Settings > System > Storage > Temporary files > Previous Windows installation(s).'; $Item.Action = 'storage' }
@@ -856,6 +1017,8 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
 }
 
 function Invoke-CCScan([scriptblock]$Progress = { param($text) }) {
+    # Project folders are looked for afresh on every scan, and remembered for opening the window and for moves.
+    Update-CCFoundRoots
     $settings = Get-CCSettings
     $previous = Get-CCBaselineScan
     $since = if ($previous) { Get-CCSinceText (ConvertTo-CCUtc $previous.FinishedAt) } else { $null }
@@ -894,6 +1057,15 @@ function Invoke-CCScan([scriptblock]$Progress = { param($text) }) {
         if ($m.Unreadable -eq 1) { $notes += 'One folder inside could not be read and is not counted.' } elseif ($m.Unreadable) { $notes += [string]$m.Unreadable + ' folders inside could not be read and are not counted.' }
         $item.Evidence = $notes -join ' '
         $items.Add($item); $byPath[$item.Path] = $place
+    }
+    # Old files inside a busy temporary folder, as on the Mac: something still writes there, but most of it sits untouched.
+    # Only their size is counted; the list of files is made again when you move them, so the saved scan stays small.
+    foreach ($item in $items) {
+        if ($item.Rule -ne 'temp' -or $item.IdleDays -ge 3 -or -not (Test-Path -LiteralPath $item.Path -PathType Container)) { continue }
+        $old = [ContextCleaner.Disk]::FindOld($item.Path, (Get-CCOldCutoff $item.Path), 20000)
+        if ($old.Bytes -lt 100MB) { continue }
+        $item.Rule = 'temp-old'; $byPath[$item.Path].Rule = 'temp-old'
+        $item.Bytes = $old.Bytes; $item.Files = $old.Paths.Count; $item.Latest = $old.Latest; $item.Growth = $null
     }
     # The newest build among the builds in one build folder.
     $newest = @{}
@@ -1036,6 +1208,8 @@ function Test-CCStillOffered($Item, $Settings, $Running) {
     if (-not (Test-CCAllowed $Item.Path $Settings)) { return 'Not allowed in a command' }
     $inUse = Get-CCInUse $Item.Path $Running
     if ($inUse) { return 'In use by ' + $inUse }
+    # Old files inside a busy folder: the folder itself changes all the time; each file is checked when it moves.
+    if ($Item.Rule -eq 'temp-old') { return $null }
     if ((Test-Path -LiteralPath (Join-Path $Item.Path '.git') -PathType Leaf) -and -not (Test-CCBackedUp (Get-CCGitBackup $Item.Path))) { return 'Git no longer has everything in it' }
     $now = [ContextCleaner.Disk]::Measure($Item.Path, $null)
     if (-not $Item.Latest -or ($now.Latest -and $now.Latest -gt $Item.Latest.AddSeconds(2))) { return 'Changed since the scan' }
@@ -1057,16 +1231,30 @@ function New-CCPlan([object[]]$Items, [string]$MoverPath) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $plan = [pscustomobject]@{
         Id = $id; Created = (Get-Date).ToUniversalTime().ToString('o'); Expires = (Get-Date).AddHours(1).ToUniversalTime().ToString('o')
-        Items = @($kept | ForEach-Object { [pscustomobject]@{ Path = $_.Path; Name = $_.Name; Answer = $_.Answer; Bytes = $_.Bytes; SharedBytes = $_.SharedBytes; Latest = $(if ($_.Latest) { $_.Latest.ToString('o') } else { $null }) } })
+        Items = @($kept | ForEach-Object {
+            $row = [ordered]@{ Path = $_.Path; Name = $_.Name; Answer = $_.Answer; Bytes = $_.Bytes; SharedBytes = $_.SharedBytes; Latest = $(if ($_.Latest) { $_.Latest.ToString('o') } else { $null }) }
+            # Old files inside a busy folder are listed now, so the list matches what has sat untouched 3 days by this moment.
+            if ($_.Rule -eq 'temp-old') {
+                $old = [ContextCleaner.Disk]::FindOld($_.Path, (Get-CCOldCutoff $_.Path), 20000)
+                $row.Paths = [string[]]$old.Paths.ToArray(); $row.Bytes = $old.Bytes
+                $row.Latest = $(if ($old.Latest) { $old.Latest.ToString('o') } else { $null })
+            }
+            [pscustomobject]$row
+        })
     }
     $file = Join-Path $dir ('plan-' + $id + '.json')
     [IO.File]::WriteAllText($file, (ConvertTo-Json -InputObject $plan -Depth 4), [Text.UTF8Encoding]::new($false))
     [pscustomobject]@{
-        # Windows PowerShell is on every Windows, and this line works pasted into PowerShell or Command Prompt.
-        Command = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + $MoverPath + '" -Plan "' + $file + '"'
+        # For PowerShell, which both terminals Context Cleaner opens run. Single quotes keep a dollar sign or backtick in a
+        # folder name as text; inside double quotes PowerShell would expand it.
+        Command = 'powershell -NoProfile -ExecutionPolicy Bypass -File ' + (ConvertTo-CCQuoted $MoverPath) + ' -Plan ' + (ConvertTo-CCQuoted $file)
         Count = $kept.Count; Bytes = [long]($kept | Measure-Object Bytes -Sum).Sum; LeftOut = $left; PlanPath = $file
     }
 }
+function ConvertTo-CCQuoted([string]$Text) { "'" + $Text.Replace("'", "''") + "'" }
+# How long a file in a busy temporary folder must sit untouched to count as old. The Remote Desktop client's traces
+# are finished once written and pile up by gigabytes a day, so a day is enough for them; anything else waits 3 days.
+function Get-CCOldCutoff([string]$Path) { if ($Path -like '*\DiagOutputDir') { [datetime]::UtcNow.AddDays(-1) } else { [datetime]::UtcNow.AddDays(-3) } }
 
 function Get-CCHistory {
     $file = Join-Path $script:CCData 'history.jsonl'

@@ -78,6 +78,23 @@ Also checked: the zip unpacks to the eight app files plus LICENSE and opens in a
 
 88 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
 
+## Fourth pass: parity with the Mac's rules
+
+Every page on the real data after a fresh 89-second scan, with the Mac README and classifier side by side.
+
+| Found | Fix |
+|---|---|
+| In a project folder without git, a folder named `out`, `dist`, `target`, `venv` and others counted as build output, so after 7 days it was Safe to remove even if you made it by hand. The Mac trusts those names only when git ignores the folder | `build` and `.cxx` stay output by name; any other build-like name needs the project's git to ignore it, and is otherwise Review first with the reason: not in a git repository, Git isn't installed (with `winget install Git.Git`), or git can't read it. Before, Git missing read "Tracked in git" |
+| The Mac lists a big folder git ignores (Not in git, only on this Mac); Windows didn't look | A folder of 500 MB or more that a project's git ignores and isn't build output is Review first, Not in git, only on this PC. The git query took 88 to 131 ms per repository here |
+| Overview said 43.2 GB and 12 folders could go with nothing lost and 12.6 GB more was Review first; Free Up Space said 42.2 GB, 9 and 2.8 GB | Overview uses Free Up Space's list and its Untouched for, so both say 42.2 GB, 9 items and 2.8 GB |
+| Couldn't Scan cut its count to "3 folder…" next to Scan These Again | The count wraps |
+| Before the first scan, Overview's button opened an empty Free Up Space | It says Scan Now and scans |
+| The keyboard table in the Windows README broke in two on GitHub | Joined |
+
+The new rules were checked against the real drive: a scan into a separate data folder gave the same answer and reason for all 134 folders as the scan before the change. Tests cover a build folder without git, a `dist` git ignores, an `out` it doesn't, and a Not in git folder found next to an ignored `node_modules` left to its own rule.
+
+93 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
+
 ## Not checked
 
 Windows 10, a non-English Windows, high-contrast themes, other display scalings, and a Recycle Bin with thousands of items (the size query reads each one). The mover test sends one fixture folder to the Recycle Bin on the runner.

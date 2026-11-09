@@ -602,6 +602,15 @@ function Get-CCPlaces($Settings) {
                     & $add (New-CCPlace $build.FullName ($project.Name + ' · ' + $relative) 'Your projects' projects 'Projects' 'Build output' 'build' @{ Repo = $repo; MinBytes = 100MB })
                 }
             }
+            # Not in git, as on the Mac: a big folder the repository ignores that isn't build output exists only on this PC.
+            if ($repo) {
+                $ignoredDirs = Invoke-CCGit $repo @('-c', 'core.quotePath=false', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory')
+                foreach ($rel in @($ignoredDirs -split '\r?\n' | Where-Object { $_ -like '*/' })) {
+                    $full = Join-Path $repo ($rel.TrimEnd('/') -replace '/', '\')
+                    if ($script:BuildNames -contains (Split-Path $full -Leaf) -or -not (Test-Path -LiteralPath $full -PathType Container)) { continue }
+                    & $add (New-CCPlace $full ($project.Name + ' · ' + $rel.TrimEnd('/').Replace('/', '\')) 'Your projects' projects 'Projects' 'Not in git' 'notingit' @{ Repo = $repo; MinBytes = 500MB })
+                }
+            }
         }
     }
     # Downloads, item by item.
@@ -779,12 +788,28 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
             else { Set-CCAnswer $Item Review ('Recent crash, ' + $quiet) 'What a program left behind when it crashed. It only helps someone debug that crash.' 'You can no longer study or send this crash.' }
         }
         'build' {
-            $ignored = $true
-            if ($Place.Repo) { $ignored = $null -ne (Invoke-CCGit $Place.Repo @('check-ignore', '--', $Item.Path.Substring($Place.Repo.Length + 1))) }
-            if (-not $ignored) { Set-CCAnswer $Item Review 'Tracked in git' 'A build-like folder that git tracks, so it may be source, not output.' 'Removing it changes the project. Check git status first.' }
+            # As on the Mac, only git says a folder is output: one the project's git ignores. "build" and ".cxx" are output
+            # by name; any other build-like name (out, dist, target, venv…) that git can't vouch for is Review first.
+            $folder = if ($Place.Siblings) { $Place.Siblings } else { $Item.Path }
+            $byName = 'build', '.cxx' -contains (Split-Path $folder -Leaf)
+            $hasGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
+            $ignored = $null
+            if ($Place.Repo -and $hasGit) {
+                $ignored = $null -ne (Invoke-CCGit $Place.Repo @('check-ignore', '--', $Item.Path.Substring($Place.Repo.Length + 1)))
+                # check-ignore also fails when git can't read the repository at all; that is "unknown", not "tracked".
+                if (-not $ignored -and $null -eq (Invoke-CCGit $Place.Repo @('rev-parse', '--git-dir'))) { $ignored = $null }
+            }
+            $unsure = 'It may hold files that exist only here.'
+            if ($ignored -eq $false) { Set-CCAnswer $Item Review 'Tracked in git' 'A build-like folder that git tracks, so it may be source, not output.' 'Removing it changes the project. Check git status first.' }
+            elseif ($null -eq $ignored -and -not $byName -and -not $Place.Repo) { Set-CCAnswer $Item Review 'Not in a git repository' 'A build-like folder in a project without git, so nothing confirms a tool made it.' $unsure 'Look inside first. In a git repository that ignores it, Context Cleaner can tell it is output.' }
+            elseif ($null -eq $ignored -and -not $byName -and -not $hasGit) { Set-CCAnswer $Item Review 'Git isn''t installed' 'A build-like folder. Without git, Context Cleaner can''t confirm the project ignores it as output.' $unsure 'Install Git for Windows (winget install Git.Git) and scan again.' }
+            elseif ($null -eq $ignored -and -not $byName) { Set-CCAnswer $Item Review 'Git can''t read it' 'A build-like folder in a repository git could not read, so whether it is output is unknown.' $unsure 'Open the project in a terminal and run git status. If git asks about safe.directory, the folder was made by another account or inside WSL.' }
             elseif ($Newest -and $Item.Path -ieq $Newest) { Set-CCAnswer $Item Rebuildable ('Newest build here, ' + $quiet) 'Output of your latest build in this folder.' 'You rebuild it from source if you need its files again.' }
             elseif ($idle -ge 7) { Set-CCAnswer $Item Safe ('Build output, ' + $quiet) 'Output a build produced. The source is in the project.' 'Nothing. A newer build exists, or the next build recreates it.' }
             else { Set-CCAnswer $Item Rebuildable 'Built this week' 'Output a build produced. The source is in the project.' 'The next build recreates it, which takes time.' }
+        }
+        'notingit' {
+            Set-CCAnswer $Item Review 'Not in git, only on this PC' 'A folder the project''s git ignores, so it is in no commit and on no remote. Downloads, data or models a tool fetched can come back; anything you made cannot.' 'What it holds is gone for good once you empty the Recycle Bin.' 'Look inside. Keep or back up what you made; remove what a tool can fetch again.'
         }
         'worktree' {
             $b = Get-CCGitBackup $Item.Path

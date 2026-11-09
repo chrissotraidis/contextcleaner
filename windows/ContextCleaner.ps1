@@ -370,12 +370,16 @@ function Show-Overview {
         $info = $script:AnswerInfo[$a]; $x = @($items | Where-Object { $_.Answer -eq $a -and -not $_.Ignored })
         $ui.OvTiles.Children.Add((New-Tile $info[0] $a ([Net.WebUtility]::HtmlDecode($info[2])) $info[1] (Size (Sum $x)) ((Plural $x.Count 'folder' 'folders') + ' · ' + $info[3]))) | Out-Null
     }
-    $back = @($items | Where-Object { $_.Removable -and -not $_.Ignored -and ($_.Answer -eq 'Safe to remove' -or $_.Answer -eq 'Rebuildable') })
-    $review = @($items | Where-Object { $_.Removable -and -not $_.Ignored -and $_.Answer -eq 'Review first' })
+    # The same items Free Up Space offers, under the same Untouched for, so both pages give the same numbers.
+    $offered = Get-FreeCandidates
+    $back = @($offered | Where-Object { $_.Answer -ne 'Review first' })
+    $review = @($offered | Where-Object { $_.Answer -eq 'Review first' })
     if ($items) {
         $ui.OvBack.Text = (Size (Sum $back)) + ' you could get back, nothing lost'
-        $ui.OvBackSub.Text = (Plural $back.Count 'folder is' 'folders are') + ' safe to remove or rebuildable. ' + (Size (Sum $review)) + ' more is Review first: look inside before removing it.'
+        $ui.OvBackSub.Text = (Plural $back.Count 'item is' 'items are') + ' safe to remove or rebuildable. ' + (Size (Sum $review)) + ' more is Review first: look inside before removing it.'
     } else { $ui.OvBack.Text = 'Scan to see what you can get back'; $ui.OvBackSub.Text = 'A scan reads folder sizes and dates for about a minute. It changes nothing.' }
+    # Before the first scan there is nothing to free yet, so the button scans.
+    $ui.OvGoFree.Content = $(if ($items) { 'Open Free Up Space' } else { 'Scan Now' })
     $ui.OvBin.Text = $(if ($recycle -gt 0) { (Size $recycle) + ' in the Recycle Bin' } elseif ($script:Bin -eq 0) { 'The Recycle Bin is empty' } else { 'Recycle Bin' })
     $ui.OvBinSub.Text = $(if ($recycle -gt 0) { 'Emptying it frees this space. Until then, Restore puts anything back.' } else { 'Things you move there wait until you empty it.' })
     $growing = @($items | Where-Object { $_.Growing } | Sort-Object Growth -Descending | Select-Object -First 5)
@@ -993,7 +997,7 @@ On $ui.SearchBox 'TextChanged' {
     if ($ui.SearchBox.Text -and @('folders', 'watch', 'ignored', 'unread') -notcontains $script:Page) { $script:Tile = 'all'; Show-Page 'folders' } elseif ($script:Page -ne 'overview') { Show-Folders }
 }
 foreach ($r in $ui.Range1, $ui.Range7, $ui.Range30) { On $r 'Checked' { if ($script:Page -eq 'overview' -and $script:Ready) { Show-Overview } } }
-On $ui.OvGoFree 'Click' { Show-Page 'free' }
+On $ui.OvGoFree 'Click' { if ($script:Items) { Show-Page 'free' } else { Start-Scan } }
 On $ui.OvOpenBin 'Click' { Open-Bin }
 foreach ($list in $ui.OvTop, $ui.OvGrow) {
     On $list 'MouseDoubleClick' { param($s, $e) $item = Find-Item $e.OriginalSource; if ($item) { $script:Tile = 'all'; Show-Page 'folders'; $ui.FolderList.SelectedItem = $item; $ui.FolderList.ScrollIntoView($item) } }

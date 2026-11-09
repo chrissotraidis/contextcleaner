@@ -37,7 +37,7 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
 |---|---|
 | Safe to remove | Nothing. A tool recreates it, or a newer copy exists, and it has sat unused. |
 | Rebuildable | You wait for the next build or download to recreate it. |
-| Review first | It may hold something that exists only there: task outputs, downloads, recent crashes, a worktree with unpushed work. |
+| Review first | It may hold something that exists only there: task outputs, downloads, recent crashes, a worktree with unpushed work, or a folder of 500 MB or more that a project's git ignores (Not in git, only on this PC). |
 | Not for the Recycle Bin | WSL and Docker disks, games, app data, chat history and Windows' own files. The card says how to get space back with their own tools. |
 | Everything else | Folders with no rule. **Track This Folder** scans one item by item from then on. |
 
@@ -49,7 +49,7 @@ Turn any group off in **Settings › Where Context Cleaner looks**.
 |---|---|
 | Codex | `.codex` (conversations, generated images, worktrees), `Documents\Codex` task folders, old runtimes in `.cache\codex-runtimes`, the Codex app's data |
 | Claude, AI models | Claude and Claude Code data; Hugging Face, Ollama and LM Studio models |
-| Project build folders | `build`, `dist`, `out`, `target`, `node_modules`, `.next`, `obj` and more, in every folder that holds git repositories (found on their own, or set in Settings). A build folder holding several builds is listed build by build, and the newest is Rebuildable. A git worktree is offered only when git has everything in it. |
+| Project build folders | `build`, `dist`, `out`, `target`, `node_modules`, `.next`, `obj` and more, in every folder that holds git repositories (found on their own, or set in Settings). As on the Mac, `build` is output by name; any other name counts as output only when the project's git ignores it, and is Review first otherwise. A build folder holding several builds is listed build by build, and the newest is Rebuildable. A git worktree is offered only when git has everything in it. |
 | Package caches | npm, pnpm, Yarn, Bun, pip, uv, NuGet, Gradle, Cargo, Go, Playwright, Electron; Android system images and NDKs |
 | Temporary files, crash dumps, shader caches | Big items in Temp; crash dumps and error reports; DirectX, NVIDIA and AMD shader caches |
 | WSL and Docker | Each Linux distribution's disk, with **Look Inside** listing the biggest folders inside Linux, read-only; Docker Desktop's disks |
@@ -88,7 +88,6 @@ Add `-WhatIf` to a copied command to run every check and see what it would move,
 | Ctrl+E | Export the cleanup list |
 | Ctrl+1 … Ctrl+7 | Overview, Free Up Space, Folders, Watchlist, Ignored, Couldn't Scan, History |
 | Ctrl+, | Settings |
-
 | Alt+Left, Alt+Right, mouse back and forward | Back and forward between pages |
 
 Right-click any folder for Show in Explorer, Copy Path, Scan Again, Watch for Growth, Its Growth Is Normal, Remind Me Tomorrow, Ignore, Track and Stop Scanning. In Folders, Ctrl+click or Shift+click several folders to see their total and copy one command for those that can go. Each folder's card has a note field; search finds folders by their notes.

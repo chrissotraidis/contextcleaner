@@ -14,6 +14,7 @@ Context Cleaner on Windows 10 and 11, with the Mac app's answers, safety rules a
 - **Move instead of delete.** With room on another drive, a game's card says how Steam moves it there and the WSL card gives `wsl --manage <distro> --move`. Their disks' cards give Microsoft's steps to hand space back after deleting inside them.
 - **The Recycle Bin.** The command moves items there, refuses a bin set to delete at once, and asks before a selection bigger than the bin would make Windows permanently delete older things. Overview and Free Up Space show what's waiting in it now, asked of Windows each time, so emptying the bin shows as soon as you come back.
 - **Safer commands.** Each item is checked again when you copy and when you run: gone, a link or junction anywhere on its path, a program running from it, a worktree git no longer vouches for, or changed since the scan. Hardlinked files count once, so a size is what removing it frees.
+- **Git decides what's output, as on the Mac.** `build` is output by name; `out`, `dist`, `target` and other build-like folders count only when the project's git ignores them, and are Review first in a folder without git, without Git installed, or in a repository git can't read. A big folder a project's git ignores that isn't build output is listed as Not in git, only on this PC.
 - **Daily scan** through Task Scheduler (optional, sizes only), and tests that run on both PowerShell versions in GitHub Actions.
 
 ## 0.25.0

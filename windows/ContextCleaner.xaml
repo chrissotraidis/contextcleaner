@@ -634,7 +634,7 @@
                   </StackPanel>
                 </Border>
                 <Button x:Name="RescanAll" DockPanel.Dock="Right" Content="Scan These Again" Margin="0,0,10,0" Visibility="Collapsed" ToolTip="Measure these folders again"/>
-                <TextBlock x:Name="FolderCount" Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/>
+                <TextBlock x:Name="FolderCount" Style="{StaticResource Caption}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,12,0"/>
               </DockPanel>
               <Grid DockPanel.Dock="Top" Margin="10,0,22,4">
                 <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="{DynamicResource ColReason}"/><ColumnDefinition Width="{DynamicResource ColSize}"/></Grid.ColumnDefinitions>

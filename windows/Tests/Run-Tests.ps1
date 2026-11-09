@@ -85,10 +85,35 @@ $place = { param($rule) [pscustomobject]@{ Rule = $rule; Repo = $null; LookInsid
 $expect = @(@('cache', 10, 'Safe to remove'), @('cache', 2, 'Rebuildable'), @('temp', 5, 'Safe to remove'), @('temp', 1, 'Review first'),
     @('shader', 9, 'Safe to remove'), @('crash', 20, 'Safe to remove'), @('crash', 3, 'Review first'), @('runtime-old', 10, 'Safe to remove'),
     @('runtime-current', 10, 'Not for the Recycle Bin'), @('history', 99, 'Not for the Recycle Bin'), @('vm-wsl', 1, 'Not for the Recycle Bin'),
-    @('game', 900, 'Not for the Recycle Bin'), @('codex-task', 60, 'Review first'), @('build', 10, 'Safe to remove'), @('other', 1, 'Everything else'))
+    @('game', 900, 'Not for the Recycle Bin'), @('codex-task', 60, 'Review first'), @('other', 1, 'Everything else'))
 foreach ($e in $expect) { $i = New-TestItem $e[0] $e[1]; Resolve-CCAnswer $i (& $place $e[0]) $null $null; Check ('answer ' + $e[0] + ' after ' + $e[1] + ' days: ' + $e[2]) ($i.Answer -eq $e[2]) $i.Answer }
-$newest = New-TestItem 'build' 30; Resolve-CCAnswer $newest (& $place 'build') $newest.Path $null
+# Build folders: "build" is output by name; any other build-like name is output only when the project's git ignores it.
+$builds = [pscustomobject]@{ Rule = 'build'; Repo = $null; LookInside = $null; Siblings = "$work\projects\app\build" }
+$old = New-TestItem 'build' 10 "$work\projects\app\build\old"; Resolve-CCAnswer $old $builds $null $null
+Check 'an old build in a build folder is Safe to remove' ($old.Answer -eq 'Safe to remove') $old.Answer
+$newest = New-TestItem 'build' 30 "$work\projects\app\build\old"; Resolve-CCAnswer $newest $builds $newest.Path $null
 Check 'the newest build in a folder is Rebuildable' ($newest.Answer -eq 'Rebuildable')
+$dist = New-TestItem 'build' 30 "$work\projects\app\dist"; Resolve-CCAnswer $dist (& $place 'build') $null $null
+Check 'a dist folder no git vouches for is Review first' ($dist.Answer -eq 'Review first' -and $dist.Reason -eq 'Not in a git repository') $dist.Reason
+if (Get-Command git -ErrorAction SilentlyContinue) {
+    $gp = Join-Path $work 'gitproj'; New-Item -ItemType Directory -Path "$gp\dist", "$gp\out" -Force | Out-Null
+    $ErrorActionPreference = 'Continue'; & git -C $gp init -q 2>$null; $ErrorActionPreference = 'Stop'
+    Set-Content -LiteralPath "$gp\.gitignore" 'dist'
+    $inRepo = [pscustomobject]@{ Rule = 'build'; Repo = $gp; LookInside = $null; Siblings = $null }
+    $ignoredDist = New-TestItem 'build' 30 "$gp\dist"; Resolve-CCAnswer $ignoredDist $inRepo $null $null
+    Check 'a dist folder git ignores is Safe to remove' ($ignoredDist.Answer -eq 'Safe to remove') ($ignoredDist.Answer + ': ' + $ignoredDist.Reason)
+    $plainOut = New-TestItem 'build' 30 "$gp\out"; Resolve-CCAnswer $plainOut $inRepo $null $null
+    Check 'an out folder git does not ignore is Review first' ($plainOut.Answer -eq 'Review first' -and $plainOut.Reason -eq 'Tracked in git') $plainOut.Reason
+    # Not in git: a folder a project's git ignores, other than build output, is found and is Review first.
+    $dr = "$work\projects\data-repo"; New-Item -ItemType Directory -Path "$dr\datasets\raw", "$dr\node_modules\x" -Force | Out-Null
+    Set-Content -LiteralPath "$dr\datasets\raw\a.bin" 'data'; Set-Content -LiteralPath "$dr\node_modules\x\i.js" 'x'
+    $ErrorActionPreference = 'Continue'; & git -C $dr init -q 2>$null; $ErrorActionPreference = 'Stop'
+    Set-Content -LiteralPath "$dr\.gitignore" "datasets/$([Environment]::NewLine)node_modules/"
+    $found = @(Get-CCPlaces $settings | Where-Object { $_.Rule -eq 'notingit' })
+    Check 'finds a folder git ignores, and leaves build output to its own rule' (@($found | Where-Object { $_.Path -eq "$dr\datasets" }).Count -eq 1 -and -not ($found | Where-Object { $_.Path -like '*node_modules*' })) (($found | ForEach-Object { $_.Path }) -join ', ')
+    $ng = New-TestItem 'notingit' 90 "$dr\datasets"; Resolve-CCAnswer $ng ([pscustomobject]@{ Rule = 'notingit'; Repo = $dr; LookInside = $null; Siblings = $null }) $null $null
+    Check 'a folder only on this PC is Review first however old' ($ng.Answer -eq 'Review first' -and $ng.Reason -eq 'Not in git, only on this PC') $ng.Reason
+}
 $wsl = New-TestItem 'vm-wsl' 1 'C:\wsl\ext4.vhdx'; Resolve-CCAnswer $wsl (& $place 'vm-wsl') $null ([pscustomobject]@{ Name = 'D:'; Free = 500GB })
 Check 'WSL advice names the roomy drive and wsl --manage --move' ($wsl.HowTo -match 'wsl --manage Ubuntu --move D:')
 $g = New-TestItem 'game' 900 'C:\Program Files (x86)\Steam\steamapps\common\X'; Resolve-CCAnswer $g (& $place 'game') $null ([pscustomobject]@{ Name = 'D:'; Free = 500GB })

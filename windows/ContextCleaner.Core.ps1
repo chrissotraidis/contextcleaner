@@ -212,6 +212,16 @@ namespace ContextCleaner {
             int result = SHFileOperationW(ref op);
             return result != 0 ? result : (op.fAnyOperationsAborted ? -1 : 0);
         }
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHQueryRecycleBinW(string root, IntPtr info);
+        // What the Recycle Bin on this drive holds now, or -1 when Windows can't say. The struct is packed
+        // differently in 32- and 64-bit processes, so it is read by offset.
+        public static long Bytes(string root) {
+            bool wide = IntPtr.Size == 8; IntPtr info = Marshal.AllocHGlobal(24);
+            try {
+                Marshal.WriteInt32(info, 0, wide ? 24 : 20);
+                return SHQueryRecycleBinW(root, info) == 0 ? Marshal.ReadInt64(info, wide ? 8 : 4) : -1;
+            } finally { Marshal.FreeHGlobal(info); }
+        }
     }
 
     public static class Shell {

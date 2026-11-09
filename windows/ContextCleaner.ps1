@@ -158,6 +158,14 @@ function Set-Message([string]$Text, [switch]$Terminal) {
 }
 function Save-Settings { Save-CCSettings $script:Settings; $script:Settings = Get-CCSettings }
 function Open-Bin { Start-Process 'explorer.exe' -ArgumentList 'shell:RecycleBinFolder' }
+# Asked of Windows each time, so the number stays right after something is moved there or the bin is emptied.
+# Falls back to the last scan's measurement, then -1 for unknown.
+function Get-BinBytes {
+    $live = [ContextCleaner.RecycleBin]::Bytes($script:CCDrive)
+    if ($live -ge 0) { return $live }
+    if ($script:ScanData) { return [long]$script:ScanData.RecycleBytes }
+    [long]-1
+}
 function Show-InExplorer([string]$Path) { if (Test-Path -LiteralPath $Path) { Start-Process 'explorer.exe' -ArgumentList ('/select,"' + $Path + '"') } else { Set-Message 'That folder is gone now. Scan again to update the list.' } }
 function Get-Terminals {
     $list = @()
@@ -328,7 +336,7 @@ function Show-Overview {
 
     $ui.OvBar.Children.Clear(); $ui.OvBar.ColumnDefinitions.Clear(); $ui.OvLegend.Children.Clear(); $ui.OvTiles.Children.Clear()
     $items = @($script:Items)
-    $recycle = if ($script:ScanData) { [long]$script:ScanData.RecycleBytes } else { 0 }
+    $script:Bin = Get-BinBytes; $recycle = [math]::Max([long]0, $script:Bin)
     $segments = New-Object Collections.Specialized.OrderedDictionary
     $brushes = @{ 'Safe to remove' = 'Safe'; 'Rebuildable' = 'Rebuild'; 'Review first' = 'Review'; 'Not for the Recycle Bin' = 'Keep'; 'Everything else' = 'Other' }
     foreach ($a in $script:AnswerOrder) { $segments[$a] = Sum ($items | Where-Object { $_.Answer -eq $a }) }
@@ -368,7 +376,7 @@ function Show-Overview {
         $ui.OvBack.Text = (Size (Sum $back)) + ' you could get back, nothing lost'
         $ui.OvBackSub.Text = (Plural $back.Count 'folder is' 'folders are') + ' safe to remove or rebuildable. ' + (Size (Sum $review)) + ' more is Review first: look inside before removing it.'
     } else { $ui.OvBack.Text = 'Scan to see what you can get back'; $ui.OvBackSub.Text = 'A scan reads folder sizes and dates for about a minute. It changes nothing.' }
-    $ui.OvBin.Text = $(if ($recycle -gt 0) { (Size $recycle) + ' in the Recycle Bin' } else { 'The Recycle Bin is empty' })
+    $ui.OvBin.Text = $(if ($recycle -gt 0) { (Size $recycle) + ' in the Recycle Bin' } elseif ($script:Bin -eq 0) { 'The Recycle Bin is empty' } else { 'Recycle Bin' })
     $ui.OvBinSub.Text = $(if ($recycle -gt 0) { 'Emptying it frees this space. Until then, Restore puts anything back.' } else { 'Things you move there wait until you empty it.' })
     $growing = @($items | Where-Object { $_.Growing } | Sort-Object Growth -Descending | Select-Object -First 5)
     $ui.OvGrowCard.Visibility = $(if ($growing) { 'Visible' } else { 'Collapsed' })
@@ -418,7 +426,7 @@ function Show-Free {
     $days = Get-AgeDays
     $ui.FreeHead.Text = (Size (Sum $all)) + ' you could get back'
     $ui.FreeHeadSub.Text = (Plural $all.Count 'item' 'items') + $(if ($days -eq 0) { ', however recently used' } elseif ($days -eq 1) { ' untouched for a day or longer' } else { ' untouched for ' + $days + ' days or longer' })
-    $recycle = if ($script:ScanData) { [long]$script:ScanData.RecycleBytes } else { 0 }
+    $script:Bin = Get-BinBytes; $recycle = $script:Bin
     $ui.FreeBinNote.Text = 'Space comes back when you empty the Recycle Bin' + $(if ($recycle -gt 0) { ' (' + (Size $recycle) + ' there now)' } else { '' })
     $shown = Get-FreeShown | Sort-Object Bytes -Descending
     $groups = New-Object 'Collections.Generic.List[ContextCleaner.Group]'
@@ -538,6 +546,8 @@ function Show-Folders {
     if ($keep) { $same = $ui.FolderList.SelectedItem -eq $keep -and @($ui.FolderList.SelectedItems).Count -le 1; $ui.FolderList.SelectedItem = $keep; $ui.FolderList.ScrollIntoView($keep); if ($same) { Show-Inspector $keep } } elseif ($rows) { $ui.FolderList.SelectedIndex = 0 } else { Show-Inspector $null }
 }
 function Show-Inspector($Item) {
+    # A note still waiting to save belongs to the folder shown until now.
+    Save-Note
     # Several folders selected (Ctrl+click or Shift+click): their total, and one command for those that can go.
     $selected = @($ui.FolderList.SelectedItems)
     if ($selected.Count -gt 1) {
@@ -648,18 +658,21 @@ function Switch-Remind($Item) {
     Save-CCSettings $script:Settings
     Update-Views
 }
-# Notes save a moment after you stop typing.
+# Notes save a moment after you stop typing, or at once when you pick another folder or close the window.
+# The text is kept with the folder it was typed for, since the box shows the next folder's note right away.
 $script:NoteTimer = New-Object Windows.Threading.DispatcherTimer
 $script:NoteTimer.Interval = [TimeSpan]::FromMilliseconds(700)
-$script:NoteTimer.add_Tick({
+function Save-Note {
     $script:NoteTimer.Stop()
     $item = $script:NoteSaving
     if (-not $item) { return }
-    $text = $ui.InNote.Text.Trim()
+    $script:NoteSaving = $null
+    $text = $script:NoteText.Trim()
     if ($text) { $script:Settings.notes[$item.Path] = $text } else { $script:Settings.notes.Remove($item.Path) }
     $item.Note = $(if ($text) { $text } else { $null })
     Save-CCSettings $script:Settings
-})
+}
+$script:NoteTimer.add_Tick({ Save-Note })
 
 # Scan Again: measure some folders again now, on a background thread. The next full scan saves the sizes.
 function Start-Rescan($Items) {
@@ -670,6 +683,8 @@ function Start-Rescan($Items) {
     # Folders inside them that are measured on their own stay out, as in a full scan.
     $skip = [string[]]@($script:Items | Where-Object { $p = $_.Path; [bool]($paths | Where-Object { Test-CCInside $p $_ }) } | ForEach-Object { $_.Path })
     $script:RescanItems = $targets
+    # A stopped scan leaves the cancel flag set; cleared here so these measurements run to the end.
+    [ContextCleaner.Disk]::Cancel = $false
     $script:Rescan = [powershell]::Create()
     $script:Rescan.AddScript({ param($p, $s) , [ContextCleaner.Disk]::MeasureAll($p, $s) }).AddArgument($paths).AddArgument($skip) | Out-Null
     $script:RescanHandle = $script:Rescan.BeginInvoke()
@@ -684,6 +699,8 @@ $script:RescanTimer.add_Tick({
     # EndInvoke returns one array of measurements; unwrap it.
     $results = @(); try { $results = @($script:Rescan.EndInvoke($script:RescanHandle) | ForEach-Object { $_ } | ForEach-Object { $_ }) } catch { Set-Message ('Couldn''t measure again: ' + $_.Exception.Message) }
     $script:Rescan.Dispose(); $script:Rescan = $null; $ui.ScanProgress.Visibility = 'Collapsed'
+    # Stopping a full scan while this ran cut these measurements short too, so they are not used.
+    if ([ContextCleaner.Disk]::Cancel) { Set-Message 'Measuring again was interrupted. Nothing changed; try Scan Again once more.'; Update-Status; return }
     $gone = @(); $total = [long]0
     for ($i = 0; $i -lt $results.Count -and $i -lt $script:RescanItems.Count; $i++) {
         $m = $results[$i]; $item = $script:RescanItems[$i]
@@ -1014,7 +1031,7 @@ foreach ($pair in @(@($ui.TileAll, 'all'), @($ui.TileSafe, 'safe'), @($ui.TileRe
 foreach ($rb in $ui.FolderSorts.Children) { On $rb 'Checked' { param($s, $e) $script:Sort = $s.Tag; if ($script:Ready) { Show-Folders } } }
 On $ui.FolderList 'SelectionChanged' { $ui.InScroll.ScrollToTop(); Show-Inspector $ui.FolderList.SelectedItem }
 On $ui.InCopy 'Click' { Invoke-Copy @($ui.FolderList.SelectedItems | Where-Object { $_.Removable -and -not $_.Withheld -and -not $_.Ignored }) }
-On $ui.InNote 'TextChanged' { if ($script:NoteItem) { $script:NoteSaving = $script:NoteItem; $script:NoteTimer.Stop(); $script:NoteTimer.Start() } }
+On $ui.InNote 'TextChanged' { if ($script:NoteItem) { $script:NoteSaving = $script:NoteItem; $script:NoteText = $ui.InNote.Text; $script:NoteTimer.Stop(); $script:NoteTimer.Start() } }
 On $ui.RescanAll 'Click' { Start-Rescan (Get-FolderRows) }
 On $ui.FolderList 'ContextMenuOpening' { param($s, $e) Open-ItemMenu $s $e }
 On $ui.FolderList 'MouseDoubleClick' { param($s, $e) $item = Find-Item $e.OriginalSource; if ($item) { Show-InExplorer $item.Path } }
@@ -1099,7 +1116,7 @@ On $window 'PreviewKeyDown' {
     $shift = [Windows.Input.Keyboard]::Modifiers -band [Windows.Input.ModifierKeys]::Shift
     $pages = @('overview', 'free', 'folders', 'watch', 'ignored', 'unread', 'history')
     if ($e.Key -eq 'F5' -or ($ctrl -and $e.Key -eq 'R')) { Start-Scan; $e.Handled = $true }
-    elseif ($e.Key -eq 'Escape') { if ($script:Worker) { Stop-Scan } elseif ($ui.SearchBox.Text) { $ui.SearchBox.Text = '' }; $e.Handled = $true }
+    elseif ($e.Key -eq 'Escape') { if ($script:Worker) { Stop-Scan; $e.Handled = $true } elseif ($ui.SearchBox.Text) { $ui.SearchBox.Text = ''; $e.Handled = $true } }
     elseif ($ctrl -and $e.Key -eq 'F') { $ui.SearchBox.Focus() | Out-Null; $ui.SearchBox.SelectAll(); $e.Handled = $true }
     elseif ($ctrl -and $shift -and $e.Key -eq 'C') { if ($script:Page -eq 'free') { Invoke-Copy }; $e.Handled = $true }
     elseif ($ctrl -and $e.Key -eq 'E') { Export-Report; $e.Handled = $true }
@@ -1110,7 +1127,12 @@ On $window 'PreviewKeyDown' {
 }
 On $window 'PreviewMouseDown' { param($s, $e) if ($e.ChangedButton -eq 'XButton1') { Move-History -1; $e.Handled = $true } elseif ($e.ChangedButton -eq 'XButton2') { Move-History 1; $e.Handled = $true } }
 foreach ($c in 'OvChart', 'InChart', 'HiChart') { On $ui[$c] 'SizeChanged' { param($s, $e) $c = $script:Charts[$s.Name]; if ($c) { if ($c.Kind -eq 'area') { Show-AreaChart $s $c.Points $c.From $c.To $c.Ceiling $c.Empty } else { Show-BarChart $s $c.Days } } } }
-On $window 'Activated' { if ($script:Ready) { Remove-Gone } }
+# Coming back to the window after running a move command or emptying the bin brings the numbers up to date.
+On $window 'Activated' {
+    if (-not $script:Ready) { return }
+    Remove-Gone
+    if (($script:Page -eq 'overview' -or $script:Page -eq 'free') -and (Get-BinBytes) -ne $script:Bin) { Update-Views }
+}
 
 # A narrow window gets narrower columns, a narrower card, a smaller search box and no free-space meter in the toolbar
 # (the Overview and status line still show free space), so nothing collides or disappears.
@@ -1181,6 +1203,7 @@ function Restore-Placement {
     if ($p.Max) { $window.WindowState = 'Maximized' }
 }
 On $window 'Closing' {
+    Save-Note
     $b = if ($window.WindowState -eq 'Normal') { New-Object Windows.Rect $window.Left, $window.Top, $window.ActualWidth, $window.ActualHeight } else { $window.RestoreBounds }
     $script:Settings = Get-CCSettings
     $script:Settings.window = [pscustomobject]@{ Left = [int]$b.Left; Top = [int]$b.Top; Width = [int]$b.Width; Height = [int]$b.Height; Max = ($window.WindowState -eq 'Maximized') }

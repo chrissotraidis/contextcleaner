@@ -137,8 +137,11 @@ $mover = Join-Path $app 'Move-ToRecycleBin.ps1'
 $ps = Get-CCPowerShell
 $preview = & $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan $planFile -WhatIf | Out-String
 Check '-WhatIf moves nothing' ((Test-Path "$mv\movable") -and $preview -match 'Would move: .*movable') $preview
+$binBefore = [ContextCleaner.RecycleBin]::Bytes([IO.Path]::GetPathRoot($mv))
 $output = & $ps -NoProfile -ExecutionPolicy Bypass -File $mover -Plan $planFile | Out-String
 Check 'moves an unchanged item' (-not (Test-Path "$mv\movable") -and $output -match 'Moved: .*movable') $output
+$binAfter = [ContextCleaner.RecycleBin]::Bytes([IO.Path]::GetPathRoot($mv))
+Check 'reads the Recycle Bin size live' ($binBefore -ge 0 -and $binAfter -gt $binBefore) ([string]$binBefore + ' then ' + $binAfter)
 Check 'leaves an item changed since the scan' ((Test-Path "$mv\changed") -and $output -match 'changed since the scan')
 Check 'leaves a link alone' ((Test-Path "$mv\link") -and (Test-Path "$mv\target") -and $output -match 'a link; left alone')
 Check 'says what is already gone' ($output -match 'Already gone: .*missing')

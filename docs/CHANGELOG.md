@@ -12,7 +12,7 @@ Context Cleaner on Windows 10 and 11, with the Mac app's answers, safety rules a
 - **Looks like Windows 11.** Mica, a dark or light title bar, your accent color and light or dark mode, following Windows as it changes.
 - **Windows places.** WSL distributions (with Look Inside) and Docker Desktop disks, every Steam library, DirectX, NVIDIA and AMD shader caches, crash dumps and error reports, Windows Update downloads, Windows.old, Codex runtimes, and package caches from npm to Cargo.
 - **Move instead of delete.** With room on another drive, a game's card says how Steam moves it there and the WSL card gives `wsl --manage <distro> --move`. Their disks' cards give Microsoft's steps to hand space back after deleting inside them.
-- **The Recycle Bin.** The command moves items there, refuses a bin set to delete at once, and asks before a selection bigger than the bin would make Windows permanently delete older things. Overview and Free Up Space show what's waiting in it.
+- **The Recycle Bin.** The command moves items there, refuses a bin set to delete at once, and asks before a selection bigger than the bin would make Windows permanently delete older things. Overview and Free Up Space show what's waiting in it now, asked of Windows each time, so emptying the bin shows as soon as you come back.
 - **Safer commands.** Each item is checked again when you copy and when you run: gone, a link or junction anywhere on its path, a program running from it, a worktree git no longer vouches for, or changed since the scan. Hardlinked files count once, so a size is what removing it frees.
 - **Daily scan** through Task Scheduler (optional, sizes only), and tests that run on both PowerShell versions in GitHub Actions.
 

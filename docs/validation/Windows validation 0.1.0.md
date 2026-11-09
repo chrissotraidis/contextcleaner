@@ -60,7 +60,25 @@ Driven through UI Automation on the real data, at full width and at 1,100 px.
 
 87 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
 
+## Third pass
+
+A fresh install from the release zip into a folder with spaces (`My Apps\Context Cleaner 0.1.0`), a first run with an empty data folder, keyboard only, and light mode, on the real data and on demo data.
+
+| Found | Fix |
+|---|---|
+| Before the first scan Overview said the Recycle Bin was empty while it held 39.2 GB, and after a scan the number stayed as the scan left it | The bin's size is asked of Windows (`SHQueryRecycleBin`, about 2 ms) each time Overview or Free Up Space shows and when you come back to the window; a test moves a fixture there and sees it grow |
+| A note typed and then left within 0.7 s for another folder was saved with the next folder's text, usually erasing it; closing the window in that moment lost it | The note is kept with the folder it was typed for and saved at once when you pick another folder or close the window; checked by typing and switching in one step |
+| After a stopped scan, Scan Again measured 0 B, because the stop flag was still set | Scan Again clears it, and drops its result if a full scan is stopped while it runs; checked on the real data (38.3 GB, as the full scan found) |
+| List rows, the answer tiles and Free Up Space's group headers showed no keyboard focus | One focus ring, drawn only when moving with the keyboard |
+| The note field used the old square Windows text box | It matches the search box, with a hint |
+| Esc was swallowed even with no scan or search to clear | Esc is handled only when it does something |
+| On a clean checkout the release build skipped `source-status.txt` | It writes "clean" |
+
+Also checked: the zip unpacks to the eight app files plus LICENSE and opens in about 4 s; the welcome line, empty tiles and Scan prompt on a first run; Ctrl+2 and Ctrl+3, Tab and the arrow keys through tiles and rows, Shift+arrow to select several, Alt+Left and Alt+Right, Ctrl+F and a search that finds a folder by its note; from the folder with spaces, the Start menu shortcut opened the app and the daily task ran its scan (result 0, 18 s), and both were removed again.
+
+88 checks pass on Windows PowerShell 5.1 and PowerShell 7.6.
+
 ## Not checked
 
-Windows 10, a non-English Windows, high-contrast themes, other display scalings, and the GitHub Actions run (it runs on the pull request). The mover test sends one fixture folder to the Recycle Bin on the runner.
+Windows 10, a non-English Windows, high-contrast themes, other display scalings, and a Recycle Bin with thousands of items (the size query reads each one). The mover test sends one fixture folder to the Recycle Bin on the runner.
 

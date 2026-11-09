@@ -8,6 +8,12 @@
     <GridLength x:Key="ColSize">130</GridLength>
     <FontFamily x:Key="Icons">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
     <FontFamily x:Key="Display">Segoe UI Variable Display, Segoe UI</FontFamily>
+    <!-- Drawn only when moving with the keyboard, like the Windows 11 focus ring. -->
+    <Style x:Key="FocusRing">
+      <Setter Property="Control.Template"><Setter.Value><ControlTemplate>
+        <Border BorderBrush="{DynamicResource Text1}" BorderThickness="2" CornerRadius="6" Margin="-1" SnapsToDevicePixels="True"/>
+      </ControlTemplate></Setter.Value></Setter>
+    </Style>
 
     <Style x:Key="Title" TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource Display}"/><Setter Property="FontSize" Value="28"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
     <Style x:Key="Subtitle" TargetType="TextBlock"><Setter Property="FontFamily" Value="{StaticResource Display}"/><Setter Property="FontSize" Value="20"/><Setter Property="FontWeight" Value="SemiBold"/></Style>
@@ -97,7 +103,7 @@
       </ControlTemplate></Setter.Value></Setter>
     </Style>
     <Style x:Key="Tile" TargetType="RadioButton">
-      <Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="Foreground" Value="{DynamicResource Text1}"/>
+      <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/><Setter Property="Foreground" Value="{DynamicResource Text1}"/>
       <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
         <Border x:Name="bd" Background="{DynamicResource Card}" BorderBrush="{DynamicResource CardStroke}" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,0,10,0">
           <ContentPresenter/>
@@ -178,6 +184,25 @@
         </ControlTemplate.Triggers>
       </ControlTemplate></Setter.Value></Setter>
     </Style>
+    <!-- A multi-line field that matches Search: rounded, a hint from Tag, the accent line while typing. -->
+    <Style x:Key="Field" TargetType="TextBox">
+      <Setter Property="Foreground" Value="{DynamicResource Text1}"/><Setter Property="CaretBrush" Value="{DynamicResource Text1}"/>
+      <Setter Property="SelectionBrush" Value="{DynamicResource Accent}"/><Setter Property="Padding" Value="6,5"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
+        <Border x:Name="bd" Background="{DynamicResource InputFill}" BorderBrush="{DynamicResource ControlStroke}" BorderThickness="1" CornerRadius="4">
+          <Grid>
+            <Border x:Name="line" Height="2" VerticalAlignment="Bottom" CornerRadius="0,0,4,4" Background="Transparent"/>
+            <TextBlock x:Name="hint" Text="{TemplateBinding Tag}" Foreground="{DynamicResource Text3}" Margin="8,5" TextWrapping="Wrap" IsHitTestVisible="False" Visibility="Collapsed"/>
+            <ScrollViewer x:Name="PART_ContentHost" Focusable="False"/>
+          </Grid>
+        </Border>
+        <ControlTemplate.Triggers>
+          <Trigger Property="Text" Value=""><Setter TargetName="hint" Property="Visibility" Value="Visible"/></Trigger>
+          <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource ControlHover}"/></Trigger>
+          <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="bd" Property="Background" Value="{DynamicResource InputFocus}"/><Setter TargetName="line" Property="Background" Value="{DynamicResource Accent}"/></Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
+    </Style>
 
     <Style TargetType="ScrollBar">
       <Setter Property="Width" Value="12"/><Setter Property="MinWidth" Value="12"/><Setter Property="Background" Value="Transparent"/>
@@ -244,7 +269,7 @@
       <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
       <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/><Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
       <Setter Property="ItemContainerStyle"><Setter.Value><Style TargetType="ListBoxItem">
-        <Setter Property="FocusVisualStyle" Value="{x:Null}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Foreground" Value="{DynamicResource Text1}"/><Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Foreground" Value="{DynamicResource Text1}"/><Setter Property="AutomationProperties.Name" Value="{Binding Name}"/>
         <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
           <Border x:Name="bd" Background="Transparent" CornerRadius="4" Margin="0,1" Padding="10,7">
             <Grid>
@@ -666,9 +691,8 @@
                   </Border>
                   <StackPanel x:Name="InNoteBox" Margin="0,14,0,0">
                     <TextBlock Text="Your note" Style="{StaticResource Caption}" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                    <TextBox x:Name="InNote" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="34" MaxHeight="120" VerticalScrollBarVisibility="Auto" Padding="6,5"
-                             Background="{DynamicResource InputFill}" Foreground="{DynamicResource Text1}" BorderBrush="{DynamicResource ControlStroke}" CaretBrush="{DynamicResource Text1}"
-                             SelectionBrush="{DynamicResource Accent}" AutomationProperties.Name="Your note on this folder" ToolTip="Saved as you type. Search finds folders by their notes."/>
+                    <TextBox x:Name="InNote" Style="{StaticResource Field}" Tag="Why you keep it, or what to check first" TextWrapping="Wrap" AcceptsReturn="True" MinHeight="34" MaxHeight="120" VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="Your note on this folder" ToolTip="Saved as you type. Search finds folders by their notes."/>
                   </StackPanel>
                   <DockPanel x:Name="InChartHead" Margin="0,18,0,0">
                     <TextBlock x:Name="InChartChange" DockPanel.Dock="Right" FontSize="12" Foreground="{DynamicResource AccentLink}"/>
@@ -723,7 +747,7 @@
                                   <Expander.Template>
                                     <ControlTemplate TargetType="Expander">
                                       <StackPanel>
-                                        <ToggleButton x:Name="tg" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" FocusVisualStyle="{x:Null}">
+                                        <ToggleButton x:Name="tg" IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}" FocusVisualStyle="{StaticResource FocusRing}">
                                           <ToggleButton.Template>
                                             <ControlTemplate TargetType="ToggleButton">
                                               <Border x:Name="bd" Background="Transparent" CornerRadius="8" Padding="14,10">

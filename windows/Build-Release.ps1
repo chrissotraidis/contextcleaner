@@ -17,7 +17,9 @@ foreach ($f in 'Context Cleaner.cmd', 'ContextCleaner.ps1', 'ContextCleaner.Core
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\LICENSE') -Destination $stage
 $repo = Split-Path $PSScriptRoot -Parent
 (& git -C $repo rev-parse HEAD) | Set-Content -LiteralPath (Join-Path $Out 'source-revision.txt')
-(& git -C $repo status --porcelain) | Set-Content -LiteralPath (Join-Path $Out 'source-status.txt')
+# A clean checkout prints nothing, so say so; Set-Content writes no file at all for empty input.
+$status = @(& git -C $repo status --porcelain)
+Set-Content -LiteralPath (Join-Path $Out 'source-status.txt') -Value $(if ($status) { $status } else { 'clean' })
 $zip = Join-Path $Out ('Context-Cleaner-' + $version + '-windows.zip')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($stage, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)

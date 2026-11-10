@@ -1117,6 +1117,9 @@ struct Suggestion: Identifiable, Equatable {
     var owner: String? = nil
     /// The newest change the scan saw in it. A Trash command leaves it out if it has changed since.
     var seen: Date? = nil
+    /// When it was last used, if that's known better than its newest change (Xcode's date for a simulator). For Oldest first.
+    var used: Date? = nil
+    var untouchedSince: Date? { used ?? seen }
     /// A backup, save or recovery copy: possibly the only copy. Select All never ticks it.
     var backup = false
     /// Safe to remove or Rebuildable: removing it loses nothing.
@@ -1125,6 +1128,16 @@ struct Suggestion: Identifiable, Equatable {
     var kind: String {
         if cost == .safe && owner == nil { return "Not needed again" }
         return why.components(separatedBy: " · ").first ?? why
+    }
+}
+/// Free Up Space's order: biggest first, untouched longest first, or grouped by kind.
+enum FreeUpOrder: String { case size, age, kind }
+/// Free Up Space's list in the order chosen. Oldest first puts what has sat untouched longest on top; ties go biggest first.
+func ordered(_ items: [Suggestion], _ order: FreeUpOrder) -> [Suggestion] {
+    guard order == .age else { return items }
+    return items.sorted { a, b in
+        let x = a.untouchedSince ?? .distantFuture, y = b.untouchedSince ?? .distantFuture
+        return x == y ? a.bytes > b.bytes : x < y
     }
 }
 /// Copying this many items, or this much, in one command asks once first.
@@ -1149,7 +1162,8 @@ func quietText(_ seconds: TimeInterval) -> String {
     if hours < 48 { return hours == 1 ? "1 hour" : "\(hours) hours" }
     if days < 14 { return "\(days) days" }
     if days < 60 { return "\(days / 7) weeks" }
-    return "\(days / 30) months"
+    if days < 730 { return "\(days / 30) months" }
+    return "\(days / 365) years"
 }
 /// The folders worth moving to the Trash now, biggest first. A folder is listed when its answer is safe,
 /// or when nothing has changed in it for the quiet time and no app has it open: rebuildable output, Codex scratch,
@@ -1170,6 +1184,8 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         let a = advice(m)
         guard a.verdict != .keep else { continue }
         let idle = m.latestModifiedAt.map { now.timeIntervalSince($0) }
+        // Last use: Xcode's date for a simulator, otherwise the newest change the scan saw.
+        let lastUse = a.lastUsed ?? m.latestModifiedAt
         let untouched = idle.map { "untouched " + quietText($0) }
         let isQuiet = (idle ?? 0) >= quiet
         let scratch = isCodexScratch(path)
@@ -1177,14 +1193,17 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         let rebuildable = m.profile.category.reproducible || m.profile.category == .debugSymbols || isProjectBuildOutput(path)
         func add(_ cost: Verdict, _ label: String, age: Bool = true, backup: Bool = false) {
             found.append(Suggestion(path: path, name: m.profile.displayName, place: locationHint(path), bytes: bytes, cost: cost, why: ([label] + [age ? untouched : nil].compactMap { $0 }).joined(separator: " · "),
-                                    seen: m.latestModifiedAt, backup: backup))
+                                    seen: m.latestModifiedAt, used: lastUse, backup: backup))
             taken.insert(path)
         }
         let irreplaceable = looksIrreplaceable(URL(fileURLWithPath: path).lastPathComponent) || m.profile.category == .backup
         // A folder you added is never offered whole: what's inside it is, item by item, below.
         let itemize = itemized.contains(path)
-        // Safe answers already say how long it's been unused.
-        if a.verdict == .safe && !irreplaceable && !itemize { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: worktree); continue }
+        // Safe answers already say how long it's been unused. They follow Untouched for too: a week means nothing used this week.
+        if a.verdict == .safe && !irreplaceable && !itemize {
+            if lastUse.map({ now.timeIntervalSince($0) >= quiet }) ?? true { add(.safe, a.short.isEmpty ? "Nothing lost" : a.short, age: worktree) }
+            continue
+        }
         // A whole worktree is listed only when git has everything in it. Otherwise its build folders are judged on their own.
         if worktree {
             if a.verdict == .rebuild && isQuiet { add(.rebuild, a.short) }
@@ -1217,11 +1236,11 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         // only on this Mac with a clear reason they may go (Not in git).
         guard itemize || (!irreplaceable && (rebuildable || isProjectOutput(path) || scratch || temporary || (a.verdict == .check && a.quietLabel != nil))) else { continue }
         let held = m.processes.map(\.path)
-        // A PadMint player check leaves a 20 GiB folder for each run and asks you to delete it. Once nothing has
-        // touched it for an hour and no app holds it, it's listed whatever the untouched time: running the check makes it again.
+        // A PadMint player check leaves a 20 GiB folder for each run; running the check makes it again, so it's Rebuildable.
+        // Like everything else, it's listed only once it has sat untouched for the time you chose.
         let isCheck = { (name: String) in temporary && isPlayerCheck(name) }
-        for child in staleChildren(m, now: now, days: (temporary ? min(quiet, 3600) : quiet) / 86400, minimum: minimum, backups: true)
-        where !held.contains(where: { containsPath(child.path, $0) }) && !measuredWithin.contains(child.path) && !isAppLibrary(child.name) && (isCheck(child.name) || child.modifiedAt.map { now.timeIntervalSince($0) >= quiet } == true) {
+        for child in staleChildren(m, now: now, days: quiet / 86400, minimum: minimum, backups: true)
+        where !held.contains(where: { containsPath(child.path, $0) }) && !measuredWithin.contains(child.path) && !isAppLibrary(child.name) && child.modifiedAt.map({ now.timeIntervalSince($0) >= quiet }) == true {
             let age = child.modifiedAt.map { "untouched " + quietText(now.timeIntervalSince($0)) }
             if isCheck(child.name) {
                 found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: .rebuild,

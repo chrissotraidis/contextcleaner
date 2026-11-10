@@ -736,9 +736,12 @@ struct FreeUpSummary: View {
     }
 }
 struct KindGroup: Identifiable { let kind: String; let items: [Suggestion]; var id: String { kind } }
-/// "12 hours", "a day", "3 days", "a week".
+/// "12 hours", "a day", "3 days", "a week", "a month", "3 months".
 func quietPhrase(_ hours: Int) -> String {
-    switch hours { case 12: return "12 hours"; case 24: return "a day"; case 72: return "3 days"; case 168: return "a week"; default: return hours >= 24 ? "\(hours / 24) days" : "\(hours) hours" }
+    switch hours {
+    case 12: return "12 hours"; case 24: return "a day"; case 72: return "3 days"; case 168: return "a week"; case 720: return "a month"; case 2160: return "3 months"
+    default: return hours >= 24 ? "\(hours / 24) days" : "\(hours) hours"
+    }
 }
 /// What to remove now: one list, biggest first, each with what removing it costs.
 /// The controls sit above the list, so Select All and Copy are in reach however long the list is.
@@ -747,17 +750,21 @@ struct StartPanel: View {
     var listHeight: CGFloat = 420
     /// Nothing lost (Safe to remove and Rebuildable together) or Review first; nil shows everything.
     @State private var filter: Bool?
-    /// Groups the list by what each item is, each group with its own tick box.
-    @AppStorage("freeUpByKind") private var byKind = false
+    /// Biggest first, oldest first, or grouped by what each item is, each group with its own tick box.
+    @AppStorage("freeUpOrder") private var orderName = FreeUpOrder.size.rawValue
+    /// Leaves out items smaller than this many GiB; 0 shows every size.
+    @AppStorage("freeUpAtLeast") private var atLeast = 0
     /// The row ticked or unticked last, for Shift-click ranges.
     @State private var anchor: String?
     var body: some View {
-        let list = model.suggestionList
+        let order = FreeUpOrder(rawValue: orderName) ?? .size, byKind = order == .kind
+        let everything = model.suggestionList
+        let list = atLeast > 0 ? everything.filter { $0.bytes >= Int64(atLeast) << 30 } : everything
         let free = list.filter(\.losesNothing), review = list.filter { !$0.losesNothing }
         // A filter that's emptied, by a scan or a cleanup, falls back to everything.
         let active: Bool? = filter == true && free.isEmpty || filter == false && review.isEmpty ? nil : filter
         let filtered = active.map { $0 ? free : review } ?? list
-        let groups = byKind ? kindGroups(filtered) : [KindGroup(kind: "", items: filtered)]
+        let groups = byKind ? kindGroups(filtered) : [KindGroup(kind: "", items: ordered(filtered, order))]
         let shown = groups.flatMap(\.items)
         let chosen = list.filter { model.selectedSuggestions.contains($0.path) }
         let chosenBytes = chosen.reduce(Int64(0)) { $0 + $1.bytes }
@@ -765,26 +772,41 @@ struct StartPanel: View {
         let selectable = shown.filter { !$0.backup }
         let allTicked = !selectable.isEmpty && selectable.allSatisfy { model.selectedSuggestions.contains($0.path) }
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text(list.isEmpty ? "Nothing has sat untouched that long" : byteLabel(list.reduce(Int64(0)) { $0 + $1.bytes }) + " you could get back")
-                    .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1)
-                if !list.isEmpty { Text("\(list.count) \(list.count == 1 ? "item" : "items") untouched for \(quietPhrase(model.quietHours)) or longer").font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1) }
+            // The total, then what to list and in what order, then what removing costs.
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(list.isEmpty ? (everything.isEmpty ? "Nothing has sat untouched that long" : "Nothing \(atLeast) GiB or bigger has sat untouched that long") : byteLabel(list.reduce(Int64(0)) { $0 + $1.bytes }) + " you could get back")
+                        .font(.title2.weight(.semibold)).monospacedDigit().lineLimit(1)
+                    if !list.isEmpty {
+                        Text("\(list.count) \(list.count == 1 ? "item" : "items")\(atLeast > 0 ? " of \(atLeast) GiB or more" : "") untouched for \(quietPhrase(model.quietHours)) or longer")
+                            .font(.callout).foregroundStyle(.secondary).monospacedDigit().lineLimit(1)
+                    }
+                }
                 Spacer(minLength: 8)
-                Text("Untouched for").font(.caption).foregroundStyle(.secondary).fixedSize()
+                trashStatus
+            }
+            HStack(spacing: 8) {
+                Text("Untouched for").font(.callout).foregroundStyle(.secondary).fixedSize()
                 Picker("Untouched for", selection: $model.quietHours) {
-                    Text("12 hours").tag(12); Text("1 day").tag(24); Text("3 days").tag(72); Text("1 week").tag(168)
+                    Text("12 hours").tag(12); Text("1 day").tag(24); Text("3 days").tag(72); Text("1 week").tag(168); Text("1 month").tag(720); Text("3 months").tag(2160)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Lists only what nothing has touched for at least this long")
+                Picker("Size", selection: $atLeast) { Text("Any size").tag(0); Text("1 GiB or more").tag(1); Text("10 GiB or more").tag(10) }
+                    .pickerStyle(.menu).labelsHidden().fixedSize()
+                    .help("Leaves out smaller items")
+                Spacer(minLength: 12)
+                Text("Sort").font(.callout).foregroundStyle(.secondary).fixedSize()
+                Picker("Sort", selection: $orderName) {
+                    Text("Biggest").tag(FreeUpOrder.size.rawValue); Text("Oldest").tag(FreeUpOrder.age.rawValue); Text("By kind").tag(FreeUpOrder.kind.rawValue)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                    .help("Biggest first, untouched longest first, or grouped by kind (build output, Codex scratch…), each group with its own tick box")
             }
             // Filters by what removing costs, each with its count and size; an empty one isn't shown.
             HStack(spacing: 6) {
                 chip(nil, title: "All", tint: .accentColor, items: list, on: active == nil)
                 if !free.isEmpty { chip(true, title: "Nothing lost", tint: Verdict.safe.tint, items: free, on: active == true) }
                 if !review.isEmpty { chip(false, title: Verdict.check.title, tint: Verdict.check.tint, items: review, on: active == false) }
-                Picker("Show", selection: $byKind) { Text("Biggest first").tag(false); Text("By kind").tag(true) }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize().padding(.leading, 6)
-                    .help("By kind groups the list, such as build output or Codex scratch, each group with its own tick box")
                 Spacer(minLength: 0)
-                trashStatus
             }
             Text(explanation(active)).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             if !model.projectsRead {
@@ -818,7 +840,12 @@ struct StartPanel: View {
                     }
                 }.padding(.trailing, 6)
             }.frame(maxHeight: shown.isEmpty ? 40 : min(listHeight, CGFloat(shown.count) * 42 + CGFloat(byKind ? groups.count * 34 : 0) + 8))
-                .overlay { if shown.isEmpty && !list.isEmpty { Text("Nothing in this list untouched that long.").font(.callout).foregroundStyle(.secondary) } }
+                .overlay {
+                    if shown.isEmpty && !everything.isEmpty {
+                        Text(list.isEmpty ? "Choose a smaller size above to see the \(everything.count) smaller \(everything.count == 1 ? "item" : "items")." : "Nothing in this list untouched that long.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
         }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(.background.secondary)
     }
     private func explanation(_ active: Bool?) -> String {
@@ -865,7 +892,7 @@ struct StartPanel: View {
                 if value != nil { Circle().fill(tint).frame(width: 8, height: 8) }
                 Text(title).fontWeight(on ? .semibold : .regular)
                 Text("\(items.count) · \(byteLabel(items.reduce(Int64(0)) { $0 + $1.bytes }))").foregroundStyle(.secondary).monospacedDigit()
-            }.font(.callout).padding(.horizontal, 10).padding(.vertical, 5)
+            }.font(.callout).lineLimit(1).fixedSize().padding(.horizontal, 10).padding(.vertical, 5)
                 .background(on ? tint.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
                 .overlay(Capsule().strokeBorder(on ? tint.opacity(0.6) : .clear))
                 .contentShape(Capsule())

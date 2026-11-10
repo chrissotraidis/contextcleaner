@@ -303,7 +303,8 @@ import Foundation
         check(advice(for: bee, policy: LocationPolicy(), devices: [:], now: now).staleItems.isEmpty && !advice(for: hub, policy: LocationPolicy(), devices: [:], now: now).staleItems.isEmpty,
               "pictures made in DiffusionBee are never listed as old items; old downloaded models still are")
         // 0.17: one ranked list of what to move to the Trash.
-        check(quietText(20 * 3600) == "20 hours" && quietText(3 * 86400) == "3 days" && quietText(20 * 86400) == "2 weeks" && quietText(600) == "under an hour", "quiet times read in hours first, then days")
+        check(quietText(20 * 3600) == "20 hours" && quietText(3 * 86400) == "3 days" && quietText(20 * 86400) == "2 weeks" && quietText(600) == "under an hour"
+              && quietText(3650 * 86400) == "10 years" && quietText(400 * 86400) == "13 months", "quiet times read in hours first, then days, and years past two")
         var goneRecord = record("gone", []); goneRecord.measurements = [item("/fixture/x", .workspace, nil, .missing)]
         check(scanOutcome(goneRecord, grew: 0) == "That folder is gone now", "rescanning a removed folder says it's gone, not \"Scanned 0 folders\"")
         func aged(_ path: String, _ category: FolderCategory, hours: Double, gib size: Int64 = 10) -> FolderMeasurement {
@@ -574,7 +575,7 @@ import Foundation
         check(tempList.map(\.name) == ["trace.ktrace", "build-tmp"] && tempList[0].cost == .safe && tempList[1].cost == .check && tempList[0].why == "Temporary item · untouched 6 days" && tempList[0].owner == tmpRoot,
               "old temporary items are listed: safe after 3 days, Review first before; anything used recently stays out")
         check(advice(for: temp, policy: LocationPolicy(), devices: [:], now: now).staleItems.map(\.name) == ["trace.ktrace"], "the temporary folder counts items untouched for 3 days as old")
-        // 0.22.3: a finished PadMint player check is listed after an hour, whatever the untouched time, unless an app holds it.
+        // 0.25.1: a finished PadMint player check follows Untouched for like everything else, and is Rebuildable once listed.
         var checks = temp
         checks.contents = FolderContents(children: [ChildSummary(name: "padmint-player-check.Ab12Cd", directory: true, identity: "4", bytes: 20 * gib, files: 9, modifiedAt: now.addingTimeInterval(-2 * 3600)),
                                                     ChildSummary(name: "padmint-player-check.Live01", directory: true, identity: "5", bytes: 24 * gib, files: 9, modifiedAt: now.addingTimeInterval(-300)),
@@ -582,9 +583,23 @@ import Foundation
                                                     ChildSummary(name: "build-tmp", directory: true, identity: "2", bytes: 2 * gib, files: 9, modifiedAt: now.addingTimeInterval(-2 * 3600))],
                                          fileTypes: [], listedChildren: 4, retainedLimit: 512, omittedEntries: 0)
         checks.processes = [ProcessEvidence(pid: 1, command: "Python", access: "r", path: tmpRoot + "/padmint-player-check.Held02/padmint/tools/x")]
-        let checkList = suggestions([checks], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:], now: now) }, gone: [], quiet: 3 * 86400, now: now)
-        check(checkList.map(\.name) == ["padmint-player-check.Ab12Cd"] && checkList[0].cost == .rebuild && checkList[0].why == "Finished PadMint player check · untouched 2 hours",
-              "a player check untouched for an hour is listed as Rebuildable even under 3 days; one still running, one held open, and other recent temporary items aren't")
+        let checkAdvice = { (m: FolderMeasurement) in advice(for: m, policy: LocationPolicy(), devices: [:], now: now) }
+        check(suggestions([checks], advice: checkAdvice, gone: [], quiet: 3 * 86400, now: now).isEmpty,
+              "under 3 days, a player check untouched for 2 hours isn't listed: Untouched for has no exceptions")
+        let checkList = suggestions([checks], advice: checkAdvice, gone: [], quiet: 3600, now: now)
+        check(checkList.map(\.name) == ["padmint-player-check.Ab12Cd", "build-tmp"] && checkList[0].cost == .rebuild && checkList[0].why == "Finished PadMint player check · untouched 2 hours",
+              "under an hour, a finished player check is listed as Rebuildable; one still running and one held open aren't")
+        // 0.25.1: Safe to remove folders follow Untouched for too, by their last use.
+        let safeCache = aged("/Users/x/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/AppInstallationBinaryDeltas/com.x.app", .installCache, hours: 24 * 9, gib: 6)
+        let safeNow = suggestions([safeCache], advice: checkAdvice, gone: [], quiet: 7 * 86400, now: now)
+        check(safeNow.first?.cost == .safe && suggestions([safeCache], advice: checkAdvice, gone: [], quiet: 30 * 86400, now: now).isEmpty,
+              "a Safe to remove folder unused for 9 days is listed under a week and left out under a month")
+        let mixed = [Suggestion(path: "/a", name: "a", place: nil, bytes: 9 * gib, cost: .rebuild, why: "", seen: now.addingTimeInterval(-86400)),
+                     Suggestion(path: "/b", name: "b", place: nil, bytes: 2 * gib, cost: .check, why: "", seen: now.addingTimeInterval(-90 * 86400)),
+                     Suggestion(path: "/c", name: "c", place: nil, bytes: 5 * gib, cost: .safe, why: "", seen: now.addingTimeInterval(-86400), used: now.addingTimeInterval(-40 * 86400)),
+                     Suggestion(path: "/d", name: "d", place: nil, bytes: 1 * gib, cost: .safe, why: "")]
+        check(ordered(mixed, .age).map(\.path) == ["/b", "/c", "/a", "/d"] && ordered(mixed, .size).map(\.path) == mixed.map(\.path),
+              "Oldest first puts the longest untouched on top, by last use when it's known, and items with no date last")
         // 0.20: folders that take no space here, and Xcode build folders named after a feature.
         var cloud = item("/Users/x/Documents/Codex/2026-07-06", .workspace, 0); cloud.fileCount = 120
         var empty = item("/Users/x/.codex/scratch/vaultpad-out", .workspace, 0); empty.fileCount = 0

@@ -536,7 +536,15 @@
                   <Border Style="{StaticResource SegBox}" Margin="0,0,16,8">
                     <StackPanel Orientation="Horizontal">
                       <RadioButton x:Name="OrderBig" Style="{StaticResource Seg}" Content="Biggest first" GroupName="order"/>
+                      <RadioButton x:Name="OrderOld" Style="{StaticResource Seg}" Content="Oldest first" GroupName="order" ToolTip="What has sat untouched longest goes on top"/>
                       <RadioButton x:Name="OrderKind" Style="{StaticResource Seg}" Content="By kind" GroupName="order"/>
+                    </StackPanel>
+                  </Border>
+                  <Border Style="{StaticResource SegBox}" Margin="0,0,16,8" ToolTip="Leaves out smaller items">
+                    <StackPanel x:Name="FreeSizes" Orientation="Horizontal">
+                      <RadioButton Style="{StaticResource Seg}" Content="Any size" Tag="0" GroupName="size"/>
+                      <RadioButton Style="{StaticResource Seg}" Content="1 GB or more" Tag="1" GroupName="size"/>
+                      <RadioButton Style="{StaticResource Seg}" Content="10 GB or more" Tag="10" GroupName="size"/>
                     </StackPanel>
                   </Border>
                   <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
@@ -547,7 +555,8 @@
                         <RadioButton Style="{StaticResource Seg}" Content="1 day" Tag="1" GroupName="age"/>
                         <RadioButton Style="{StaticResource Seg}" Content="3 days" Tag="3" GroupName="age"/>
                         <RadioButton Style="{StaticResource Seg}" Content="1 week" Tag="7" GroupName="age"/>
-                        <RadioButton Style="{StaticResource Seg}" Content="30 days" Tag="30" GroupName="age"/>
+                        <RadioButton Style="{StaticResource Seg}" Content="1 month" Tag="30" GroupName="age"/>
+                        <RadioButton Style="{StaticResource Seg}" Content="3 months" Tag="90" GroupName="age"/>
                       </StackPanel>
                     </Border>
                   </StackPanel>

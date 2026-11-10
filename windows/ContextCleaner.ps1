@@ -423,24 +423,30 @@ function Get-FreeCandidates {
     $days = Get-AgeDays
     @($script:Items | Where-Object { $_.Removable -and -not $_.Ignored -and -not $_.IsSnoozed -and ($days -eq 0 -or $_.IdleDays -ge $days) })
 }
+# The size filter narrows only this page; Overview counts every size.
+function Get-AtLeast { [long][int]$script:Settings.atLeastGB * 1GB }
+function Get-FreeSized { $min = Get-AtLeast; @(Get-FreeCandidates | Where-Object { $_.Bytes -ge $min }) }
+function Get-AgePhrase([int]$Days) { switch ($Days) { 1 { 'a day' } 7 { 'a week' } 30 { 'a month' } 90 { '3 months' } default { [string]$Days + ' days' } } }
 function Get-FreeShown {
-    $all = Get-FreeCandidates
+    $all = Get-FreeSized
     if ($script:Chip -eq 'lossless') { @($all | Where-Object { $_.Answer -ne 'Review first' }) }
     elseif ($script:Chip -eq 'review') { @($all | Where-Object { $_.Answer -eq 'Review first' }) }
     else { $all }
 }
 function Show-Free {
-    $all = Get-FreeCandidates
+    $all = Get-FreeSized; $every = @(Get-FreeCandidates); $atLeast = [int]$script:Settings.atLeastGB
     $lossless = @($all | Where-Object { $_.Answer -ne 'Review first' }); $review = @($all | Where-Object { $_.Answer -eq 'Review first' })
     $ui.ChipAll.Content = 'All  ' + $all.Count + ' · ' + (Size (Sum $all))
     $ui.ChipLossless.Content = 'Nothing lost  ' + $lossless.Count + ' · ' + (Size (Sum $lossless))
     $ui.ChipReview.Content = 'Review first  ' + $review.Count + ' · ' + (Size (Sum $review))
     $days = Get-AgeDays
     $ui.FreeHead.Text = (Size (Sum $all)) + ' you could get back'
-    $ui.FreeHeadSub.Text = (Plural $all.Count 'item' 'items') + $(if ($days -eq 0) { ', however recently used' } elseif ($days -eq 1) { ' untouched for a day or longer' } else { ' untouched for ' + $days + ' days or longer' })
+    $ui.FreeHeadSub.Text = (Plural $all.Count 'item' 'items') + $(if ($atLeast -gt 0) { ' of ' + $atLeast + ' GB or more' } else { '' }) + $(if ($days -eq 0) { ', however recently used' } else { ' untouched for ' + (Get-AgePhrase $days) + ' or longer' })
     $script:Bin = Get-BinBytes; $recycle = $script:Bin
     $ui.FreeBinNote.Text = 'Space comes back when you empty the Recycle Bin' + $(if ($recycle -gt 0) { ' (' + (Size $recycle) + ' there now)' } else { '' })
-    $shown = Get-FreeShown | Sort-Object Bytes -Descending
+    # Oldest first: what has sat untouched longest on top, biggest first among equals; items with no date go last.
+    $shown = if ($script:Settings.oldestFirst -and -not $script:Settings.byKind) { Get-FreeShown | Sort-Object @{ Expression = { $_.IdleDays }; Descending = $true }, @{ Expression = { $_.Bytes }; Descending = $true } }
+             else { Get-FreeShown | Sort-Object Bytes -Descending }
     $groups = New-Object 'Collections.Generic.List[ContextCleaner.Group]'
     if ($script:Settings.byKind) {
         foreach ($g in $shown | Group-Object Category | Sort-Object { -(Sum $_.Group) }) { $groups.Add((New-Object ContextCleaner.Group ($g.Name, [ContextCleaner.Item[]]@($g.Group), $true))) }
@@ -448,6 +454,7 @@ function Show-Free {
     $ui.FreeGroups.ItemsSource = $groups
     $ui.FreeEmpty.Visibility = $(if ($shown) { 'Collapsed' } else { 'Visible' })
     $ui.FreeEmptyText.Text = $(if (-not $script:Items) { 'Scan to see what you can remove. A scan reads sizes and dates for about a minute and changes nothing.' }
+        elseif ($every.Count -gt $all.Count -and -not $all) { 'Nothing ' + $atLeast + ' GB or bigger has sat untouched that long. Choose a smaller size above to see ' + (Plural $every.Count 'smaller item' 'smaller items') + '.' }
         elseif ($days -gt 0) { 'Nothing here has sat untouched that long. Choose a shorter time above, or look in Folders.' }
         else { 'Nothing to remove here right now. Folders lists everything else, with how to get space back from it.' })
     Update-FreeTotal
@@ -1162,9 +1169,16 @@ $ui.ChipAll.IsChecked = $true
 On $ui.ChipAll 'Checked' { $script:Chip = 'all'; if ($script:Ready) { Show-Free } }
 On $ui.ChipLossless 'Checked' { $script:Chip = 'lossless'; if ($script:Ready) { Show-Free } }
 On $ui.ChipReview 'Checked' { $script:Chip = 'review'; if ($script:Ready) { Show-Free } }
-$ui.OrderBig.IsChecked = -not $script:Settings.byKind; $ui.OrderKind.IsChecked = [bool]$script:Settings.byKind
-On $ui.OrderBig 'Checked' { if ($script:Ready) { $script:Settings.byKind = $false; Save-Settings; Show-Free } }
+$ui.OrderKind.IsChecked = [bool]$script:Settings.byKind
+$ui.OrderOld.IsChecked = -not $script:Settings.byKind -and [bool]$script:Settings.oldestFirst
+$ui.OrderBig.IsChecked = -not $script:Settings.byKind -and -not $script:Settings.oldestFirst
+On $ui.OrderBig 'Checked' { if ($script:Ready) { $script:Settings.byKind = $false; $script:Settings.oldestFirst = $false; Save-Settings; Show-Free } }
+On $ui.OrderOld 'Checked' { if ($script:Ready) { $script:Settings.byKind = $false; $script:Settings.oldestFirst = $true; Save-Settings; Show-Free } }
 On $ui.OrderKind 'Checked' { if ($script:Ready) { $script:Settings.byKind = $true; Save-Settings; Show-Free } }
+foreach ($rb in $ui.FreeSizes.Children) {
+    $rb.IsChecked = [int]$rb.Tag -eq [int]$script:Settings.atLeastGB
+    On $rb 'Checked' { param($s, $e) if ($script:Ready) { $script:Settings.atLeastGB = [int]$s.Tag; Save-Settings; Show-Free } }
+}
 On $ui.FreeAll 'Click' {
     $shown = @(Get-FreeShown); $all = @($shown | Where-Object { $_.Selected }).Count -eq $shown.Count
     foreach ($i in $shown) { $i.Selected = -not $all }

@@ -2,6 +2,16 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.25.1 and Windows 0.1.1
+
+Free Up Space, on the Mac and on Windows.
+
+- **Untouched for means untouched for.** On the Mac, two kinds of item ignored it: a finished PadMint player check was listed an hour after it ran whatever you chose (here a 19 GiB one, untouched 11 hours, under 1 week), and Safe to remove folders went by their own rule. Both now follow the time you choose, Safe folders by their last use.
+- **Oldest first.** Beside Biggest first and By kind: what has sat untouched longest goes on top, biggest first among equals.
+- **At least 1 or 10 GB.** A size filter leaves out the small items, so a long list comes down to what's worth your time. The counts, Select All and the headline follow it; Overview still counts every size.
+- **1 month and 3 months** join Untouched for (Windows had 30 days; it's now 1 month, with 3 months added).
+
+
 ## Windows 0.1.0
 
 Context Cleaner on Windows 10 and 11, with the Mac app's answers, safety rules and pages, and what Windows needs on top.

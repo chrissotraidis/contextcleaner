@@ -127,6 +127,10 @@ if (Get-Command git -ErrorAction SilentlyContinue) { Check 'git errors never sto
 Save-CCSettings ([pscustomobject]@{ projectRoots = @('C:\keep'); projectRootsFound = $false; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'Dark'; terminal = 'wt'; untouchedDays = 3; byKind = $true })
 $back = Get-CCSettings
 Check 'settings round-trip' ($back.appearance -eq 'Dark' -and $back.untouchedDays -eq 3 -and $back.byKind -and @($back.tracked).Count -eq 0 -and @($back.projectRoots) -contains 'C:\keep')
+Check 'settings from before Oldest first and the size filter start at Biggest first and any size' (-not $back.oldestFirst -and $back.atLeastGB -eq 0)
+Save-CCSettings ([pscustomobject]@{ projectRoots = @('C:\keep'); projectRootsFound = $false; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'Dark'; terminal = 'wt'; untouchedDays = 90; byKind = $false; oldestFirst = $true; atLeastGB = 10 })
+$back = Get-CCSettings
+Check 'Oldest first, 3 months and 10 GB or more are remembered' ($back.oldestFirst -and $back.untouchedDays -eq 90 -and $back.atLeastGB -eq 10)
 Save-CCSettings ([pscustomobject]@{ projectRoots = @(); projectRootsFound = $true; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false })
 $raw = Get-Content (Join-Path $script:CCData 'settings.json') -Raw
 Check 'found project folders are not frozen into settings' ($raw -match '"projectRoots":\s*\[\s*\]') $raw.Substring(0, [math]::Min(80, $raw.Length))

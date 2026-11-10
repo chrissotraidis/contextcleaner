@@ -2,7 +2,7 @@
 # Reads sizes and dates only. Nothing here deletes, moves or changes a file.
 # Runs on Windows PowerShell 5.1, which every Windows 10 and 11 has, and on PowerShell 7.
 
-$script:CCVersion = '0.1.0'
+$script:CCVersion = '0.1.1'
 $script:CCHome = [Environment]::GetFolderPath('UserProfile')
 $script:CCLocal = [Environment]::GetFolderPath('LocalApplicationData')
 $script:CCRoaming = [Environment]::GetFolderPath('ApplicationData')
@@ -559,7 +559,7 @@ function Test-CCLink([string]$Path) {
 function Get-CCSettings {
     $path = Join-Path $script:CCData 'settings.json'
     $s = [ordered]@{ projectRoots = @(); tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); expected = @()
-        appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false; projectRootsFound = $false
+        appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false; oldestFirst = $false; atLeastGB = 0; projectRootsFound = $false
         remind = @{}; notes = @{}; window = $null }
     if (Test-Path -LiteralPath $path) {
         try { $saved = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json } catch { $saved = $null }
@@ -575,6 +575,8 @@ function Get-CCSettings {
             foreach ($value in 'appearance', 'terminal') { if ($saved.$value) { $s[$value] = [string]$saved.$value } }
             if ($null -ne $saved.untouchedDays) { $s.untouchedDays = [int]$saved.untouchedDays }
             if ($null -ne $saved.byKind) { $s.byKind = [bool]$saved.byKind }
+            if ($null -ne $saved.oldestFirst) { $s.oldestFirst = [bool]$saved.oldestFirst }
+            if ($null -ne $saved.atLeastGB) { $s.atLeastGB = [int]$saved.atLeastGB }
         }
     }
     if (-not $s.projectRoots) {
@@ -617,7 +619,7 @@ function Save-CCSettings($Settings) {
     # string[] keeps an empty list as [] in Windows PowerShell's JSON.
     $saved = [ordered]@{ projectRoots = [string[]]@($(if ($Settings.projectRootsFound) { } else { $Settings.projectRoots | Where-Object { $_ } })) }
     foreach ($key in 'tracked', 'ignored', 'scanningOff', 'watched', 'coverageOff', 'expected') { $saved[$key] = [string[]]@($Settings.$key | Where-Object { $_ }) }
-    foreach ($key in 'appearance', 'terminal', 'untouchedDays', 'byKind') { $saved[$key] = $Settings.$key }
+    foreach ($key in 'appearance', 'terminal', 'untouchedDays', 'byKind', 'oldestFirst', 'atLeastGB') { if ($null -ne $Settings.$key) { $saved[$key] = $Settings.$key } }
     # Reminders that have passed are dropped.
     $remind = [ordered]@{}; if ($Settings.remind) { foreach ($k in @($Settings.remind.Keys)) { $at = ConvertTo-CCUtc $Settings.remind[$k]; if ($at -and $at -gt [datetime]::UtcNow) { $remind[$k] = $Settings.remind[$k] } } }
     $notes = [ordered]@{}; if ($Settings.notes) { foreach ($k in @($Settings.notes.Keys)) { if ($Settings.notes[$k]) { $notes[$k] = $Settings.notes[$k] } } }

@@ -25,7 +25,7 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
 
 ## Get it
 
-1. Download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.0), or clone this repository.
+1. Download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.1), or clone this repository.
 2. Right-click the zip, choose **Properties**, tick **Unblock** and choose **OK**, then extract it anywhere.
 3. Double-click **Context Cleaner.cmd**. In **Settings**, turn on **Start menu shortcut** to open it from Start, with its icon and no console window.
 4. Choose **Scan**. It reads folder sizes and dates for about a minute and changes nothing.

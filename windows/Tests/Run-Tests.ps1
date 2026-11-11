@@ -131,6 +131,8 @@ Check 'settings from before Oldest first and the size filter start at Biggest fi
 Save-CCSettings ([pscustomobject]@{ projectRoots = @('C:\keep'); projectRootsFound = $false; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'Dark'; terminal = 'wt'; untouchedDays = 90; byKind = $false; oldestFirst = $true; atLeastGB = 10 })
 $back = Get-CCSettings
 Check 'Oldest first, 3 months and 10 GB or more are remembered' ($back.oldestFirst -and $back.untouchedDays -eq 90 -and $back.atLeastGB -eq 10)
+$ages = foreach ($d in 5, 20, 400, 900) { (New-TestItem 'other' $d).UntouchedText }
+Check 'untouched ages read as days, weeks, months and years, as on the Mac' (($ages -join '|') -eq 'untouched 5 days|untouched 2 weeks|untouched 13 months|untouched 2 years') ($ages -join '|')
 Save-CCSettings ([pscustomobject]@{ projectRoots = @(); projectRootsFound = $true; tracked = @(); ignored = @(); scanningOff = @(); watched = @(); coverageOff = @(); appearance = 'System'; terminal = 'wt'; untouchedDays = 1; byKind = $false })
 $raw = Get-Content (Join-Path $script:CCData 'settings.json') -Raw
 Check 'found project folders are not frozen into settings' ($raw -match '"projectRoots":\s*\[\s*\]') $raw.Substring(0, [math]::Min(80, $raw.Length))
@@ -181,7 +183,8 @@ Check 'reads the Recycle Bin size live' ($binBefore -ge 0 -and $binAfter -gt $bi
 Check 'leaves an item changed since the scan' ((Test-Path "$mv\changed") -and $output -match 'changed since the scan')
 Check 'leaves a link alone' ((Test-Path "$mv\link") -and (Test-Path "$mv\target") -and $output -match 'a link; left alone')
 Check 'says what is already gone' ($output -match 'Already gone: .*missing')
-Check 'never moves Documents' ((Test-Path "$h\Documents") -and $output -match 'Documents \(not allowed')
+# An account with no Documents folder (SYSTEM, which some test machines run as) has nothing to protect here.
+if (Test-Path "$h\Documents") { Check 'never moves Documents' ($output -match 'Documents \(not allowed') }
 $history = @(Get-Content (Join-Path $script:CCData 'history.jsonl') | ForEach-Object { $_ | ConvertFrom-Json })
 Check 'records the cleanup in History' ($history.Count -eq 1 -and @($history[0].Moved).Count -eq 1)
 [IO.File]::WriteAllText($planFile, (ConvertTo-Json -Depth 4 -InputObject ([pscustomobject]@{ Id = 'old'; Expires = [datetime]::UtcNow.AddHours(-1).ToString('o'); Items = @((Entry "$mv\changed")) })))

@@ -71,7 +71,7 @@ Before copying, every item is checked again: anything gone, open in an app or ch
 
 Needs an Apple silicon Mac with macOS 14 or later. On macOS 14 the command uses Finder to move items; on 15 and later it uses macOS's `trash` tool.
 
-**On Windows 10 or 11:** download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.0), unblock and extract it, and double-click **Context Cleaner.cmd**. Nothing to install; it runs on the Windows PowerShell every Windows has. It knows Windows' own places too (WSL and Docker disks, Steam libraries, shader caches, crash dumps, Windows Update downloads), moves what you tick to the Recycle Bin, and suggests moving games and Linux to a roomier drive instead of deleting them. See [Context Cleaner for Windows](windows/README.md).
+**On Windows 10 or 11:** download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.1), unblock and extract it, and double-click **Context Cleaner.cmd**. Nothing to install; it runs on the Windows PowerShell every Windows has. It knows Windows' own places too (WSL and Docker disks, Steam libraries, shader caches, crash dumps, Windows Update downloads), moves what you tick to the Recycle Bin, and suggests moving games and Linux to a roomier drive instead of deleting them. See [Context Cleaner for Windows](windows/README.md).
 
 <details>
 <summary><b>What it looks at</b></summary>

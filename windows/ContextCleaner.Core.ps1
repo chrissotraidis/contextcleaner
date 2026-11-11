@@ -447,7 +447,12 @@ namespace ContextCleaner {
                 double d = IdleDays;
                 if (d < 1) return "changed today";
                 if (d < 2) return "untouched 1 day";
-                return "untouched " + ((int)d) + " days";
+                // As on the Mac: days, then weeks, months, and years past two years.
+                int days = (int)d;
+                if (days < 14) return "untouched " + days + " days";
+                if (days < 60) return "untouched " + (days / 7) + " weeks";
+                if (days < 730) return "untouched " + (days / 30) + " months";
+                return "untouched " + (days / 365) + " years";
             }
         }
         bool selected, watched, ignored;

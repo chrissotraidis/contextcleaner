@@ -23,3 +23,10 @@ Mac build 67. Chris set Free Up Space to 1 week and still saw a PadMint player c
 | Windows tests, Windows PowerShell 5.1 in the Parallels VM | 97 of 98 pass, 2 new (the new settings start at their old behavior, and are remembered). The one failure, never moves Documents, fails the same way on unchanged main: the VM runs tests as SYSTEM, whose profile has no Documents folder |
 | Windows window | The XAML loads and every control the script uses exists in it. Not opened on a desktop here, and not run on PowerShell 7 |
 
+## Windows, on a Windows 11 desktop
+
+| Check | Result |
+|---|---|
+| Tests | 104 checks pass on Windows PowerShell 5.1 and PowerShell 7.6, 1 new: ages in weeks, months and years as on the Mac. Never moves Documents is skipped for an account with no Documents folder, the SYSTEM case from the VM |
+| The window, driven through UI Automation on demo data | Oldest first put 34, 21, 15, 12, 11, 9 and 8 days untouched in that order; 10 GB or more left 2 of 11 items and the headline said so; 3 months with 10 GB showed the empty message; 1 month read "a month"; Overview kept counting every size; the choices were saved; no errors logged |
+| Layout | The size filter and both new ages fit at full width and at 1,150 px, wrapping into a second row. The page subtitle no longer says biggest first |

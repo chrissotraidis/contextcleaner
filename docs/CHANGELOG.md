@@ -10,6 +10,7 @@ Free Up Space, on the Mac and on Windows.
 - **Oldest first.** Beside Biggest first and By kind: what has sat untouched longest goes on top, biggest first among equals.
 - **At least 1 or 10 GB.** A size filter leaves out the small items, so a long list comes down to what's worth your time. The counts, Select All and the headline follow it; Overview still counts every size.
 - **1 month and 3 months** join Untouched for (Windows had 30 days; it's now 1 month, with 3 months added).
+- **Ages read the same on both.** Windows wrote every age in days (untouched 889 days); like the Mac it now says weeks, months, and years past two years.
 
 
 ## Windows 0.1.0

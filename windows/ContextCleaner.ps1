@@ -1016,7 +1016,7 @@ function Add-FolderSetting([string]$Name, [string]$Title) {
 # ---------- Navigation ----------
 $script:Titles = @{
     overview = @('Overview', 'What fills your drive, what changed, and what you could get back.')
-    free = @('Free Up Space', 'What nothing has touched for a while, biggest first. Tick what you want gone and move it to the Recycle Bin.')
+    free = @('Free Up Space', 'What nothing has touched for a while. Tick what you want gone and move it to the Recycle Bin.')
     folders = @('Folders', 'Every folder Context Cleaner knows, with its answer and why.')
     watch = @('Watchlist', 'Folders you watch, and any that grew since an earlier scan.')
     ignored = @('Ignored', 'Folders you set aside: still scanned and never suggested, or not scanned at all.')

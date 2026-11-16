@@ -114,6 +114,12 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     $ng = New-TestItem 'notingit' 90 "$dr\datasets"; Resolve-CCAnswer $ng ([pscustomobject]@{ Rule = 'notingit'; Repo = $dr; LookInside = $null; Siblings = $null }) $null $null
     Check 'a folder only on this PC is Review first however old' ($ng.Answer -eq 'Review first' -and $ng.Reason -eq 'Not in git, only on this PC') $ng.Reason
 }
+# A project's ref folder holds files you supplied to build it: never offered, and never moved, nor the project holding it.
+$rp = "$work\projects\ref-game"; New-Item -ItemType Directory -Path "$rp\ref\Game", "$rp\datasets" -Force | Out-Null
+$refItem = New-TestItem 'notingit' 90 "$rp\ref"; Resolve-CCAnswer $refItem ([pscustomobject]@{ Rule = 'notingit'; Repo = $rp; LookInside = $null; Siblings = $null }) $null $null
+Check 'a ref folder is Not for the Recycle Bin however old' ($refItem.Answer -eq $script:Answers['Keep']) $refItem.Answer
+Check 'a ref folder, what is inside it and the project holding it are recognized' ((Test-CCOriginals "$rp\ref" $settings) -and (Test-CCOriginals "$rp\ref\Game" $settings) -and (Test-CCOriginals $rp $settings) -and -not (Test-CCOriginals "$rp\datasets" $settings) -and -not (Test-CCOriginals "$work\projects" $settings))
+Check 'a move leaves out a ref folder' ((Test-CCStillOffered ([pscustomobject]@{ Path = "$rp\ref"; Latest = [datetime]::UtcNow; Rule = 'notingit' }) $settings @()) -eq 'Holds files a project needs to build')
 $wsl = New-TestItem 'vm-wsl' 1 'C:\wsl\ext4.vhdx'; Resolve-CCAnswer $wsl (& $place 'vm-wsl') $null ([pscustomobject]@{ Name = 'D:'; Free = 500GB })
 Check 'WSL advice names the roomy drive and wsl --manage --move' ($wsl.HowTo -match 'wsl --manage Ubuntu --move D:')
 $g = New-TestItem 'game' 900 'C:\Program Files (x86)\Steam\steamapps\common\X'; Resolve-CCAnswer $g (& $place 'game') $null ([pscustomobject]@{ Name = 'D:'; Free = 500GB })

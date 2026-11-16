@@ -637,7 +637,11 @@ struct FolderRow: Identifiable {
             let now = Date()
             let scored = current.map { ($0, $0.idleScore(now: now)) }
             value = scored.sorted { first.order == .reverse ? $0.1 > $1.1 : $0.1 < $1.1 }.map(\.0)
-        } else { value = current.sorted(using: order) }
+        } else {
+            // Rows that tie, such as many "3 months ago", go biggest first rather than in no particular order.
+            let tiebreak = order.contains { $0.keyPath == \FolderRow.bytes } ? order : order + [KeyPathComparator(\FolderRow.bytes, order: .reverse)]
+            value = current.sorted(using: tiebreak)
+        }
         sortedCache = (key, order, value)
         return value
     }
@@ -825,18 +829,25 @@ struct FolderRow: Identifiable {
             }
         }
     }
-    /// Whether a whole folder may go in a Trash command. Never: virtual machines, simulators, chat history, app libraries
+    /// Whether a whole folder may go in a Trash command. Never: virtual machines, chat history, app libraries
     /// and model libraries (remove those in their own apps), ignored, turned-off or Not for the Trash folders, and the places
     /// Context Cleaner looks in, such as Downloads, ~/GitHub or Codex scratch, unless that place is itself a cache.
+    /// A whole simulator Xcode lists goes in, removed with xcrun simctl delete; folders inside one don't.
     func mayTrashWhole(_ m: FolderMeasurement) -> Bool {
         let path = m.profile.path, category = m.profile.category
         let cache: Set<FolderCategory> = [.packageCache, .installCache, .buildOutput, .debugSymbols]
         // An Android emulator is a folder plus an .ini file, and the command moves both; other virtual machines are removed in their apps.
         let emulator = category == .virtualMachine && path.hasSuffix(".avd")
-        guard emulator || ![.virtualMachine, .simulator, .history, .appData, .model].contains(category), !path.hasSuffix("/CoreSimulator/Devices"),
+        guard emulator || simulatorID(path) != nil || ![.virtualMachine, .simulator, .history, .appData, .model].contains(category), !path.hasSuffix("/CoreSimulator/Devices"),
               !isExcluded(path), !preferences.policy(path).isKept, !gone.contains(path) else { return false }
         if Coverage.entries.contains(where: { $0.path(home: home) == path }) && !cache.contains(category) { return false }
         return adviceFor(m).verdict != .keep
+    }
+    /// The device ID when this path is a whole simulator Xcode lists, for xcrun simctl delete.
+    func simulatorID(_ path: String) -> String? {
+        guard SimulatorLocations.deviceRoot(path) == path else { return nil }
+        let udid = URL(fileURLWithPath: path).lastPathComponent
+        return simDevices[udid] != nil && simDeleteCommand(udid) != nil ? udid : nil
     }
     /// The folders from a Folders selection a single Trash command may move, each once (a folder inside another goes with it).
     /// Only Safe and Rebuildable folders: nothing is lost. Review first folders are copied one at a time from their card,
@@ -900,9 +911,13 @@ struct FolderRow: Identifiable {
         let roots = Coverage.temporaryRoots()
         // A virtual machine's drive is never moved, however it was ticked: read the machines' settings now.
         let machineDisks = parallelsMachines(home: home).disks
-        let allowed = { (path: String) in pathFitsCommand(path, home: self.home, temporary: roots) && vmDisk(in: path, disks: machineDisks) == nil }
-        let refused = paths.filter { !allowed($0) }
-        let items = paths.filter(allowed).map { (path: $0, seen: knownSeen[$0] ?? seenDate($0)) }
+        // A project's ref folder, or a folder holding one, is never moved: it may hold the only copy of what the project builds from.
+        let originals = Set(paths.filter { isOriginals($0) || containsOriginals($0) })
+        let allowed = { (path: String) in !originals.contains(path) && pathFitsCommand(path, home: self.home, temporary: roots) && vmDisk(in: path, disks: machineDisks) == nil }
+        let refused = paths.filter { !allowed($0) && !originals.contains($0) }
+        // A simulator Xcode lists often has no scan date; xcrun simctl delete itself refuses a device that's running.
+        let now = Date()
+        let items = paths.filter(allowed).map { (path: $0, seen: simulatorID($0) != nil ? now : knownSeen[$0] ?? seenDate($0)) }
         // Worktrees offered because git had everything in them get the same git check again, in full.
         let cleanTrees = paths.filter { isWorktreeFolder($0) && worktrees[$0]?.keepsEverything == true }
         state.start(paths)
@@ -912,6 +927,7 @@ struct FolderRow: Identifiable {
             // Without knowing which files apps have open, nothing is copied.
             if !snapshot.available { for path in result.ready { result.leftOut[path] = .unchecked }; result.ready = [] }
             for path in refused { result.leftOut[path] = .unsafe }
+            for path in originals { result.leftOut[path] = .originals }
             // Projects offered as backed up must still be: git is asked again, in full.
             let projects = backedUp.filter { result.ready.contains($0) }
             let projectStates = parallelMap(projects, readRepoBackup)
@@ -940,7 +956,9 @@ struct FolderRow: Identifiable {
         let id = UUID().uuidString
         var result = result
         if !result.ready.isEmpty {
-            if let command = trashCommandText(trashTargets(result.ready), id: id) {
+            let simulators = result.ready.compactMap { path in simulatorID(path).map { (path, $0) } }
+            let folders = result.ready.filter { path in !simulators.contains { $0.0 == path } }
+            if let command = trashCommandText(trashTargets(folders), id: id, simulators: simulators.map(\.1)) {
                 copyToClipboard(command)
             } else {
                 for path in result.ready { result.leftOut[path] = .unsafe }
@@ -963,16 +981,16 @@ struct FolderRow: Identifiable {
     /// The command to copy: every path written out when it's short, or read from a saved list when it's long.
     /// It works for an hour, as long as the app watches for it. Shells other than bash and zsh get it read from a list,
     /// wrapped for zsh. Nil when it can't be made safely.
-    func trashCommandText(_ targets: [String], id: String, shell: String? = loginShell()) -> String? {
+    func trashCommandText(_ targets: [String], id: String, shell: String? = loginShell(), simulators: [String] = []) -> String? {
         let expires = Date().addingTimeInterval(TrashWatch.lifetime)
         let posix = readsPOSIX(shell)
         // A worktree names its repository in its .git file; only a real repository in your home folder is told it's gone.
         let prune = Array(Set(targets.compactMap { isWorktreeFolder($0) ? worktrees[$0]?.mainRepository : nil }))
             .filter { repo in var st = stat(); return pathFitsCommand(repo, home: home, temporary: []) && lstat(repo + "/.git", &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR && (posix || !repo.contains("\\")) }.sorted()
-        let inline = trashCommand(targets, prune: prune, expires: expires)
+        let inline = trashCommand(targets, prune: prune, expires: expires, simulators: simulators)
         if posix && inline.utf8.count <= trashInlineLimit { return inline }
         guard let store, let list = try? store.saveTrashList(id, targets), !list.contains("'"), !list.contains("\\") else { return posix ? inline : nil }
-        return forShell(trashCommand(targets, list: list, prune: prune, expires: expires), shell: shell)
+        return forShell(trashCommand(targets, list: list, prune: prune, expires: expires, simulators: simulators), shell: shell)
     }
     private func checkTrashWatch() {
         guard let watch = trashWatch else { trashTimer?.invalidate(); return }

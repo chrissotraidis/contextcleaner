@@ -272,13 +272,16 @@ struct MainView: View {
         }
         model.selection = new
     }
-    /// How Folders are ordered. The default is biggest first.
+    /// How Folders are ordered. The default is biggest first. Clicking a column header picks one of these too.
     private var orderName: String {
+        let up = sortOrder.first?.order == .forward
         switch sortOrder.first?.keyPath {
-        case \FolderRow.idleScore: return "Biggest unused first"
-        case \FolderRow.bytes: return "Biggest first"
-        case \FolderRow.unusedKey: return "Unused longest first"
-        case \FolderRow.name: return "Name"
+        case \FolderRow.idleScore: return up ? "Biggest unused last" : "Biggest unused first"
+        case \FolderRow.bytes: return up ? "Smallest first" : "Biggest first"
+        case \FolderRow.unusedKey: return up ? "Unused longest first" : "Used most recently first"
+        case \FolderRow.lastUsedKey: return up ? "Oldest use first" : "Used most recently first"
+        case \FolderRow.verdictRank: return up ? "Safest first" : "Hardest to remove first"
+        case \FolderRow.name: return up ? "Name" : "Name, Z to A"
         default: return "Custom"
         }
     }
@@ -453,9 +456,16 @@ struct MainView: View {
                     let allBytes = all.paths.reduce(Int64(0)) { $0 + model.knownBytes($1) }
                     TrashCopyButton(paths: all.paths, bytes: allBytes, prominent: true, shortcut: true,
                                     confirm: trashConfirmation(count: all.paths.count, bytes: allBytes, review: review.count, reviewBytes: review.reduce(Int64(0)) { $0 + model.knownBytes($1) }))
-                    Text(all.paths.isEmpty ? "None of these can go in a Trash command: places you remove in their own apps, ignored folders, and the places Context Cleaner looks in."
-                         : (review.isEmpty ? "One command for \(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders"). Nothing is lost." : "One command for \(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders"), \(review.count) of them Review first, so it asks before copying.")
-                            + (all.skipped > 0 ? " Leaves out \(all.skipped): folders inside others, and places you remove in their own apps"
+                    let originals = model.selection.filter(isOriginals).count
+                    let devices = all.paths.filter { model.simulatorID($0) != nil }.count
+                    let things = devices == 0 ? "\(all.paths.count) \(all.paths.count == 1 ? "folder" : "folders")"
+                        : devices == all.paths.count ? "\(devices) test \(devices == 1 ? "device" : "devices"), removed with Xcode's own tool"
+                        : "\(all.paths.count) items, \(devices) of them test devices removed with Xcode's own tool"
+                    let others = all.skipped - originals
+                    Text((all.paths.isEmpty ? "None of these can go in a Trash command."
+                         : (review.isEmpty ? "One command for \(things). Nothing is lost." : "One command for \(things), \(review.count) Review first, so it asks before copying."))
+                            + (originals > 0 ? " Leaves out \(originals) ref \(originals == 1 ? "folder" : "folders"): files a project needs to build. Delete those yourself in Finder after looking inside." : "")
+                            + (others > 0 ? " Leaves out \(others): folders inside others, ignored folders, and places you remove in their own apps"
                                + (model.selection.contains { vmDisk(in: $0, disks: model.vmDisks) != nil } ? ", such as a folder holding a virtual machine's drive." : ".") : ""))
                         .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     Divider()
@@ -1243,7 +1253,7 @@ struct TrashWatchStatus: View {
     /// "Left out 2: 1 changed since the scan, 1 open in an app."
     private var leftOutText: String {
         let groups = Dictionary(grouping: watch.leftOut.values, by: { $0 })
-        let parts = [LeftOut.changed, .open, .gone, .unsafe, .unchecked].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
+        let parts = [LeftOut.changed, .open, .gone, .unsafe, .unchecked, .originals].compactMap { reason in groups[reason].map { "\($0.count) \(reason.rawValue.lowercased())" } }
         return "Left out \(watch.leftOut.count): " + parts.joined(separator: ", ") + "."
     }
 }

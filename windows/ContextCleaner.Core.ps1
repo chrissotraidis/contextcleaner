@@ -2,7 +2,7 @@
 # Reads sizes and dates only. Nothing here deletes, moves or changes a file.
 # Runs on Windows PowerShell 5.1, which every Windows 10 and 11 has, and on PowerShell 7.
 
-$script:CCVersion = '0.1.1'
+$script:CCVersion = '0.1.2'
 $script:CCHome = [Environment]::GetFolderPath('UserProfile')
 $script:CCLocal = [Environment]::GetFolderPath('LocalApplicationData')
 $script:CCRoaming = [Environment]::GetFolderPath('ApplicationData')
@@ -555,6 +555,21 @@ function Test-CCInside([string]$Path, [string]$Parent, [switch]$OrSame) {
     ($OrSame -and $Path.Equals($Parent, [StringComparison]::OrdinalIgnoreCase)) -or $Path.StartsWith($Parent + '\', [StringComparison]::OrdinalIgnoreCase)
 }
 
+# Folder names projects use for files you supply to build them: original game data, disc files, assets you own.
+# Git doesn't keep them and no tool downloads them again, so they're never offered for the Recycle Bin. As on the Mac.
+$script:OriginalsNames = @('ref', 'refs', 'reference', 'references', 'original', 'originals')
+# A project's ref folder or anything inside one, or a project folder with one directly inside. Only inside the project folders.
+function Test-CCOriginals([string]$Path, $Settings) {
+    if (-not $Path -or $Path -match '\\\.git(\\|$)') { return $false }
+    foreach ($root in @($Settings.projectRoots | Where-Object { $_ })) {
+        if (-not (Test-CCInside $Path $root)) { continue }
+        $parts = @($Path.Substring($root.TrimEnd('\').Length + 1).Split('\') | Where-Object { $_ })
+        if (@($parts | Select-Object -Skip 1 | Where-Object { $script:OriginalsNames -contains $_ }).Count) { return $true }
+        foreach ($name in $script:OriginalsNames) { if (Test-Path -LiteralPath (Join-Path $Path $name) -PathType Container) { return $true } }
+    }
+    $false
+}
+
 function Test-CCLink([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
     [bool]($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint))
@@ -968,7 +983,11 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
             else { Set-CCAnswer $Item Rebuildable 'Built this week' 'Output a build produced. The source is in the project.' 'The next build recreates it, which takes time.' }
         }
         'notingit' {
-            Set-CCAnswer $Item Review 'Not in git, only on this PC' 'A folder the project''s git ignores, so it is in no commit and on no remote. Downloads, data or models a tool fetched can come back; anything you made cannot.' 'What it holds is gone for good once you empty the Recycle Bin.' 'Look inside. Keep or back up what you made; remove what a tool can fetch again.'
+            if ($script:OriginalsNames -contains (Split-Path $Item.Path -Leaf)) {
+                Set-CCAnswer $Item Keep 'Needed to build the project' 'Files you supplied to build this project, such as original game data. Git doesn''t keep them and no tool downloads them again.' 'Without them the project may not build.' 'Keep it. If you''re done with the project for good, open it in File Explorer, check what''s inside, and delete it yourself.'
+            } else {
+                Set-CCAnswer $Item Review 'Not in git, only on this PC' 'A folder the project''s git ignores, so it is in no commit and on no remote. Downloads, data or models a tool fetched can come back; anything you made cannot.' 'What it holds is gone for good once you empty the Recycle Bin.' 'Look inside. Keep or back up what you made; remove what a tool can fetch again.'
+            }
         }
         'worktree' {
             $b = Get-CCGitBackup $Item.Path
@@ -1212,6 +1231,7 @@ function Get-CCReadings {
 # Re-check items when a command is copied: anything gone, not allowed, in use or changed since the scan is left out.
 function Test-CCStillOffered($Item, $Settings, $Running) {
     if (-not (Test-Path -LiteralPath $Item.Path)) { return 'Already gone' }
+    if (Test-CCOriginals $Item.Path $Settings) { return 'Holds files a project needs to build' }
     if (-not (Test-CCAllowed $Item.Path $Settings)) { return 'Not allowed in a command' }
     $inUse = Get-CCInUse $Item.Path $Running
     if ($inUse) { return 'In use by ' + $inUse }

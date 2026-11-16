@@ -368,17 +368,26 @@ struct StaleItem: Equatable, Identifiable {
 /// With expires, the command first checks the clock and moves nothing once that time has passed, so a command pasted
 /// later from clipboard history can't act on folders that weren't rechecked. A link is never moved: Finder would move
 /// what it points to.
-func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = [], expires: Date? = nil) -> String {
+///
+/// Simulators are removed the way Xcode removes them, with xcrun simctl delete and the device's ID, after the folders.
+/// They count as moved, but go straight away: simctl doesn't use the Trash.
+func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = [], expires: Date? = nil, simulators: [String] = []) -> String {
     let quoted = shellQuoted
-    let total = paths.count == 1 ? "1 item" : "\(paths.count) items"
+    let simulators = simulators.filter { simDeleteCommand($0) != nil }
+    let count = paths.count + simulators.count
+    let total = count == 1 ? "1 item" : "\(count) items"
     let finder = "osascript -e 'on run a' -e 'with timeout of 300 seconds' -e 'tell application \"Finder\" to delete (POSIX file (item 1 of a) as alias)' -e 'end timeout' -e 'end run' \"$p\" 2>&1 >/dev/null"
     let gone = "[ ! -e \"$p\" ] && [ ! -L \"$p\" ]"
-    let loop = list.map { "echo \"Moving \(total) listed in \" " + quoted($0) + "; while IFS= read -r -d '' p <&3; do " }
+    let listed = paths.count == 1 ? "1 item" : "\(paths.count) items"
+    let loop = list.map { "echo \"Moving \(listed) listed in \" " + quoted($0) + "; while IFS= read -r -d '' p <&3; do " }
         ?? "for p in " + paths.map(quoted).joined(separator: " ") + "; do "
     let end = list.map { "done 3< " + quoted($0) + "; " } ?? "done; "
     let forget = prune.isEmpty ? "" : "for r in " + prune.map(quoted).joined(separator: " ") + "; do [ -d \"$r/.git\" ] && [ ! -L \"$r\" ] && git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C \"$r\" worktree prune 2>/dev/null; done; "
+    let devices = simulators.isEmpty ? "" : "for u in " + simulators.joined(separator: " ") + "; do "
+        + "if xcrun simctl delete \"$u\" 2>/dev/null; then m=$((m+1)); echo \"Removed test device: $u\"; "
+        + "else f=$((f+1)); echo \"NOT removed: test device $u (Xcode refused; remove it in Window › Devices and Simulators)\"; fi; done; "
     let clock = expires.map { "[ \"$(date +%s)\" -le \(Int($0.timeIntervalSince1970)) ] || { echo \"This command is over an hour old, so nothing was moved. Copy a fresh one in Context Cleaner.\"; exit 1; }; " } ?? ""
-    return "( " + clock + "m=0; g=0; f=0; " + loop
+    let folders = paths.isEmpty ? "" : loop
         + "if " + gone + "; then g=$((g+1)); echo \"Already gone: $p\"; "
         + "elif [ -L \"$p\" ]; then f=$((f+1)); echo \"NOT moved: $p (a link; left alone)\"; "
         + "elif [ -x /usr/bin/trash ] && /usr/bin/trash \"$p\" 2>/dev/null && " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
@@ -386,9 +395,10 @@ func trashCommand(_ paths: [String], list: String? = nil, prune: [String] = [], 
         + "e=$(" + finder + "); "
         + "if " + gone + "; then m=$((m+1)); echo \"Moved: $p\"; "
         + "else f=$((f+1)); echo \"NOT moved: $p (${e:-still in place})\"; fi; fi; " + end + forget
-        + "echo \"Moved $m of \(total) to the Trash.\"; "
+    return "( " + clock + "m=0; g=0; f=0; " + folders + devices
+        + "echo \"" + (simulators.isEmpty ? "Moved $m of \(total) to the Trash." : "Moved or removed $m of \(total).") + "\"; "
         + "[ $g -gt 0 ] && echo \"$g already gone.\"; [ $f -gt 0 ] && echo \"$f not moved; the lines above say why.\"; "
-        + "echo \"Empty the Trash to get the space back.\" )"
+        + (paths.isEmpty ? "true )" : "echo \"Empty the Trash to get the space back.\" )")
 }
 /// Quotes text for a POSIX shell. Inside single quotes nothing is special; a single quote is written as '\\''.
 func shellQuoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -437,6 +447,28 @@ func looksIrreplaceable(_ name: String) -> Bool {
     if n.hasPrefix("deriveddata") || n.hasPrefix("derived-") || n.hasPrefix("derived_") || n.hasSuffix("-derived") { return false }
     return ["backup", "back-up", "recovery", "save", "private", "signing", "keychain", "secret", "credential", "provisioning"].contains { n.contains($0) }
 }
+/// Folder names projects use for files you supply to build them: original game data, disc files, assets you own.
+/// Git doesn't keep them and no tool downloads them again, so they're never offered for the Trash.
+let originalsNames: Set<String> = ["ref", "refs", "reference", "references", "original", "originals"]
+/// Where projects live: ~/GitHub, ~/Developer, Codex worktrees and Codex task folders.
+private let originalsRoots = Coverage.projectRoots.map { "/" + $0 + "/" } + ["/.codex/worktrees/", "/Documents/Codex/"]
+/// A project's ref folder (or references, original…), or anything inside one. The project folder itself isn't one,
+/// even if it's named ref; git's own refs inside .git aren't either.
+func isOriginals(_ path: String) -> Bool {
+    guard !path.contains("/.git/"), !path.hasSuffix("/.git") else { return false }
+    return originalsRoots.contains { root in
+        guard let range = path.range(of: root) else { return false }
+        return path[range.upperBound...].split(separator: "/").dropFirst().contains { originalsNames.contains($0.lowercased()) }
+    }
+}
+/// A folder in a project that has a ref folder (or references, original…) directly inside it. Read from disk.
+func containsOriginals(_ path: String) -> Bool {
+    guard originalsRoots.contains(where: { path.contains($0) }) else { return false }
+    return originalsNames.contains { name in
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path + "/" + name, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+}
 /// A name that says it's build output: Xcode's DerivedData under a task's own name, or a build folder. Rebuilt by building.
 func looksLikeBuildOutput(_ name: String) -> Bool {
     let n = name.lowercased()
@@ -466,7 +498,7 @@ func freesNothing(_ m: FolderMeasurement) -> Advice? {
 /// Why a folder was left out of a Trash command when it was rechecked.
 /// Each reads after a count: "2 changed since the scan". Not allowed: a link, a protected place or a name with control
 /// characters. Not checked: macOS didn't let Context Cleaner see which files apps have open, so nothing was copied.
-enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "Not allowed in a command", unchecked = "Not checked for open files" }
+enum LeftOut: String, Codable, Equatable { case changed = "Changed since the scan", open = "Open in an app", gone = "Already gone", unsafe = "Not allowed in a command", unchecked = "Not checked for open files", originals = "Holds files a project needs to build" }
 /// Re-reads folders just before a Trash command is copied. A folder is left out if it's gone, if an app has a file
 /// open in it, or if it or anything inside it changed after the scan saw it. Metadata only.
 func recheck(_ items: [(path: String, seen: Date?)], open: [ProcessEvidence]?, slack: TimeInterval = 60) -> (ready: [String], leftOut: [String: LeftOut]) {
@@ -561,7 +593,8 @@ func friendlyApp(_ command: String) -> String {
 func staleChildren(_ m: FolderMeasurement, now: Date, days: Double = 30, minimum: Int64 = 50 * 1_048_576, backups: Bool = false) -> [StaleItem] {
     guard let children = m.contents?.children else { return [] }
     return children.filter { child in
-        guard child.bytes >= minimum, child.name != ".git", let modified = child.modifiedAt, backups || !looksIrreplaceable(child.name) else { return false }
+        guard child.bytes >= minimum, child.name != ".git", let modified = child.modifiedAt, backups || !looksIrreplaceable(child.name),
+              !isOriginals(m.profile.path + "/" + child.name) else { return false }
         return now.timeIntervalSince(modified) >= days * 86400
     }.sorted { $0.bytes > $1.bytes }.map { StaleItem(path: m.profile.path + "/" + $0.name, name: $0.name, bytes: $0.bytes, modifiedAt: $0.modifiedAt) }
 }
@@ -621,6 +654,13 @@ func advice(for m: FolderMeasurement, policy: LocationPolicy, devices: [String: 
         return kept
     }
     if let free = freesNothing(m) { return free }
+    if isOriginals(m.profile.path), m.state == .measured {
+        let project = m.profile.project ?? "the project"
+        var kept = Advice(verdict: .keep, reason: "Files you supplied to build \(project), such as original game data. Git doesn't keep them and no tool downloads them again, so without them \(project) may not build.",
+                          howTo: "Keep it. If you're done with \(project) for good, open it in Finder, check what's inside, and delete it yourself.", command: nil, lastUsed: m.latestModifiedAt)
+        kept.short = "Needed to build \(project)"
+        return kept
+    }
     if let worktree, isWorktreeFolder(m.profile.path), m.state == .measured, m.processes.isEmpty { return worktreeAdvice(m, worktree, now: now) }
     var result = projectAdvice(for: m, policy: policy, devices: devices, project: project, now: now)
     // A folder you're still using may hold old items that tools recreate. Point at those instead of the whole folder.

@@ -2,6 +2,14 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.26.0 and Windows 0.1.2
+
+Ref folders are kept, and ticked simulators go in the command.
+
+- **A project's ref folder is Not for the Trash.** Projects keep files you supplied to build them in `ref` (or `refs`, `reference`, `references`, `original`, `originals`): original game data, disc files. Git doesn't keep them and nothing downloads them again, yet they were Review first, "Not in git", and Free Up Space listed them once untouched; Oldest first started with them. Now they, and anything inside them, are Not for the Trash with "Needed to build" and the project's name. Select All, Free Up Space and every copied command leave them out, and a command also leaves out a project folder with one inside ("Holds files a project needs to build"). To remove one, open it in Finder, look, and delete it yourself. On Windows the same folders are Not for the Recycle Bin and a move leaves them out.
+- **Tick several simulators and copy one command.** A test device Xcode lists used to be left out of a multi-folder command as a place "you remove in its own app". The command now removes each one with Xcode's own `xcrun simctl delete`, after the folders, and says what it did for each. Xcode refuses a device that's running.
+- **Sorting says what it does.** Clicking a column header names the order in the Sort menu (Oldest use first, Smallest first, Safest first…) instead of Custom, and Size sorted smallest first no longer reads Biggest first. Rows that tie, such as many "3 months ago", go biggest first.
+
 ## 0.25.1 and Windows 0.1.1
 
 Free Up Space, on the Mac and on Windows.

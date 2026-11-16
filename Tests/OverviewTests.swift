@@ -349,15 +349,17 @@ import Foundation
         check(dayList.allSatisfy { $0.seen != nil }, "each suggestion keeps the newest change the scan saw, for the recheck before copying")
         // 0.23: Review first folders with a clear reason they may go are listed once untouched.
         var reachProject = ProjectActivity(root: "/Users/x/GitHub/reach", isWorktree: false, mainRepository: nil, registered: nil, branch: "main", defaultBranch: "main", lastCommit: now.addingTimeInterval(-86400), merged: true, uncommitted: 0)
-        reachProject.ignored = ["/Users/x/GitHub/reach/ref": true, "/Users/x/GitHub/reach/inputs": true]
-        let refFolder = aged("/Users/x/GitHub/reach/ref", .workspace, hours: 24 * 5, gib: 40)
+        reachProject.ignored = ["/Users/x/GitHub/reach/dumps": true, "/Users/x/GitHub/reach/inputs": true, "/Users/x/GitHub/reach/ref": true]
+        let refFolder = aged("/Users/x/GitHub/reach/dumps", .workspace, hours: 24 * 5, gib: 40)
+        let originalsFolder = aged("/Users/x/GitHub/reach/ref", .workspace, hours: 24 * 90, gib: 40)
         var inputs = aged("/Users/x/GitHub/reach/inputs", .workspace, hours: 2, gib: 30)
         inputs.contents = FolderContents(children: [ChildSummary(name: "old-dump", directory: true, identity: "1", bytes: 12 * gib, files: 9, modifiedAt: now.addingTimeInterval(-10 * 86400)),
                                                     ChildSummary(name: "today", directory: true, identity: "2", bytes: 18 * gib, files: 9, modifiedAt: now.addingTimeInterval(-3600))],
                                          fileTypes: [], listedChildren: 2, retainedLimit: 512, omittedEntries: 0)
         func reachAdvice(_ m: FolderMeasurement) -> Advice { advice(for: m, policy: LocationPolicy(), devices: [:], project: reachProject, now: now) }
-        let reachList = suggestions([refFolder, inputs], advice: reachAdvice, gone: [], quiet: 3 * 86400, now: now)
-        check(reachAdvice(refFolder).verdict == .check && reachAdvice(refFolder).short == "Not in git" && reachList.map(\.name) == ["ref", "old-dump"] && reachList.allSatisfy { $0.cost == .check }
+        let reachList = suggestions([refFolder, inputs, originalsFolder], advice: reachAdvice, gone: [], quiet: 3 * 86400, now: now)
+        check(reachAdvice(refFolder).verdict == .check && reachAdvice(refFolder).short == "Not in git" && reachList.map(\.name) == ["dumps", "old-dump"] && reachList.allSatisfy { $0.cost == .check }
+              && reachAdvice(originalsFolder).verdict == .keep
               && reachList[0].why == "Not in git, only on this Mac · untouched 5 days" && reachList[1].why.hasPrefix("Old item inside") && reachList[1].owner == inputs.profile.path,
               "a folder only on this Mac is Review first and listed once untouched; while it's in use, the untouched items inside it are listed instead")
         check(suggestions([refFolder], advice: reachAdvice, gone: [], quiet: 7 * 86400, now: now).isEmpty && suggestions([refFolder], advice: adviseFor, gone: [], quiet: 3 * 86400, now: now).isEmpty,
@@ -724,6 +726,30 @@ import Foundation
               && FolderProfile(path: "/x/two\nlines", name: "two\nlines", category: .workspace, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: []).displayName == "two?lines",
               "names show in full on one line: control and invisible characters become ?, every other script is kept")
         check(fullScanScope == "Known and selected locations", "a full scan is known by what it covered, however few folders a Mac has")
+        // A project's ref folder holds files you supplied to build it, such as original game data.
+        check(isOriginals("/Users/x/GitHub/deviltouch/ref") && isOriginals("/Users/x/GitHub/deviltouch/ref/Diablo") && isOriginals("/Users/x/GitHub/nightpad/references")
+              && isOriginals("/Users/x/.codex/worktrees/ab12/kartpad/ref") && isOriginals("/Users/x/GitHub/a/Ref"),
+              "a project's ref, references or original folder, and anything inside it, is recognized")
+        check(!isOriginals("/Users/x/GitHub/ref") && !isOriginals("/Users/x/GitHub/a/.git/refs") && !isOriginals("/Users/x/GitHub/a/build") && !isOriginals("/Users/x/.cache/huggingface/hub/m/refs")
+              && !isOriginals("/Users/x/GitHub/a/reference-build"),
+              "a project named ref, git's own refs, other folders and caches outside projects are not")
+        var ref = item("/Users/x/GitHub/deviltouch/ref", .workspace, 1_300_000_000)
+        ref.profile.project = "deviltouch"; ref.latestModifiedAt = Date().addingTimeInterval(-90 * 86400); ref.fileCount = 40
+        let refAdvice = advice(for: ref, policy: LocationPolicy(), devices: [:])
+        check(refAdvice.verdict == .keep && refAdvice.short == "Needed to build deviltouch", "a ref folder untouched for months is Not for the Trash, so Select All and Free Up Space leave it")
+        var project = item("/Users/x/GitHub/deviltouch", .workspace, 2_000_000_000)
+        let old = Date().addingTimeInterval(-90 * 86400)
+        project.contents = FolderContents(children: [ChildSummary(name: "ref", directory: true, identity: "1", bytes: 1_300_000_000, modifiedAt: old),
+                                                     ChildSummary(name: "out", directory: true, identity: "2", bytes: 600_000_000, modifiedAt: old)],
+                                          fileTypes: [], listedChildren: 2, retainedLimit: 100, omittedEntries: 0)
+        check(staleChildren(project, now: Date()).map(\.name) == ["out"], "items offered from inside a project never include its ref folder")
+        // Simulators go in the same command, removed with Xcode's own tool.
+        let udid = "0A1B2C3D-0000-1111-2222-333344445555"
+        let withDevices = trashCommand(["/a"], simulators: [udid, "not-an-id"])
+        check(withDevices.contains("for u in " + udid + "; do") && !withDevices.contains("not-an-id") && withDevices.contains("of 2 items"), "ticked simulators are removed by device ID in the same command")
+        let devicesOnly = trashCommand([], simulators: [udid])
+        check(!devicesOnly.contains("for p in") && !devicesOnly.contains("Empty the Trash") && shellEcho("/bin/bash", "bash -n -c " + shellQuoted(devicesOnly) + " && echo ok").hasPrefix("ok")
+              && shellEcho("/bin/zsh", "zsh -n -c " + shellQuoted(withDevices) + " && echo ok").hasPrefix("ok"), "a command with only simulators, or both, is valid shell")
         print("SUCCESS: \(count) overview checks; only a temporary fixture is written.")
     }
 }

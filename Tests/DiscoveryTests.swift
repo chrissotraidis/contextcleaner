@@ -306,6 +306,78 @@ import Foundation
         let buildAdvice = advice(for: measuredBuild, policy: LocationPolicy(), devices: [:], project: sonicProject)
         check(artifactsAdvice.verdict == .check && artifactsAdvice.short == "Not in git" && artifactsAdvice.reason.hasPrefix("Git ignores it") && buildAdvice.verdict == .rebuild,
               "a folder git ignores is Review first, Not in git; an ignored build-macos is Rebuildable")
+        // 0.27: folders Codex made right in your home folder, recognized by macOS's record of their maker.
+        let madeHome = root.appendingPathComponent("made-home").path
+        let codexID: [UInt8] = [0x01, 0x02, 0x00, 0x1C, 0xDD, 0x42, 0x81, 0x1B, 0x84, 0x6A, 0xD8], otherID: [UInt8] = [0x01, 0x02, 0x00, 0x7E, 0x43, 0x27, 0x6D, 0xDA, 0xFF, 0x87, 0x0D]
+        // macOS stamps every folder this test makes with the test's own maker, so the makers are given here instead.
+        var makers: [String: [UInt8]] = [:]
+        readProvenance = { makers[$0] }
+        func folder(_ base: String, _ relative: String, _ id: [UInt8]?) {
+            let path = base + "/" + relative
+            try? FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+            if let id { makers[path] = id }
+        }
+        for task in ["a", "b", "c"] { folder(madeHome, ".codex/worktrees/" + task, codexID) }
+        for (name, id) in [("BlueWake-0.12-check", codexID), ("KartPad Device Backups", codexID), ("ComfyUI-Shared", otherID), ("Movies", codexID), ("go", codexID), (".tool", codexID), ("plain", nil), ("project", codexID)] as [(String, [UInt8]?)] {
+            folder(madeHome, name, id)
+        }
+        folder(madeHome, "project/.git", nil); folder(madeHome, "BlueWake-0.12-check/checks", nil); folder(madeHome, "KartPad Device Backups/2026-09-03-iPhone", nil)
+        let made = codexMadeHomeFolders(home: madeHome)
+        check(made == [madeHome + "/BlueWake-0.12-check", madeHome + "/KartPad Device Backups"],
+              "folders Codex made in your home folder are found; ones another app or you made, macOS's own, tool homes, hidden folders and git projects aren't (found \(made.map { ($0 as NSString).lastPathComponent }))")
+        let checkProfile = Classifier.profile(path: made[0], home: madeHome), backupProfile = Classifier.profile(path: made[1], home: madeHome)
+        let otherProfile = Classifier.profile(path: madeHome + "/ComfyUI-Shared", home: madeHome)
+        let checkIsCodex = checkProfile.associatedApp == codexHomeApp && checkProfile.category == FolderCategory.workspace
+        let backupIsCodex = backupProfile.associatedApp == codexHomeApp && backupProfile.category == FolderCategory.backup
+        check(checkIsCodex && backupIsCodex && otherProfile.associatedApp != codexHomeApp,
+              "they're classified as Codex's, a backup folder as backups")
+        check(Set(made).isSubset(of: Set(Inventory.discover(home: madeHome, preferences: Preferences()).profiles.map(\.path))), "a scan discovers them")
+        let fewHome = root.appendingPathComponent("few-home").path
+        for task in ["a", "b"] { folder(fewHome, ".codex/worktrees/" + task, codexID) }
+        folder(fewHome, "Stray", codexID)
+        check(codexMadeHomeFolders(home: fewHome).isEmpty, "Codex's mark is learned only when at least three of its own folders agree")
+        // Free Up Space offers what inside has sat untouched, item by item, never the folder itself.
+        func codexItem(_ profile: FolderProfile, _ children: [ChildSummary], idle days: Double) -> FolderMeasurement {
+            var m = FolderMeasurement(profile: profile, observedAt: Date(), state: .measured, allocatedBytes: children.reduce(Int64(0)) { $0 + $1.bytes }, fileCount: 10, processes: [], activityCheckAvailable: true, elapsedSeconds: 0)
+            m.latestModifiedAt = Date().addingTimeInterval(-days * 86400)
+            m.contents = FolderContents(children: children, fileTypes: [], listedChildren: children.count, retainedLimit: 512, omittedEntries: 0)
+            return m
+        }
+        let old = Date().addingTimeInterval(-40 * 86400), recent = Date().addingTimeInterval(-3600)
+        let checkFolder = codexItem(checkProfile, [ChildSummary(name: "checks", directory: true, identity: "1", bytes: 2 << 30, modifiedAt: old),
+                                                   ChildSummary(name: "menu-test", directory: true, identity: "2", bytes: 500 << 20, modifiedAt: recent)], idle: 0.05)
+        let backupFolder = codexItem(backupProfile, [ChildSummary(name: "2026-09-03-iPhone", directory: true, identity: "3", bytes: 1 << 30, modifiedAt: old)], idle: 40)
+        let codexAdvice = advice(for: checkFolder, policy: LocationPolicy(), devices: [:])
+        let backupAdvice = advice(for: backupFolder, policy: LocationPolicy(), devices: [:])
+        let saysWhat = codexAdvice.reason.contains("A release check of BlueWake 0.12")
+        check(codexAdvice.verdict == Verdict.check && codexAdvice.short == "Made by Codex" && saysWhat && backupAdvice.short == "Backups by Codex",
+              "their answer is Review first, says Codex made them and what they are")
+        let offered = suggestions([checkFolder, backupFolder], advice: { advice(for: $0, policy: LocationPolicy(), devices: [:]) }, gone: [], quiet: 7 * 86400,
+                                  itemized: [checkFolder.profile.path, backupFolder.profile.path])
+        let folderOffered = offered.contains { (s: Suggestion) in s.path == checkFolder.profile.path || s.path == backupFolder.profile.path }
+        let checksOffered = offered.contains { (s: Suggestion) in s.name == "checks" && s.why.hasPrefix("Left by a Codex task") && s.cost == Verdict.check && !s.backup }
+        let backupOffered = offered.contains { (s: Suggestion) in s.name == "2026-09-03-iPhone" && s.backup }
+        check(offered.count == 2 && !folderOffered && checksOffered && backupOffered,
+              "Free Up Space lists their untouched items, a backup's never ticked for you, and never the folders themselves")
+        let codexModel = CleanerModel(home: madeHome, dataRoot: try AppendStore(root: root.appendingPathComponent("codex-store")).root)
+        check(!codexModel.mayTrashWhole(checkFolder) && !codexModel.mayTrashWhole(backupFolder), "a command never moves a folder Codex made in your home folder whole")
+        // The apps in a test device, by bundle identifier, for its card.
+        let device = root.appendingPathComponent("sim/Devices/0A1B2C3D-0000-1111-2222-333344445555").path
+        func container(_ kind: String, _ id: String, _ bundle: String, file: String, bytes: Int) throws {
+            let path = device + "/data/Containers/" + kind + "/" + id
+            try FileManager.default.createDirectory(atPath: path + "/" + (file as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+            try PropertyListSerialization.data(fromPropertyList: ["MCMMetadataIdentifier": bundle], format: .binary, options: 0).write(to: URL(fileURLWithPath: path + "/.com.apple.mobile_container_manager.metadata.plist"))
+            try Data(repeating: 1, count: bytes).write(to: URL(fileURLWithPath: path + "/" + file))
+        }
+        try container("Bundle/Application", "U1", "com.x.game", file: "Game.app/Game", bytes: 3 << 20)
+        try container("Data/Application", "U2", "com.x.game", file: "Documents/save.bin", bytes: 2 << 20)
+        try container("Data/Application", "U3", "com.apple.tiny", file: "Library/a", bytes: 1000)
+        let apps = readSimApps(device: device, preferences: Preferences())
+        let game = apps.first
+        let named = apps.count == 1 && game?.name == "Game" && game?.bundle == "com.x.game"
+        let appSize = (game?.appBytes ?? 0) >> 20, dataSize = (game?.dataBytes ?? 0) >> 20
+        check(named && appSize == 3 && dataSize == 2,
+              "a test device's apps are read with their installed build and data together, named by the app; tiny ones are left out")
         print("SUCCESS: \(count) discovery/model checks. Preserved fixture: \(root.path)")
     }
 }

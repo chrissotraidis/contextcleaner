@@ -2,7 +2,7 @@
 # Reads sizes and dates only. Nothing here deletes, moves or changes a file.
 # Runs on Windows PowerShell 5.1, which every Windows 10 and 11 has, and on PowerShell 7.
 
-$script:CCVersion = '0.1.2'
+$script:CCVersion = '0.1.3'
 $script:CCHome = [Environment]::GetFolderPath('UserProfile')
 $script:CCLocal = [Environment]::GetFolderPath('LocalApplicationData')
 $script:CCRoaming = [Environment]::GetFolderPath('ApplicationData')
@@ -933,6 +933,26 @@ function Set-CCAnswer($Item, [string]$Answer, [string]$Reason, [string]$Explanat
     $Item.Answer = $script:Answers[$Answer]; $Item.Reason = $Reason; $Item.Explanation = $Explanation; $Item.Consequence = $Consequence; $Item.HowTo = $HowTo
 }
 
+# What a folder no rule covers is, from its name and what's inside: a release check, a folder of backups, or the
+# folders it holds. Returns a short label (or nothing) and a sentence, or nothing at all. Reads names and dates only.
+function Get-CCAbout([string]$Path) {
+    $name = Split-Path $Path -Leaf
+    if ($name -match '^(?<base>.+?)-checks?$') {
+        $base = $Matches.base
+        $subject = if ($base -match '^(?<n>.+)-(?<v>v?\d+(\.\d+)*)$') { $Matches.n + ' ' + $Matches.v } else { $base -replace '[-_]', ' ' }
+        return @('Release check', ('A release check of ' + $subject + ': test copies, logs and results.'))
+    }
+    $folders = @(Get-CCChildren $Path)
+    if ($name -match 'backup' -and $folders) {
+        $newest = ($folders | Sort-Object LastWriteTime -Descending | Select-Object -First 1).LastWriteTime
+        $count = if ($folders.Count -eq 1) { '1 backup' } else { [string]$folders.Count + ' backups' }
+        return @('Backups', ($count + ', the newest from ' + $newest.ToString('MMM d, yyyy') + '. Before removing one, make sure the files are somewhere else too.'))
+    }
+    $names = @($folders | Sort-Object Name | Select-Object -First 3 | ForEach-Object { $_.Name })
+    if ($names) { return @('', ('Holds ' + ($names -join ', ') + $(if ($folders.Count -eq 4) { ' and 1 more folder' } elseif ($folders.Count -gt 4) { ' and ' + ($folders.Count - 3) + ' more folders' } else { '' }) + '.')) }
+    $null
+}
+
 # One answer per folder, with its reason. Ported from the Mac Classifier and adapted to Windows places.
 function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
     $idle = $Item.IdleDays
@@ -1038,7 +1058,13 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
         'system' { Set-CCAnswer $Item Keep 'Windows uses it' 'A file Windows uses for memory or hibernation.' 'Windows needs it or recreates it.' $(if ($Item.Name -eq 'hiberfil.sys') { 'If you never hibernate, powercfg /h off in an admin terminal removes it (Fast Startup goes too).' } else { 'System > About > Advanced system settings > Performance > Advanced > Virtual memory sets its size and drive.' }) }
         'windows-old' { Set-CCAnswer $Item Keep 'Previous Windows' 'Your previous Windows installation, kept to roll back an upgrade.' 'You can no longer go back to the previous version.' 'Settings > System > Storage > Temporary files > Previous Windows installation(s).'; $Item.Action = 'storage' }
         'windows-temp' { Set-CCAnswer $Item Keep 'Windows cleans it' 'Files Windows keeps for itself: update downloads, temporary files and error reports.' 'Windows removes them safely itself; moving them by hand can break an update in progress.' 'Settings > System > Storage > Temporary files, or turn on Storage Sense to do it on a schedule.'; $Item.Action = 'storage' }
-        'other' { Set-CCAnswer $Item Other 'Not a known place' 'A folder Context Cleaner has no rule for. Its size leaves out the known places inside it.' 'Unknown. Look inside.' 'Open it in Explorer to see what it holds.' }
+        'other' {
+            # Say what it is when its name or contents tell, instead of only that no rule covers it.
+            $about = Get-CCAbout $Item.Path
+            $short = if ($about -and $about[0]) { $about[0] + ', ' + $quiet } else { 'Not a known place' }
+            $text = if ($about) { $about[1] + ' ' } else { 'A folder Context Cleaner has no rule for. ' }
+            Set-CCAnswer $Item Other $short ($text + 'Its size leaves out the known places inside it.') 'Unknown. Look inside.' 'Open it in Explorer to see what it holds.'
+        }
     }
 }
 

@@ -45,7 +45,9 @@ struct ActivitySnapshot {
         process.waitUntilExit(); timer.cancel()
         try? pipe.fileHandleForReading.close()
         let complete = process.terminationStatus == 0 && !cancellation.stopped && !outputLimited
-        return ActivitySnapshot(observations: complete ? parse(String(decoding: data, as: UTF8.self)) : [], available: complete,
+        // Context Cleaner's own reads (sizing Everything else while a scan starts) aren't an app using a folder.
+        let own = Int(getpid())
+        return ActivitySnapshot(observations: complete ? parse(String(decoding: data, as: UTF8.self)).filter { $0.pid != own } : [], available: complete,
             note: complete ? "Open handles observed at scan start. Handle access modes do not establish actual writes or inactivity." : outputLimited ? "Open-file output exceeded its 16 MiB allowance; activity is unknown." : "Open-file helper failed, was cancelled or timed out; activity is unknown.")
     }
 }

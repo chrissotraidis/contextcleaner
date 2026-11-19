@@ -2,6 +2,19 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## 0.27.0 and Windows 0.1.3
+
+Finding more to remove, and saying what everything is.
+
+- **Folders Codex made in your home folder are scanned.** Codex tasks leave folders right in your home folder: release checks, device backups, test runs, Wine bottles. They sat in Everything else as names with sizes; here that was 16 folders and 228 GiB, including a 184 GiB folder of backups that never showed up because it was too big to size in time. macOS records which app made each folder, so Context Cleaner learns Codex's mark from folders only Codex makes (worktrees, scratch, tasks; at least three must agree) and finds the rest. They're scanned item by item, like a folder you Track: what inside has sat untouched is listed in Free Up Space as Left by a Codex task, and backups as backups, which Select All never ticks. The folders themselves are never in a command, since a command never moves a folder right in your home folder. Their card says Codex made them and what they are: "A release check of BlueWake 0.12", "7 backups, the newest from Sep 3".
+- **Everything else says what each folder is.** Every row says when it last changed and whether Codex made it. A folder no rule covers is described from what's inside it: a release check, a Wine bottle, how many backups and how new, or what fills it ("Mostly checks (60 GiB)"). A folder too big to size this time keeps its last known size, marked ≈, and its place in the list, instead of sinking to the bottom with no size.
+- **What fills each simulator.** A simulator's card lists its apps, biggest first, with the installed build and the app's data apart, read from Xcode's own metadata. Here one iPhone simulator held an 11 GiB TribesPad build and 12 GiB of GalaxyPad and KartPad data. Right-click an app to copy `xcrun simctl uninstall` for it, or copy `xcrun simctl erase` to empty the device and keep it. The Devices card adds each app up across every simulator, and two installs of one game under different identifiers are told apart: here NightPad was on one iPad twice, an old and a new identifier with 3.9 GiB of data each.
+- **Couldn't Scan explains folders macOS keeps private.** 46 identical red rows were iPhone install caches inside Apple CoreDevice's folder, which macOS lets only Full Disk Access read. The page now says so once, with what they held when last read (49 GiB here, Safe to remove once readable), Allow Access… and Stop Checking These. A blocked folder's card shows its last known size.
+- **More caches.** pnpm's package store, Bun, NuGet, Go's module and build caches, and ccache, each with its own clean command. Here that's about 13 GiB.
+- **A size filter that hides everything says so.** "Nothing 10 GiB or bigger" now adds what the smaller items come to, with Show All Sizes, on the Mac and on Windows.
+- **Context Cleaner no longer counts itself as an app using a folder.** A scan that started while Everything else was being sized saw Context Cleaner's own reads, called that folder "Open in ContextCleaner at last scan" and kept what's inside out of Free Up Space.
+- **Windows:** Everything else folders say what they are when their name or contents tell (a release check, how many backups and how new, the folders inside), instead of only "Not a known place".
+
 ## 0.26.0 and Windows 0.1.2
 
 Ref folders are kept, and ticked simulators go in the command.

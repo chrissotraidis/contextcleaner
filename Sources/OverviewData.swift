@@ -275,6 +275,33 @@ enum Verdict: Int, Comparable, CaseIterable, Identifiable {
 func simDeleteCommand(_ udid: String) -> String? {
     udid.range(of: "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$", options: .regularExpression) != nil ? "xcrun simctl delete " + udid : nil
 }
+/// The command that empties one simulator and keeps it: every app and its data go, as on a new device. Xcode erases
+/// only a device that's shut down.
+func simEraseCommand(_ udid: String) -> String? { simDeleteCommand(udid) == nil ? nil : "xcrun simctl erase " + udid }
+/// The command that uninstalls one app from one simulator, with its data. Xcode does it only while the device runs.
+func simUninstallCommand(_ udid: String, bundle: String) -> String? {
+    guard simDeleteCommand(udid) != nil, bundle.range(of: "^[A-Za-z0-9][A-Za-z0-9._-]*$", options: .regularExpression) != nil else { return nil }
+    return "xcrun simctl uninstall " + udid + " " + bundle
+}
+/// One app across every test device: its whole size and the devices holding it, biggest first.
+struct SimAppTotal: Identifiable, Equatable { var id: String { bundle }; let bundle: String; let name: String; let bytes: Int64; let devices: [String] }
+func simAppTotals(_ apps: [String: [SimApp]], deviceNames: [String: String]) -> [SimAppTotal] {
+    var totals: [String: (name: String, bytes: Int64, devices: [String])] = [:]
+    for (udid, list) in apps {
+        for app in list {
+            var t = totals[app.bundle] ?? (app.name, 0, [])
+            // The app's own name, without the identifier a device's list may have added to tell two apart.
+            let plain = app.name.hasSuffix(" · " + app.bundle) ? String(app.name.dropLast(app.bundle.count + 3)) : app.name
+            if plain != app.bundle { t.name = plain }
+            t.bytes += app.bytes; t.devices.append(deviceNames[udid] ?? udid)
+            totals[app.bundle] = t
+        }
+    }
+    let named = withDistinctNames(totals.map { SimApp(bundle: $0.key, name: $0.value.name) })
+    let names = Dictionary(uniqueKeysWithValues: named.map { ($0.bundle, $0.name) })
+    return totals.map { SimAppTotal(bundle: $0.key, name: names[$0.key] ?? $0.value.name, bytes: $0.value.bytes, devices: $0.value.devices.sorted()) }
+        .sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }
+}
 /// A simulator as Xcode reports it (`xcrun simctl list devices -j`). Read-only.
 struct SimDevice: Equatable {
     let udid: String
@@ -476,6 +503,20 @@ func looksLikeBuildOutput(_ name: String) -> Bool {
 }
 /// The folder PadMint's scripts/player-check.sh makes for each run: padmint-player-check.XXXXXX.
 func isPlayerCheck(_ name: String) -> Bool { name.hasPrefix("padmint-player-check.") }
+/// Folders macOS privacy protection kept a scan out of, grouped by the folder they sit in, biggest group first.
+/// Every folder in a group has the same cause and the same fix, so Couldn't Scan explains a group once.
+struct BlockedGroup: Equatable { let parent: String; let paths: [String] }
+extension FolderMeasurement {
+    /// Only "Operation not permitted" is macOS privacy protection, which Full Disk Access fixes. Anything else, such as a
+    /// folder a task changed mid-scan, is a read error that scanning again usually clears.
+    var privacyBlocked: Bool { state == .inaccessible && (diagnostic ?? "").contains("Operation not permitted") }
+}
+func blockedGroups(_ items: [FolderMeasurement]) -> [BlockedGroup] {
+    let blocked = items.filter(\.privacyBlocked).map(\.profile.path)
+    return Dictionary(grouping: blocked) { ($0 as NSString).deletingLastPathComponent }
+        .map { BlockedGroup(parent: $0.key, paths: $0.value.sorted()) }
+        .sorted { $0.paths.count != $1.paths.count ? $0.paths.count > $1.paths.count : $0.parent < $1.parent }
+}
 /// Folders that take no space on this Mac. Files kept only in iCloud (Desktop & Documents) take none here, and removing
 /// them removes them from iCloud too, so they're Not for the Trash. A folder with no files at all is Safe to remove.
 func freesNothing(_ m: FolderMeasurement) -> Advice? {
@@ -862,8 +903,13 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
             return used
         }
         if let recent = recentlyUsed("This download cache") { return recent }
-        let cmd: String? = path.hasSuffix(".npm/_cacache") ? "npm cache clean --force" : path.hasSuffix("Caches/pip") ? "pip cache purge" : path.hasSuffix(".cache/uv") ? "uv cache clean" : path.hasSuffix("Caches/Homebrew") ? "brew cleanup --prune=all" : path.hasSuffix("Caches/Yarn") ? "yarn cache clean" : nil
-        return Advice(verdict: .safe, reason: "A download cache. The tool fetches what it needs again.", howTo: cmd == nil ? trash : "Run the tool's own clean command, or: " + trash.lowercased(), command: cmd, lastUsed: m.latestModifiedAt)
+        let commands = [".npm/_cacache": "npm cache clean --force", "Caches/pip": "pip cache purge", ".cache/uv": "uv cache clean", "Caches/Homebrew": "brew cleanup --prune=all",
+                        "Caches/Yarn": "yarn cache clean", "pnpm/store": "pnpm store prune", ".bun/install/cache": "bun pm cache rm", ".nuget/packages": "dotnet nuget locals all --clear",
+                        "go/pkg/mod": "go clean -modcache", "Caches/go-build": "go clean -cache", "Caches/ccache": "ccache --clear"]
+        let cmd = commands.first { path.hasSuffix("/" + $0.key) }?.value
+        // A compiler cache holds builds, not downloads: the next builds fill it again, more slowly.
+        let reason = path.hasSuffix("/Caches/ccache") || path.hasSuffix("/Caches/go-build") ? "A compiler cache. Later builds fill it again; the first ones are slower." : "A download cache. The tool fetches what it needs again."
+        return Advice(verdict: .safe, reason: reason, howTo: cmd == nil ? trash : "Run the tool's own clean command, or: " + trash.lowercased(), command: cmd, lastUsed: m.latestModifiedAt)
     case .buildOutput:
         guard path.contains("/DerivedData") else { return projectBuild() }
         if let recent = recentlyUsed("Xcode's build data") { return recent }
@@ -876,6 +922,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         return Advice(verdict: .safe, reason: "Debug files for one device and iOS version. Xcode copies them again when you connect it.", howTo: "Quit Xcode, then move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .workspace:
         if isProjectBuildOutput(path) { return projectBuild() }
+        if m.profile.associatedApp == codexHomeApp { return codexHomeAdvice(m, backups: false) }
         if isCodexScratch(path) { return Advice(verdict: .check, reason: "Left behind by a Codex task: builds, downloads, logs or test copies. Codex doesn't clean these up.", howTo: "If the task is done, look for anything you made by hand, then move the folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         if isPadMintGame(path), let newer = newerVersionBeside(path) {
             var older = Advice(verdict: .check, reason: "Source PadMint downloaded to build this version. It builds the latest release, \(newer), which sits beside it, and downloads this one again only if you build this version again.", howTo: "Game files you gave PadMint may be inside. If you have your own copy of them, move this folder to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
@@ -886,6 +933,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         if path.hasSuffix("/work") { return Advice(verdict: .check, reason: "Scratch space for \(project): logs, test installs and experiments. It can also hold files you made by hand.", howTo: "Remove the experiment folders you're done with. Keep anything you made by hand.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Files in the \(project) project. Some may be your only copy.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     case .backup:
+        if m.profile.associatedApp == codexHomeApp { return codexHomeAdvice(m, backups: true) }
         if isCodexScratch(path) { return Advice(verdict: .check, reason: "A backup a Codex task saved, such as app data copied off a device. It may be your only copy.", howTo: "Check you have these files somewhere else, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt) }
         return Advice(verdict: .check, reason: "Codex copied this before a risky change. Once that work is safely in the project, you don't need it.", howTo: "Open the project and check the change is there. Then move this copy to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
     case .history:
@@ -1293,7 +1341,9 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
             let oldTemporary = temporary && !backup && child.modifiedAt.map { now.timeIntervalSince($0) >= 3 * 86400 } == true
             // Inside a scratch or work folder, an item named like build output (DerivedData-…) is rebuilt by building.
             let buildLike = !rebuildable && !temporary && !backup && looksLikeBuildOutput(child.name)
-            let label = backup ? "Looks like a backup" : temporary ? "Temporary item" : buildLike ? "Old build inside" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
+            // In a folder Codex made in your home folder, everything inside is a task's leftovers.
+            let codexMade = m.profile.associatedApp == codexHomeApp
+            let label = backup ? "Looks like a backup" : temporary ? "Temporary item" : buildLike ? "Old build inside" : codexMade ? "Left by a Codex task" : !rebuildable ? "Old item inside" : [.packageCache, .installCache].contains(m.profile.category) ? "Old download inside" : "Old build inside"
             let cost: Verdict = oldTemporary ? .safe : (rebuildable || buildLike) && !backup ? .rebuild : .check
             found.append(Suggestion(path: child.path, name: child.name, place: "Inside " + m.profile.displayName, bytes: child.bytes, cost: cost,
                                     why: ([label] + [age].compactMap { $0 }).joined(separator: " · "), owner: path, seen: child.modifiedAt, backup: backup))
@@ -1311,12 +1361,13 @@ struct ElsewhereSnapshot: Codable, Equatable {
 }
 /// What to name on the overview: the biggest place in the latest look, and the one that grew most since a look at
 /// least an hour earlier (1 GiB or more). A folder whose parts are listed too, such as ~/GitHub, is left out for its parts.
+/// So is a folder scanned since that look, such as one a scan has just found: it's no longer in Everything else.
 struct ElsewhereHighlights: Equatable {
     var biggest: String?, biggestBytes: Int64 = 0
     var grew: String?, grewBytes: Int64 = 0, since: Date?
-    init(_ history: [ElsewhereSnapshot]) {
+    init(_ history: [ElsewhereSnapshot], scanned: Set<String> = []) {
         guard let latest = history.max(by: { $0.date < $1.date }) else { return }
-        let paths = latest.sizes.keys.filter { path in !latest.sizes.keys.contains { $0.hasPrefix(path + "/") } }.sorted()
+        let paths = latest.sizes.keys.filter { path in !scanned.contains(path) && !latest.sizes.keys.contains { $0.hasPrefix(path + "/") } }.sorted()
         if let top = paths.max(by: { latest.sizes[$0]! < latest.sizes[$1]! }) { biggest = top; biggestBytes = latest.sizes[top]! }
         guard let earlier = history.filter({ latest.date.timeIntervalSince($0.date) >= 3600 }).max(by: { $0.date < $1.date }) else { return }
         let changes = paths.compactMap { path in earlier.sizes[path].map { (path, latest.sizes[path]! - $0) } }
@@ -1339,6 +1390,13 @@ struct ElsewhereItem: Identifiable, Sendable {
     /// For a git checkout: whether everything in it is on a remote.
     var backup: RepoBackup? = nil
     var isFolder = false
+    /// macOS recorded Codex as its maker: a folder a Codex task made right in your home folder.
+    var madeByCodex = false
+    /// For a folder too big to size this time: its size at the latest look that sized it, and when.
+    var earlierBytes: Int64? = nil
+    var earlierDate: Date? = nil
+    /// The size to sort by: this look's, or the last one known, so a folder too big to size doesn't sink to the bottom.
+    var sortBytes: Int64 { bytes ?? earlierBytes ?? -1 }
     /// Newest change in the scanned folders inside it, such as a project's builds.
     var scannedModified: Date? = nil
     /// Last sign of use. For a git checkout: its last commit, checkout or build. Otherwise the newest change inside.
@@ -1805,6 +1863,53 @@ func codexScratchArea(_ path: String) -> String? {
 }
 /// Space Codex tasks leave behind: scratch, private work and work folders.
 func isCodexScratch(_ path: String) -> Bool { codexScratchArea(path) != nil }
+/// The answer for a folder a Codex task made in your home folder. Never Safe whole: it may hold the only copy of
+/// something, and a command never moves a folder directly in your home folder. What inside has sat untouched is
+/// offered in Free Up Space, item by item.
+func codexHomeAdvice(_ m: FolderMeasurement, backups: Bool) -> Advice {
+    let what = describeFolder(name: URL(fileURLWithPath: m.profile.path).lastPathComponent, children: m.contents?.children ?? [])
+    var a = Advice(verdict: .check,
+                   reason: (backups ? "Backups a Codex task saved in your home folder. They may be the only copies." : "A folder a Codex task made in your home folder. Codex doesn't remove it when the task ends.") + (what.map { " " + $0 } ?? ""),
+                   howTo: "Free Up Space lists what inside has sat untouched, item by item" + (backups ? ", and never ticks a backup for you" : "") + ". To remove the whole folder, look inside, then move it to the Trash in Finder.",
+                   command: nil, lastUsed: m.latestModifiedAt)
+    a.short = backups ? "Backups by Codex" : "Made by Codex"
+    return a
+}
+/// What a folder is, read from its name and what's inside, for folders no rule describes:
+/// "A release check of BlueWake 0.12: test copies, logs and results." Nil when nothing useful can be said.
+func describeFolder(name: String, children: [ChildSummary]) -> String? {
+    let lower = name.lowercased()
+    let names = Set(children.map { $0.name.lowercased() })
+    // Wine and CrossOver keep a Windows drive in a folder with drive_c and the registry files beside it.
+    if names.contains("drive_c") && (names.contains("system.reg") || names.contains("user.reg")) {
+        return "A Wine bottle: a Windows drive (drive_c) for running Windows programs on this Mac."
+    }
+    // "BlueWake-0.12-check": a release check, such as PadMint's player check.
+    if lower.hasSuffix("-check") || lower.hasSuffix("-checks") || names.contains(where: { $0.hasPrefix("player-check") }) {
+        let base = lower.hasSuffix("-checks") ? String(name.dropLast(7)) : lower.hasSuffix("-check") ? String(name.dropLast(6)) : ""
+        return "A release check" + (base.isEmpty ? "" : " of " + nameAndVersionText(base)) + ": test copies, logs and results."
+    }
+    let folders = children.filter(\.directory)
+    if lower.contains("backup"), !folders.isEmpty {
+        let newest = folders.compactMap(\.modifiedAt).max()
+        return "\(folders.count) \(folders.count == 1 ? "backup" : "backups")" + (newest.map { ", the newest from " + $0.formatted(.dateTime.month(.abbreviated).day().year()) } ?? "")
+            + ". Before removing one, make sure the files are somewhere else too."
+    }
+    // Otherwise, what most of the space is.
+    let sorted = children.filter { $0.name != ".DS_Store" }.sorted { $0.bytes > $1.bytes }
+    let total = sorted.reduce(Int64(0)) { $0 + $1.bytes }
+    guard total >= 100 << 20, let top = sorted.first else { return nil }
+    if top.bytes * 10 >= total * 6 { return "Mostly \(top.name) (\(byteLabel(top.bytes)))." }
+    return "Mostly " + sorted.prefix(2).map { "\($0.name) (\(byteLabel($0.bytes)))" }.joined(separator: " and ") + "."
+}
+/// "BlueWake-0.12" → "BlueWake 0.12", "kartpad-v0.7.9" → "kartpad v0.7.9"; other names have dashes read as spaces.
+func nameAndVersionText(_ name: String) -> String {
+    if let dash = name.lastIndex(of: "-") {
+        let version = name[name.index(after: dash)...]
+        if version.range(of: "^v?[0-9]+(\\.[0-9]+)*$", options: .regularExpression) != nil { return String(name[..<dash]) + " " + version }
+    }
+    return name.replacingOccurrences(of: "-", with: " ").replacingOccurrences(of: "_", with: " ")
+}
 /// An item in the Android SDK that Android Studio or Gradle downloads again: ("system-images", …) or ("ndk", …).
 func androidSDKItem(_ path: String) -> (kind: String, sdk: String)? {
     guard let range = path.range(of: "/Library/Android/sdk/") else { return nil }
@@ -1959,6 +2064,7 @@ func elsewhereAbout(_ path: String, home: String) -> String? {
         ".m2": "Maven's Java package cache. Builds download again what they need.",
         ".npm": "npm's own folder. Its download cache and npx installs are scanned separately.",
         ".bun": "Bun and its package cache.",
+        "go": "Go's own folder: tools installed with go install. Its module cache is scanned separately.",
         ".nvm": "Node.js versions installed with nvm. nvm ls shows them; nvm uninstall removes one.",
         ".pyenv": "Python versions installed with pyenv.",
         ".conda": "Conda environments. conda env list shows them.",

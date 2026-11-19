@@ -454,9 +454,11 @@ function Show-Free {
     $ui.FreeGroups.ItemsSource = $groups
     $ui.FreeEmpty.Visibility = $(if ($shown) { 'Collapsed' } else { 'Visible' })
     $ui.FreeEmptyText.Text = $(if (-not $script:Items) { 'Scan to see what you can remove. A scan reads sizes and dates for about a minute and changes nothing.' }
-        elseif ($every.Count -gt $all.Count -and -not $all) { 'Nothing ' + $atLeast + ' GB or bigger has sat untouched that long. Choose a smaller size above to see ' + (Plural $every.Count 'smaller item' 'smaller items') + '.' }
+        elseif ($every.Count -gt $all.Count -and -not $all) { 'Nothing ' + $atLeast + ' GB or bigger has sat untouched that long. ' + (Plural $every.Count 'smaller item adds' 'smaller items add') + ' up to ' + (Size (Sum $every)) + '.' }
         elseif ($days -gt 0) { 'Nothing here has sat untouched that long. Choose a shorter time above, or look in Folders.' }
         else { 'Nothing to remove here right now. Folders lists everything else, with how to get space back from it.' })
+    # The size filter hid everything: one click lists every size again.
+    $ui.FreeShowAll.Visibility = $(if ($script:Items -and $every.Count -gt $all.Count -and -not $all) { 'Visible' } else { 'Collapsed' })
     Update-FreeTotal
 }
 function Get-FreeTicked { @(Get-FreeShown | Where-Object { $_.Selected }) }
@@ -1179,6 +1181,8 @@ foreach ($rb in $ui.FreeSizes.Children) {
     $rb.IsChecked = [int]$rb.Tag -eq [int]$script:Settings.atLeastGB
     On $rb 'Checked' { param($s, $e) if ($script:Ready) { $script:Settings.atLeastGB = [int]$s.Tag; Save-Settings; Show-Free } }
 }
+# Checking Any size runs its own handler, which saves the setting and lists everything again.
+On $ui.FreeShowAll 'Click' { foreach ($rb in $ui.FreeSizes.Children) { if ([int]$rb.Tag -eq 0) { $rb.IsChecked = $true } } }
 On $ui.FreeAll 'Click' {
     $shown = @(Get-FreeShown); $all = @($shown | Where-Object { $_.Selected }).Count -eq $shown.Count
     foreach ($i in $shown) { $i.Selected = -not $all }

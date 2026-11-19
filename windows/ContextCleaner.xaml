@@ -617,6 +617,7 @@
               <StackPanel x:Name="FreeEmpty" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
                 <TextBlock Text="&#xE73E;" Style="{StaticResource Glyph}" FontSize="32" HorizontalAlignment="Center" Foreground="{DynamicResource Safe}"/>
                 <TextBlock x:Name="FreeEmptyText" Style="{StaticResource Secondary}" Margin="0,10,0,0" TextAlignment="Center" MaxWidth="460"/>
+                <Button x:Name="FreeShowAll" Content="Show All Sizes" HorizontalAlignment="Center" Margin="0,12,0,0" Visibility="Collapsed" ToolTip="Lists every size again"/>
               </StackPanel>
             </Grid>
           </DockPanel>

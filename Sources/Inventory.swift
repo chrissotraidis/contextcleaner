@@ -76,6 +76,8 @@ struct Inventory {
         // Big folders git ignores (agent artifacts, downloaded references, build-macos): read-only git, a few at a time.
         let ignored = parallelMap(repositoriesFound) { cancellation.stopped ? [] : largeIgnoredFolders($0) }
         for folders in ignored { for p in folders { add(p) } }
+        // Folders Codex tasks made right in your home folder: release checks, device backups, test runs.
+        for p in codexMadeHomeFolders(home: home) { add(p) }
         for p in preferences.customRoots where !preferences.excluded(p) { paths.insert(normalized(p)) }
         for (p, policy) in preferences.locations where policy.isWatched && !preferences.excluded(p) { paths.insert(normalized(p)) }
         let profiles = paths.map { path in
@@ -495,4 +497,114 @@ struct TreeMeasure {
         measured.cloudOnlyFolders = cloudOnly > 0 ? cloudOnly : nil
         return measured
     }
+}
+
+
+// MARK: - Folders Codex made in your home folder
+
+/// The app macOS records as having made a file or folder (its com.apple.provenance attribute), or nil when none is recorded.
+/// Opaque bytes that only mean something compared with another item's. Never follows a link.
+func provenance(_ path: String) -> [UInt8]? {
+    var buffer = [UInt8](repeating: 0, count: 64)
+    let count = getxattr(path, "com.apple.provenance", &buffer, buffer.count, 0, XATTR_NOFOLLOW)
+    return count > 0 ? Array(buffer.prefix(count)) : nil
+}
+/// How the maker is read. Tests replace it: macOS stamps every folder a process makes with that process's maker, so a
+/// test can't make folders that look like another app's.
+nonisolated(unsafe) var readProvenance: (String) -> [UInt8]? = provenance
+/// What macOS records for folders Codex makes: the provenance shared by at least three folders in places only Codex
+/// writes (its worktrees, scratch, private work, tasks and task outputs). Empty when they don't agree.
+func codexProvenance(home: String) -> Set<[UInt8]> {
+    var counts: [[UInt8]: Int] = [:]
+    for area in [".codex/worktrees", ".codex/scratch", ".codex/private", ".codex/tasks", "Documents/Codex"] {
+        let root = home + "/" + area
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []).filter { !$0.hasPrefix(".") }.sorted().prefix(40)
+        for name in names { if let id = readProvenance(root + "/" + name) { counts[id, default: 0] += 1 } }
+    }
+    return Set(counts.filter { $0.value >= 3 }.map(\.key))
+}
+/// Folders in your home folder that are never a Codex task's leftovers, whoever made them: macOS's own, your projects,
+/// and homes of tools a task may have installed (Go, conda, Node).
+let homeFoldersNeverCodexWork: Set<String> = ["Applications", "Applications (Parallels)", "Desktop", "Documents", "Downloads", "Library", "Movies", "Music",
+                                              "Pictures", "Public", "Sites", "Parallels", "go", "node_modules", "miniconda3", "anaconda3", "miniforge3"]
+/// Folders a Codex task made directly in your home folder, such as ~/BlueWake-0.12-check or ~/KartPad Device Backups:
+/// macOS recorded Codex as their maker. Visible folders only, not a git repository (projects are judged by git
+/// elsewhere), and not holding a place Context Cleaner already scans.
+func codexMadeHomeFolders(home: String) -> [String] {
+    let ids = codexProvenance(home: home)
+    guard !ids.isEmpty else { return [] }
+    let scanned = Coverage.entries.map { $0.path(home: home) }
+    let names = ((try? FileManager.default.contentsOfDirectory(atPath: home)) ?? []).sorted()
+    return names.filter { !$0.hasPrefix(".") && !homeFoldersNeverCodexWork.contains($0) && !Coverage.projectRoots.contains($0) && !isAppLibrary($0) }
+        .map { home + "/" + $0 }
+        .filter { path in
+            var st = stat()
+            guard lstat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFDIR, lstat(path + "/.git", &st) != 0 else { return false }
+            guard !scanned.contains(where: { containsPath(path, $0) }) else { return false }
+            return readProvenance(path).map(ids.contains) ?? false
+        }
+}
+/// Whether this is one of the folders a Codex task made directly in your home folder. Learns Codex's provenance once per
+/// home folder and launch; a folder made later is recognized at the next scan.
+func isCodexMadeHomeFolder(_ path: String, home: String) -> Bool {
+    guard (path as NSString).deletingLastPathComponent == home else { return false }
+    let name = (path as NSString).lastPathComponent
+    guard !name.hasPrefix("."), !homeFoldersNeverCodexWork.contains(name), !Coverage.projectRoots.contains(name) else { return false }
+    codexProvenanceLock.lock()
+    let ids = codexProvenanceCache[home] ?? codexProvenance(home: home)
+    codexProvenanceCache[home] = ids
+    codexProvenanceLock.unlock()
+    var st = stat()
+    guard !ids.isEmpty, lstat(path + "/.git", &st) != 0 else { return false }
+    return readProvenance(path).map(ids.contains) ?? false
+}
+private let codexProvenanceLock = NSLock()
+private var codexProvenanceCache: [String: Set<[UInt8]>] = [:]
+/// The app name given to folders Codex made in your home folder; their answers and Free Up Space look for it.
+let codexHomeApp = "Codex, in your home folder"
+
+
+// MARK: - Apps in a test device
+
+/// One app in a test device, by bundle identifier: its installed build and its data. Read from the folders and the
+/// metadata Xcode keeps beside them; sizes count clones once, like every scan.
+struct SimApp: Equatable, Identifiable, Sendable {
+    var id: String { bundle }
+    let bundle: String
+    var name: String
+    var appBytes: Int64 = 0
+    var dataBytes: Int64 = 0
+    var bytes: Int64 { appBytes + dataBytes }
+}
+/// The apps in one test device, biggest first, leaving out ones under 1 MiB. Reads sizes and Xcode's metadata only.
+func readSimApps(device: String, preferences: Preferences, cancellation: Cancellation = Cancellation()) -> [SimApp] {
+    var apps: [String: SimApp] = [:]
+    for (suffix, isBuild) in [("Bundle/Application", true), ("Data/Application", false)] {
+        let parent = device + "/data/Containers/" + suffix
+        guard !preferences.excluded(parent), MetadataReader.hasNoSymlinkComponents(parent) else { continue }
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: parent)) ?? []).filter { !$0.hasPrefix(".") }
+        let found = parallelMap(names) { name -> (bundle: String, name: String?, bytes: Int64)? in
+            let path = parent + "/" + name
+            guard !cancellation.stopped, !preferences.excluded(path),
+                  let data = MetadataReader.data(path + "/.com.apple.mobile_container_manager.metadata.plist", preferences: preferences),
+                  let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let bundle = info["MCMMetadataIdentifier"] as? String, !bundle.isEmpty else { return nil }
+            let profile = FolderProfile(path: path, name: name, category: .simulator, project: nil, associatedApp: "", explanation: "", consequence: "", evidence: [])
+            let m = TreeMeasure.measure(profile, preferences: preferences, cancellation: cancellation, activity: [], activityAvailable: false, limits: ScanLimits(seconds: 60, entries: 2_000_000))
+            guard m.state == .measured, let bytes = m.allocatedBytes else { return nil }
+            let shown = isBuild ? ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).first { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) } : nil
+            return (bundle, shown, bytes)
+        }
+        for case let item? in found {
+            var app = apps[item.bundle] ?? SimApp(bundle: item.bundle, name: item.bundle)
+            if isBuild { app.appBytes += item.bytes; if let shown = item.name { app.name = shown } } else { app.dataBytes += item.bytes }
+            apps[item.bundle] = app
+        }
+    }
+    return withDistinctNames(apps.values.filter { $0.bytes >= 1 << 20 }).sorted { $0.bytes == $1.bytes ? $0.name < $1.name : $0.bytes > $1.bytes }
+}
+/// Two apps with one name, such as an old and a new identifier for the same game, are told apart by their identifiers.
+func withDistinctNames(_ apps: [SimApp]) -> [SimApp] {
+    let shared = Set(Dictionary(grouping: apps, by: \.name).filter { $0.value.count > 1 }.keys)
+    return apps.map { app in var app = app; if shared.contains(app.name) { app.name += " · " + app.bundle }; return app }
 }

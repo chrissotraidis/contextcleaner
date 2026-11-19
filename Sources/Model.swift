@@ -107,7 +107,23 @@ struct FolderRow: Identifiable {
             let data = readAll(pipe)
             process.waitUntilExit()
             let devices = process.terminationStatus == 0 ? parseSimDevices(data) : [:]
-            DispatchQueue.main.async { self.simDevices = devices }
+            // Apps inside are read again when asked for, so a refreshed list never shows an old app.
+            DispatchQueue.main.async { self.simDevices = devices; self.simApps = [:] }
+        }
+    }
+    /// The apps in each test device, by device ID, read when a device's card or the Devices card is shown. Read-only.
+    @Published private(set) var simApps: [String: [SimApp]] = [:]
+    @Published private(set) var readingSimApps: Set<String> = []
+    func loadSimApps(_ udids: [String]) {
+        let wanted = udids.filter { simApps[$0] == nil && !readingSimApps.contains($0) && simDeleteCommand($0) != nil }
+        guard !wanted.isEmpty else { return }
+        readingSimApps.formUnion(wanted)
+        let root = home + "/Library/Developer/CoreSimulator/Devices", prefs = preferences
+        DispatchQueue.global(qos: .userInitiated).async {
+            for udid in wanted {
+                let apps = readSimApps(device: root + "/" + udid, preferences: prefs)
+                DispatchQueue.main.async { self.simApps[udid] = apps; self.readingSimApps.remove(udid) }
+            }
         }
     }
     /// When each known folder was created, so new folders count fully in "where the space went". Metadata only.
@@ -314,7 +330,7 @@ struct FolderRow: Identifiable {
                 all.scannedModified = inside.compactMap(\.scannedModified).max()
                 found.append(all)
             }
-            found.sort { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
+            found.sort { $0.sortBytes > $1.sortBytes }
             let snapshot = ElsewhereSnapshot(date: Date(), sizes: Dictionary((found + repositories).compactMap { item in item.bytes.map { (item.path, $0) } }, uniquingKeysWith: { a, _ in a }))
             let stopped = token.stopped
             DispatchQueue.main.async {
@@ -340,7 +356,7 @@ struct FolderRow: Identifiable {
     }
     /// One sentence for the overview naming the biggest and fastest-growing places in Everything else, or nil.
     var elsewhereSummary: String? {
-        let h = ElsewhereHighlights(elsewhereHistory)
+        let h = ElsewhereHighlights(elsewhereHistory, scanned: Set(latest.filter { $0.state == .measured && !gone.contains($0.profile.path) }.map(\.profile.path)))
         guard let biggest = h.biggest else { return nil }
         var text = "In Everything else, \(abbreviatedPath(biggest)) is biggest, at \(byteLabel(h.biggestBytes))"
         if let grew = h.grew, let since = h.since {
@@ -374,6 +390,11 @@ struct FolderRow: Identifiable {
         for item in measured.sorted(by: { $0.profile.path.count < $1.profile.path.count })
         where !outer.contains(where: { containsPath($0.profile.path, item.profile.path) }) { outer.append(item) }
         let skipped: [String: String] = [home + "/Library/CloudStorage": "Cloud storage isn't read, so nothing is downloaded.", home + "/Library/Mobile Documents": "iCloud Drive isn't read, so nothing is downloaded."]
+        let history = elsewhereHistory
+        /// A folder's size at the latest earlier look that sized it, for one too big to size this time.
+        func earlier(_ path: String) -> (bytes: Int64, date: Date)? {
+            history.last { $0.sizes[path] != nil }.map { ($0.sizes[path]!, $0.date) }
+        }
         return { targets, topLevel in
             let results = parallelMap(targets) { path -> ElsewhereItem? in
                 let name = topLevel ? abbreviatedPath(path) : URL(fileURLWithPath: path).lastPathComponent
@@ -390,11 +411,19 @@ struct FolderRow: Identifiable {
                     guard (m.allocatedBytes ?? 0) > 0 else { return nil }
                     item = ElsewhereItem(path: path, name: topLevel && !inside.isEmpty ? name + " (the rest of it)" : name, bytes: m.allocatedBytes, note: nil)
                 case .inaccessible: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "macOS didn't allow reading it. Full Disk Access lets Context Cleaner size it.")
-                case .limited: item = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed.")
+                case .limited:
+                    let before = earlier(path)
+                    item = ElsewhereItem(path: path, name: name, bytes: nil, note: "Too big to size in the time allowed" + (before.map { ". It held \(byteLabel($0.bytes)) at the look on \($0.date.formatted(date: .abbreviated, time: .omitted))" } ?? "") + ".")
+                    item.earlierBytes = before?.bytes; item.earlierDate = before?.date
                 default: return nil
                 }
                 item.isFolder = (st.st_mode & S_IFMT) == S_IFDIR
-                item.about = elsewhereAbout(path, home: home)
+                item.madeByCodex = item.isFolder && topLevel && isCodexMadeHomeFolder(path, home: home)
+                // Known places get their sentence; any other folder is described from its name and what's inside.
+                // A folder of backups says how many and how new, which beats the general sentence.
+                let folderName = URL(fileURLWithPath: path).lastPathComponent
+                let described = item.isFolder ? describeFolder(name: folderName, children: m.contents?.children ?? []) : nil
+                item.about = described != nil && folderName.lowercased().contains("backup") ? described : elsewhereAbout(path, home: home) ?? described
                 item.scannedInside = inside.reduce(0) { $0 + ($1.allocatedBytes ?? 0) }
                 item.modified = ([m.latestModifiedAt] + inside.map(\.latestModifiedAt)).compactMap { $0 }.max()
                 item.scannedModified = inside.compactMap(\.latestModifiedAt).max()
@@ -402,7 +431,7 @@ struct FolderRow: Identifiable {
                 if item.isFolder, !topLevel, lstat(path + "/.git", &git) == 0 { item.backup = readRepoBackup(path) }
                 return item
             }
-            return results.compactMap { $0 }.sorted { ($0.bytes ?? -1) > ($1.bytes ?? -1) }
+            return results.compactMap { $0 }.sorted { $0.sortBytes > $1.sortBytes }
         }
     }
     func stopLookingElsewhere() { elsewhereCancellation.cancel() }
@@ -617,6 +646,8 @@ struct FolderRow: Identifiable {
         return snapshot
     }
     func history(_ path: String) -> [HistoryPoint] { refreshDerived(); return derived.history[path] ?? [] }
+    /// The latest saved reading with a size, for a folder that can't be read now.
+    func lastKnown(_ path: String) -> HistoryPoint? { history(path).last { $0.bytes != nil } }
     func growthSummary(_ path: String) -> GrowthSummary { refreshDerived(); return derived.growth[path] ?? GrowthSummary() }
     var rows: [FolderRow] {
         let key = derivedKey + "|" + section.rawValue + "|" + locationFilter.rawValue + "|" + search + "|\(preferencesVersion)|\(categoryFilter?.rawValue ?? "")|\(discoveryVersion)"
@@ -802,7 +833,7 @@ struct FolderRow: Identifiable {
         // Whole folders follow the same rule as every Trash command; old items inside a folder are judged by the folder's rules.
         let byPath = Dictionary(items.map { ($0.profile.path, $0) }, uniquingKeysWith: { a, _ in a })
         let value = suggestions(items, advice: { self.adviceFor($0) }, gone: gone, quiet: TimeInterval(quietHours) * 3600, minimum: Self.suggestionMinimum,
-                                itemized: Set(preferences.customRoots.map(normalized)))
+                                itemized: Set(preferences.customRoots.map(normalized)).union(items.filter { $0.profile.associatedApp == codexHomeApp }.map(\.profile.path)))
             .filter { !trashedSinceScan.contains($0.path) && !vanished.contains($0.path) && ($0.owner != nil || byPath[$0.path].map(mayTrashWhole) ?? false)
                 && vmDisk(in: $0.path, disks: vmDisks) == nil }
         suggestionCache = (key, value)
@@ -839,7 +870,9 @@ struct FolderRow: Identifiable {
         // An Android emulator is a folder plus an .ini file, and the command moves both; other virtual machines are removed in their apps.
         let emulator = category == .virtualMachine && path.hasSuffix(".avd")
         guard emulator || simulatorID(path) != nil || ![.virtualMachine, .simulator, .history, .appData, .model].contains(category), !path.hasSuffix("/CoreSimulator/Devices"),
-              !isExcluded(path), !preferences.policy(path).isKept, !gone.contains(path) else { return false }
+              !isExcluded(path), !preferences.policy(path).isKept, !gone.contains(path),
+              // A folder Codex made in your home folder is offered item by item; a command never moves a folder right in your home folder.
+              m.profile.associatedApp != codexHomeApp else { return false }
         if Coverage.entries.contains(where: { $0.path(home: home) == path }) && !cache.contains(category) { return false }
         return adviceFor(m).verdict != .keep
     }

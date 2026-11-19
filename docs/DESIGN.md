@@ -179,3 +179,11 @@ Use the native toolbar material and grouping. Keep content backgrounds quiet; ap
 - **Say what a scan does before it runs.** The scan sheet lists places biggest first, counting only what's turned on, says when the last full scan ran and how long it took, and offers Start Full Scan or Watchlist Only. Settings › Scanning is three action rows plus the macOS permission.
 - **Export is a cleanup list.** A Markdown checklist in the order you'd act on it: Safe, Unused inside, Check first, Keep.
 - **Speed.** Advice, the folder list and Coverage sizes are cached per change; scan progress doesn't invalidate advice. A scan update stays under 10 ms on 180 folders.
+## 0.27: say what everything is
+
+- **Nothing unexplained.** A folder without a rule is described from its name and what's inside (a release check, a Wine bottle, how many backups and how new, or "Mostly checks (60 GiB)"), never left as a bare name. Everything else rows say when they last changed and whether Codex made them.
+- **Who made it is evidence.** macOS's provenance attribute says which app created a folder. Codex's is learned from folders only Codex makes, and only when three agree; it marks folders in the home folder as Codex's. They're scanned item by item and shown as "Made by Codex" or "Backups by Codex", Review first. A command still never moves a folder directly in the home folder.
+- **A missing size keeps its place.** A folder too big to size this time shows its last known size, marked ≈ in secondary color, and sorts by it.
+- **One explanation for one cause.** When three or more folders in one place are blocked by macOS privacy protection, Couldn't Scan explains them once, above the table, with their last known total and the two fixes.
+- **Show what fills a test device.** A simulator's card lists its apps by size, build and data apart, with Xcode's uninstall and erase commands to copy; the Devices card totals each app across devices.
+- **Filters never strand you.** A size filter that hides every item says what the hidden items come to, with one button that lists them again.

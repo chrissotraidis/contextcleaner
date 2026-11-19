@@ -27,6 +27,14 @@ struct Classifier {
             assign(.temporary, path == temporary ? "Temporary files" : url.lastPathComponent, "Apps and tools", "Work files apps and command-line tools left in your temporary folder: build trees, traces, unpacked downloads.", "Nothing keeps temporary files. macOS itself clears ones nothing has used for 3 days.")
         } else if isWorktreeFolder(path) {
             assign(.workspace, url.lastPathComponent, "Codex worktree", "A copy of a project Codex made for one task. Its commits belong to the main repository; build output and files git doesn't track exist only here.", "Uncommitted changes and files git doesn't track are lost with it. Committed work stays in the main repository.")
+        } else if readMetadata, isCodexMadeHomeFolder(path, home: home) {
+            // macOS recorded Codex as its maker. Never offered whole: what inside has sat untouched is, item by item.
+            if looksIrreplaceable(url.lastPathComponent) {
+                assign(.backup, url.lastPathComponent, codexHomeApp, "Backups a Codex task saved in your home folder, such as copies of a project or app data taken off a device.", "They may be the only copies. Check you have these files somewhere else before removing any.")
+            } else {
+                assign(.workspace, url.lastPathComponent, codexHomeApp, "A folder a Codex task made in your home folder: release checks, test runs, downloads or copies of a project.", "Codex doesn't remove it when the task ends. Look for files you made by hand before removing anything inside.")
+            }
+            p.evidence.append(Evidence(label: "Made by", value: "Codex", level: .observed, source: "macOS's record of the app that created this folder (com.apple.provenance), matching folders only Codex makes."))
         } else if path.contains("/AppInstallationBinaryDeltas/") {
             assign(.installCache, url.lastPathComponent + " install cache", "Apple CoreDevice", "Mac-side app installation cache. The final path component identifies the target app, not the tool that initiated installation.", "Future device installations can recreate cached data. Stop device installs before manual review.")
             p.evidence.append(Evidence(label: "Target bundle identifier", value: url.lastPathComponent, level: .inferred, source: "Installation-cache directory name"))
@@ -82,7 +90,10 @@ struct Classifier {
                 (".cache/uv", "Python uv cache", "uv"), (".npm/_cacache", "npm download cache", "npm"),
                 (".npm/_npx", "npx tool installations", "npm / npx"), (".gradle/caches", "Gradle cache", "Gradle"),
                 ("Library/Caches/pip", "pip download cache", "pip"), ("Library/Caches/Homebrew", "Homebrew downloads", "Homebrew"),
-                ("Library/Caches/Yarn", "Yarn download cache", "Yarn"), ("Library/Caches/ms-playwright", "Playwright browsers", "Playwright")]
+                ("Library/Caches/Yarn", "Yarn download cache", "Yarn"), ("Library/Caches/ms-playwright", "Playwright browsers", "Playwright"),
+                ("Library/pnpm/store", "pnpm package store", "pnpm"), (".bun/install/cache", "Bun download cache", "Bun"),
+                (".nuget/packages", "NuGet package cache", "NuGet"), ("go/pkg/mod", "Go module cache", "Go"),
+                ("Library/Caches/go-build", "Go build cache", "Go"), ("Library/Caches/ccache", "ccache compiler cache", "ccache")]
             if let rule = cacheRules.first(where: { containsPath(home + "/" + $0.0, path) }) {
                 recognizedRoot = home + "/" + rule.0
                 assign(.packageCache, rule.1, rule.2, "Downloaded dependencies or generated package assets in a recognized tool cache.", "Future commands may require fresh downloads or rebuilds. Avoid manual changes while the tool is running.")

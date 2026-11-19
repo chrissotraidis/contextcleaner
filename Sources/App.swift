@@ -227,6 +227,8 @@ struct MainView: View {
             }.padding(.horizontal, 16).padding(.bottom, 8)
         } else if model.section == .kept {
             keptBanner
+        } else if model.section == .needsAttention {
+            blockedBanner
         } else if !model.search.isEmpty {
             Text("\(model.rows.count) \(model.rows.count == 1 ? "match" : "matches") for “\(model.search)” in folder names, apps, projects and tags").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 16).padding(.bottom, 8)
         }
@@ -299,6 +301,38 @@ struct MainView: View {
         } label: { Label("Sort: " + orderName, systemImage: "arrow.up.arrow.down") }
             .menuStyle(.borderlessButton).fixedSize().font(.caption)
             .help("Biggest first by default. Biggest unused first weighs size by how long a folder has gone unused.")
+    }
+    /// Couldn't Scan: when many folders in one place are blocked by macOS privacy protection, says so once, with the
+    /// size they had when last read and the two choices that fix all of them, instead of leaving the same red row to repeat.
+    @ViewBuilder var blockedBanner: some View {
+        let groups = blockedGroups(model.rows.map(\.measurement)).filter { $0.paths.count >= 3 }.prefix(2)
+        if !groups.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(groups), id: \.parent) { group in
+                    let app = model.rows.first { $0.id == group.paths[0] }?.app ?? "another app"
+                    let known = group.paths.compactMap { model.lastKnown($0) }
+                    let bytes = known.reduce(Int64(0)) { $0 + ($1.bytes ?? 0) }
+                    let when = known.map(\.date).max()
+                    let caches = group.paths.allSatisfy { path in model.rows.first { $0.id == path }?.measurement.profile.category == .installCache }
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "lock.shield").foregroundStyle(Color.attention).font(.title3).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("\(group.paths.count) of these sit in \(app)'s folder, which macOS keeps private to that app").font(.callout.weight(.semibold))
+                            Text("Only Full Disk Access lets Context Cleaner read their sizes. Nothing is wrong with them."
+                                 + (bytes > 0 ? " When last read\(when.map { ", " + $0.formatted(date: .abbreviated, time: .omitted) } ?? ""), they held \(byteLabel(bytes)) in all." : "")
+                                 + (caches ? " Install caches are Safe to remove, since the next install to a device makes them again, so with access they join Free Up Space." : "")
+                                 + " Stop Checking These turns this place off; turn it back on in Settings › Coverage.")
+                                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        Button("Allow Access…") { showingAccessHelp = true }.controlSize(.small)
+                        Button("Stop Checking These") { model.policy(group.parent) { $0.excluded = true } }.controlSize(.small)
+                            .disabled(model.running || model.inspecting)
+                            .help("Turns off " + abbreviatedPath(group.parent) + ". It's no longer read, and leaves this list.")
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(Color.attention.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }.padding(.horizontal, 16).padding(.bottom, 8)
+        }
     }
     /// The Ignored view: folders you keep out of suggestions, and folders you don't scan, with their share of the disk.
     var keptBanner: some View {
@@ -581,7 +615,11 @@ struct MainView: View {
                 .help(policy.isKept ? "Stop ignoring: suggest it again when it looks safe to remove" : "Ignore this folder: it's still scanned but never suggested, and it moves to Ignored")
             Menu { LocationActions(model: model, path: path) } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("More actions for this folder")
         }
-        (Text("What it is: ").fontWeight(.semibold) + Text(isCodexScratch(item.profile.path) ? "Scratch space a Codex task used for builds, test copies and downloads. Codex doesn't remove it when the task ends." : item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        // A folder that can't be read now still has the size it had when it last could.
+        if item.allocatedBytes == nil, item.state != .pending, let known = model.lastKnown(path), let bytes = known.bytes {
+            Text("\(byteLabel(bytes)) when last read, \(ageText(known.date))").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        }
+        (Text("What it is: ").fontWeight(.semibold) + Text(isCodexScratch(item.profile.path) ? "Scratch space a Codex task used for builds, test copies and downloads. Codex doesn't remove it when the task ends." : item.profile.associatedApp == codexHomeApp ? item.profile.explanation : item.profile.category.shortPurpose)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         let simulatorRoot = path.hasSuffix("/CoreSimulator/Devices")
         if model.gone.contains(path) {
             Label("This folder is gone now. Scan again to update the list.", systemImage: "questionmark.folder").font(.callout).foregroundStyle(.secondary)
@@ -590,6 +628,7 @@ struct MainView: View {
                         trashPath: model.mayTrashWhole(item) ? path : nil)
         }
         if simulatorRoot { simulatorDeviceList() }
+        if SimulatorLocations.deviceRoot(path) == path, let udid = model.simulatorID(path) { simulatorAppList(udid) }
         if policy.excluded {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Scanning off", systemImage: "eye.slash").font(.headline).foregroundStyle(Color.ignored)
@@ -662,7 +701,67 @@ struct MainView: View {
                 }
                 Text("Current sizes and last use, straight from Xcode. Remove devices in Xcode › Window › Devices and Simulators.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
+            simulatorAppTotals()
         }
+    }
+    /// On the Devices card: which apps fill the test devices, each counted across every device that has it.
+    @ViewBuilder func simulatorAppTotals() -> some View {
+        let ids = model.simDevices.keys.sorted()
+        let names = Dictionary(uniqueKeysWithValues: model.simDevices.map { ($0.key, $0.value.name) })
+        let totals = simAppTotals(model.simApps.filter { ids.contains($0.key) }, deviceNames: names)
+        let reading = ids.filter { model.readingSimApps.contains($0) || model.simApps[$0] == nil }.count
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Biggest apps across your test devices").font(.headline)
+            ForEach(totals.prefix(8)) { total in
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(total.name).font(.callout).lineLimit(1)
+                        Text(total.devices.count == 1 ? "on " + total.devices[0] : "on \(total.devices.count) devices").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Text(byteLabel(total.bytes)).font(.callout).monospacedDigit()
+                }.help(total.bundle + "\n" + total.devices.joined(separator: "\n"))
+            }
+            if reading > 0 {
+                HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Reading apps in \(reading) \(reading == 1 ? "device" : "devices")…").font(.caption).foregroundStyle(.secondary) }
+            }
+            Text("Select a device in Folders to see its apps and copy the command that uninstalls one, or erase the whole device.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.task(id: ids) { model.loadSimApps(ids) }
+    }
+    /// On a test device's card: its apps, biggest first, and Xcode's commands to uninstall one or erase the device.
+    @ViewBuilder func simulatorAppList(_ udid: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("What fills it").font(.headline)
+            if let apps = model.simApps[udid] {
+                if apps.isEmpty { Text("No apps installed.").font(.callout).foregroundStyle(.secondary) }
+                ForEach(apps.prefix(8)) { app in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(app.name).font(.callout).lineLimit(1)
+                            Text([app.appBytes > 0 ? "app \(byteLabel(app.appBytes))" : nil, app.dataBytes > 0 ? "its data \(byteLabel(app.dataBytes))" : nil].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        Spacer()
+                        Text(byteLabel(app.bytes)).font(.callout).monospacedDigit()
+                    }
+                    .contentShape(Rectangle()).help(app.bundle)
+                    .contextMenu {
+                        if let command = simUninstallCommand(udid, bundle: app.bundle) { Button("Copy Uninstall Command") { copyToClipboard(command) } }
+                    }
+                }
+                if apps.count > 8 { Text("and \(apps.count - 8) smaller").font(.caption).foregroundStyle(.secondary) }
+                if let erase = simEraseCommand(udid), !apps.isEmpty {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("Erase keeps the device and removes every app and its data, as on a new device. Right-click an app to copy the command that uninstalls just that one; the device must be running for that.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button("Copy Erase Command") { copyToClipboard(erase) }.controlSize(.small).help(erase + "\nThe device must be shut down. Nothing runs until you paste it.")
+                    }
+                }
+            } else {
+                HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Reading its apps…").font(.caption).foregroundStyle(.secondary) }
+            }
+        }.task(id: udid) { model.loadSimApps([udid]) }
     }
     /// Evidence, path, handles and every saved size. Folded by default.
     func details(_ item: FolderMeasurement) -> some View {

@@ -87,6 +87,15 @@ $expect = @(@('cache', 10, 'Safe to remove'), @('cache', 2, 'Rebuildable'), @('t
     @('runtime-current', 10, 'Not for the Recycle Bin'), @('history', 99, 'Not for the Recycle Bin'), @('vm-wsl', 1, 'Not for the Recycle Bin'),
     @('game', 900, 'Not for the Recycle Bin'), @('codex-task', 60, 'Review first'), @('other', 1, 'Everything else'))
 foreach ($e in $expect) { $i = New-TestItem $e[0] $e[1]; Resolve-CCAnswer $i (& $place $e[0]) $null $null; Check ('answer ' + $e[0] + ' after ' + $e[1] + ' days: ' + $e[2]) ($i.Answer -eq $e[2]) $i.Answer }
+# Everything else says what a folder is when its name or contents tell: a release check, backups, or what it holds.
+New-Item -ItemType Directory -Path "$work\about\BlueWake-0.12-check\checks", "$work\about\KartPad Device Backups\one", "$work\about\KartPad Device Backups\two", "$work\about\misc\a", "$work\about\misc\b", "$work\about\misc\c", "$work\about\misc\d" -Force | Out-Null
+$check = New-TestItem 'other' 20 "$work\about\BlueWake-0.12-check"; Resolve-CCAnswer $check (& $place 'other') $null $null
+Check 'a release check is named in Everything else' ($check.Answer -eq 'Everything else' -and $check.Reason -eq 'Release check, untouched 2 weeks' -and $check.Explanation -like 'A release check of BlueWake 0.12:*') ($check.Reason + ' / ' + $check.Explanation)
+$backupsAbout = Get-CCAbout "$work\about\KartPad Device Backups"
+Check 'a folder of backups says how many and how new' ($backupsAbout[0] -eq 'Backups' -and $backupsAbout[1] -like '2 backups, the newest from *') ($backupsAbout -join ' / ')
+$miscAbout = Get-CCAbout "$work\about\misc"
+Check 'any other folder names what it holds' ($miscAbout[0] -eq '' -and $miscAbout[1] -eq 'Holds a, b, c and 1 more folder.') ($miscAbout -join ' / ')
+Check 'an empty folder gets no made-up text' ($null -eq (Get-CCAbout "$work\about\misc\a"))
 # Build folders: "build" is output by name; any other build-like name is output only when the project's git ignores it.
 $builds = [pscustomobject]@{ Rule = 'build'; Repo = $null; LookInside = $null; Siblings = "$work\projects\app\build" }
 $old = New-TestItem 'build' 10 "$work\projects\app\build\old"; Resolve-CCAnswer $old $builds $null $null

@@ -839,11 +839,19 @@ struct StartPanel: View {
                         ForEach(group.items) { row($0, in: shown) }
                     }
                 }.padding(.trailing, 6)
-            }.frame(maxHeight: shown.isEmpty ? 40 : min(listHeight, CGFloat(shown.count) * 42 + CGFloat(byKind ? groups.count * 34 : 0) + 8))
+            }.frame(maxHeight: shown.isEmpty ? 76 : min(listHeight, CGFloat(shown.count) * 42 + CGFloat(byKind ? groups.count * 34 : 0) + 8))
                 .overlay {
                     if shown.isEmpty && !everything.isEmpty {
-                        Text(list.isEmpty ? "Choose a smaller size above to see the \(everything.count) smaller \(everything.count == 1 ? "item" : "items")." : "Nothing in this list untouched that long.")
-                            .font(.callout).foregroundStyle(.secondary)
+                        if list.isEmpty {
+                            // The size filter hid everything: say what it hides, and bring it back in one click.
+                            VStack(spacing: 8) {
+                                Text("\(everything.count) smaller \(everything.count == 1 ? "item adds" : "items add") up to \(byteLabel(everything.reduce(Int64(0)) { $0 + $1.bytes })).")
+                                    .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                                Button("Show All Sizes") { atLeast = 0 }.controlSize(.small)
+                            }
+                        } else {
+                            Text("Nothing in this list untouched that long.").font(.callout).foregroundStyle(.secondary)
+                        }
                     }
                 }
         }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).background(.background.secondary)
@@ -1033,6 +1041,11 @@ private struct ElsewhereRow: View {
                 if let bytes = item.bytes {
                     SizeBar(fraction: Double(bytes) / largest)
                     Text(byteLabel(bytes)).font(.callout).monospacedDigit().frame(width: 84, alignment: .trailing)
+                } else if let earlier = item.earlierBytes {
+                    // Too big to size this time: the last size known, marked as such, so it still ranks where it belongs.
+                    SizeBar(fraction: Double(earlier) / largest, color: Color.secondary.opacity(0.25))
+                    Text("≈ " + byteLabel(earlier)).font(.callout).monospacedDigit().foregroundStyle(.secondary).frame(width: 84, alignment: .trailing)
+                        .help("Its size at the look on \(item.earlierDate?.formatted(date: .abbreviated, time: .omitted) ?? "an earlier day"). It was too big to size this time.")
                 }
                 if item.isFolder, item.backup == nil, mayItemize(item.path, home: model.home) {
                     let tracked = model.preferences.customRoots.contains(item.path)
@@ -1060,10 +1073,12 @@ private struct ElsewhereRow: View {
     /// What it is, whether it's backed up, when it was last used, and what's scanned apart.
     private var subtitle: String? {
         var parts: [String] = []
+        if item.madeByCodex { parts.append("Made by Codex") }
         if let note = item.note { parts.append(note) }
         else if let backup = item.backup { parts.append(backup.line) }
         else if let about = item.about { parts.append(about) }
-        if item.backup != nil || depth > 0, let used = item.lastUsed { parts.append("last used " + ageText(used)) }
+        // When it last changed, so an old folder stands out from one in use.
+        if item.isFolder, let used = item.lastUsed { parts.append((item.backup != nil ? "last used " : "changed ") + ageText(used)) }
         if item.scannedInside > 0 { parts.append("+\(byteLabel(item.scannedInside)) scanned") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

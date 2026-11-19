@@ -624,6 +624,8 @@ import Foundation
         check(highlights.biggest == "/u/GitHub/sonic" && highlights.grew == "/u/GitHub/sonic" && highlights.grewBytes == 150 * gib && highlights.since == firstLook
               && ElsewhereHighlights([looks[0]]).grew == nil && ElsewhereHighlights([]).biggest == nil,
               "Everything else names its biggest and fastest-growing places, its parts rather than ~/GitHub, and growth only against an earlier look")
+        let rescanned = ElsewhereHighlights(looks, scanned: ["/u/GitHub/sonic"])
+        check(rescanned.biggest == "/u/Movies" && rescanned.grew == nil, "a folder scanned since the look isn't named as the biggest in Everything else")
         check(isProjectBuildOutput("/Users/x/GitHub/p/build-macos") && isProjectBuildOutput("/Users/x/GitHub/p/web/node_modules") && isProjectBuildOutput("/Users/x/.codex/scratch/t/build")
               && !isProjectBuildOutput("/Users/x/.codex/scratch/out") && !isProjectBuildOutput("/Users/x/GitHub/dist") && !isProjectBuildOutput("/Users/x/GitHub/p/docs/artifacts")
               && !isProjectBuildOutput("/Users/x/GitHub/p/build-ios-preview1-backup"),
@@ -750,6 +752,38 @@ import Foundation
         let devicesOnly = trashCommand([], simulators: [udid])
         check(!devicesOnly.contains("for p in") && !devicesOnly.contains("Empty the Trash") && shellEcho("/bin/bash", "bash -n -c " + shellQuoted(devicesOnly) + " && echo ok").hasPrefix("ok")
               && shellEcho("/bin/zsh", "zsh -n -c " + shellQuoted(withDevices) + " && echo ok").hasPrefix("ok"), "a command with only simulators, or both, is valid shell")
+        // 0.27: folders no rule describes say what they are, from their name and what's inside.
+        func kid(_ name: String, _ bytes: Int64, folder: Bool = true, days: Double = 3) -> ChildSummary {
+            ChildSummary(name: name, directory: folder, identity: name, bytes: bytes, modifiedAt: Date().addingTimeInterval(-days * 86400))
+        }
+        check(describeFolder(name: "BlueWake-0.12-check", children: [kid("checks", 60 * gib)]) == "A release check of BlueWake 0.12: test copies, logs and results."
+              && describeFolder(name: "x", children: [kid("player-check-published.log", 400, folder: false)])?.hasPrefix("A release check:") == true,
+              "a release check is named, with the game and version when the folder's name gives them")
+        check(describeFolder(name: "prefix", children: [kid("drive_c", 2 * gib), kid("system.reg", 4096, folder: false)])?.hasPrefix("A Wine bottle") == true, "a Wine bottle is recognized by its drive_c and registry")
+        let backups = (1...7).map { kid("2026-09-0\($0)-iPhone", gib, days: Double(80 - $0)) }
+        check(describeFolder(name: "KartPad Device Backups", children: backups)?.hasPrefix("7 backups, the newest from ") == true, "a folder of backups says how many and how new")
+        check(describeFolder(name: "work", children: [kid("checks", 60 * gib), kid("menu", 3 * gib)]) == "Mostly checks (60 GiB)."
+              && describeFolder(name: "work", children: [kid("a", 50 * gib), kid("b", 40 * gib), kid("c", gib)]) == "Mostly a (50 GiB) and b (40 GiB)."
+              && describeFolder(name: "tiny", children: [kid("a", 1 << 20)]) == nil,
+              "any other folder names what fills it; a small one gets no made-up text")
+        check(nameAndVersionText("kartpad-v0.7.9") == "kartpad v0.7.9" && nameAndVersionText("BlueWake-0.10.0") == "BlueWake 0.10.0" && nameAndVersionText("dighouse-search") == "dighouse search",
+              "names with a version read as name and version")
+        // Couldn't Scan explains folders macOS privacy protection blocked once per place.
+        func lockedOut(_ path: String, _ note: String = "Operation not permitted") -> FolderMeasurement {
+            var m = item(path, .installCache, nil, .inaccessible); m.diagnostic = note; return m
+        }
+        let groupsBlocked = blockedGroups([lockedOut("/a/deltas/one"), lockedOut("/a/deltas/two"), lockedOut("/a/deltas/three"), lockedOut("/b/x"), lockedOut("/c/y", "Permission denied"), item("/a/deltas/fine", .installCache, 10)])
+        check(groupsBlocked.count == 2 && groupsBlocked[0].parent == "/a/deltas" && groupsBlocked[0].paths.count == 3 && groupsBlocked[1].paths == ["/b/x"],
+              "folders blocked by macOS privacy protection are grouped by where they sit, biggest group first; other read errors aren't")
+        // Simulator commands only ever carry a real device ID and a plain bundle identifier.
+        check(simUninstallCommand(udid, bundle: "com.x.game") == "xcrun simctl uninstall " + udid + " com.x.game" && simEraseCommand(udid) == "xcrun simctl erase " + udid
+              && simUninstallCommand(udid, bundle: "a;rm -rf ~") == nil && simUninstallCommand(udid, bundle: "-x") == nil && simUninstallCommand("nope", bundle: "com.x") == nil && simEraseCommand("$(x)") == nil,
+              "uninstall and erase commands refuse anything but a device ID and a bundle identifier")
+        let totals = simAppTotals(["d1": [SimApp(bundle: "com.x.game", name: "Game", appBytes: 10 * gib, dataBytes: gib)], "d2": [SimApp(bundle: "com.x.game", name: "com.x.game", dataBytes: 2 * gib), SimApp(bundle: "com.y", name: "Y", appBytes: gib)]],
+                                  deviceNames: ["d1": "iPhone 18 Pro", "d2": "iPad Air"])
+        check(totals.count == 2 && totals[0].name == "Game" && totals[0].bytes == 13 * gib && totals[0].devices == ["iPad Air", "iPhone 18 Pro"], "an app's size is added up across every test device that has it, named by its app")
+        let twins = simAppTotals(["d1": withDistinctNames([SimApp(bundle: "local.nightpad.shell", name: "NightPadShell", dataBytes: 4 * gib), SimApp(bundle: "com.x.nightpad", name: "NightPadShell", dataBytes: 4 * gib)])], deviceNames: [:])
+        check(Set(twins.map(\.name)) == ["NightPadShell · local.nightpad.shell", "NightPadShell · com.x.nightpad"], "two apps with one name, such as an old and a new identifier, are told apart by their identifiers")
         print("SUCCESS: \(count) overview checks; only a temporary fixture is written.")
     }
 }

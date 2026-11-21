@@ -503,6 +503,14 @@ func looksLikeBuildOutput(_ name: String) -> Bool {
 }
 /// The folder PadMint's scripts/player-check.sh makes for each run: padmint-player-check.XXXXXX.
 func isPlayerCheck(_ name: String) -> Bool { name.hasPrefix("padmint-player-check.") }
+/// The player-check folders in a temporary folder, each scanned on its own. Together they can hold millions of files,
+/// more than one scan of the temporary folder reads; it then shows no size and nothing inside.
+func playerCheckFolders(in root: String) -> [String] {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
+    return names.filter(isPlayerCheck).sorted().map { root + "/" + $0 }.filter { path in
+        var st = stat(); return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR
+    }
+}
 /// Folders macOS privacy protection kept a scan out of, grouped by the folder they sit in, biggest group first.
 /// Every folder in a group has the same cause and the same fix, so Couldn't Scan explains a group once.
 struct BlockedGroup: Equatable { let parent: String; let paths: [String] }
@@ -963,6 +971,7 @@ private func ruleAdvice(for m: FolderMeasurement, policy: LocationPolicy, device
         return Advice(verdict: .check, reason: "Context Cleaner doesn't recognize this folder.", howTo: "Look inside before removing anything.", command: nil, lastUsed: m.latestModifiedAt)
     case .temporary:
         if path == Coverage.temporaryFolder || path == Coverage.claudeScratch { return Advice(verdict: .check, reason: "Your temporary folder, where apps and command-line tools leave work files. Don't remove the folder itself; apps write here all the time.", howTo: "Remove the items inside that nothing has used for 3 days. Free up space lists them.", command: nil, lastUsed: m.latestModifiedAt) }
+        if isPlayerCheck(URL(fileURLWithPath: path).lastPathComponent) { return Advice(verdict: .rebuild, reason: "A PadMint player check. PadMint's scripts/player-check.sh makes one for each run and asks you to delete it when you're done; running the check again makes a new one.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
         if containsPath(Coverage.claudeScratch, path) {
             if let idle, idle >= 3 { return Advice(verdict: .safe, reason: "Scratchpads from Claude Code sessions nothing has used for \(Int(idle)) days. Those sessions are done, and nothing else keeps these files.", howTo: trash, command: nil, lastUsed: m.latestModifiedAt) }
             return Advice(verdict: .check, reason: "Scratchpads from Claude Code sessions, changed \(ageText(m.latestModifiedAt, now: now)). A session still running may need them.", howTo: "Wait until nothing has used it for 3 days, or until you've closed those sessions, then move it to the Trash.", command: nil, lastUsed: m.latestModifiedAt)
@@ -1295,6 +1304,12 @@ func suggestions(_ items: [FolderMeasurement], advice: (FolderMeasurement) -> Ad
         // A whole worktree is listed only when git has everything in it. Otherwise its build folders are judged on their own.
         if worktree {
             if a.verdict == .rebuild && isQuiet { add(.rebuild, a.short) }
+            continue
+        }
+        // A player check scanned on its own: listed whole once Untouched for has passed and no app has it open. Nothing
+        // inside one is offered piece by piece; a check still running may need all of it.
+        if temporary && isPlayerCheck(URL(fileURLWithPath: path).lastPathComponent) {
+            if isQuiet && !itemize && m.processes.isEmpty { add(.rebuild, "Finished PadMint player check") }
             continue
         }
         if isQuiet && !itemize {

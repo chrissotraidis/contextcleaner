@@ -4,7 +4,7 @@ What changed in each release. Each version's [validation record](validation) say
 
 ## Unreleased
 
-- **Finished PadMint player checks are found again when there are many.** Each one holds tens of thousands of files. With 53 of them (175 GiB), the temporary folder passed the million entries one scan reads, so it showed as Too large with no size, and no check was ever listed; even after Scan Subfolders, only pieces inside four of them came up, as Review first. Each `padmint-player-check.*` folder is now scanned on its own and, once untouched for the time you chose, listed whole as Rebuildable, "Finished PadMint player check". One an app has open isn't listed, and nothing inside one is offered piece by piece.
+- **Finished PadMint player checks are found even when the temporary folder is too big to scan whole.** Each `padmint-player-check.*` folder is now also scanned on its own and, once untouched for the time you chose, listed whole as Rebuildable, "Finished PadMint player check". Before, they were found only inside a full scan of the temporary folder. Here 53 checks made it 180 GiB and 3.3 million files: a full scan still read it (108 seconds of its 300, under its 5 million entries), but a few dozen more checks would pass that limit, and the quick priority scan (100,000 entries) never reads it. One an app has open isn't listed, and nothing inside one is offered piece by piece.
 
 ## 0.27.0 and Windows 0.1.3
 

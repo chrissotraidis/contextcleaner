@@ -2,6 +2,10 @@
 
 What changed in each release. Each version's [validation record](validation) says what was checked, and on what.
 
+## Unreleased
+
+- **Finished PadMint player checks are found again when there are many.** Each one holds tens of thousands of files. With 53 of them (175 GiB), the temporary folder passed the million entries one scan reads, so it showed as Too large with no size, and no check was ever listed; even after Scan Subfolders, only pieces inside four of them came up, as Review first. Each `padmint-player-check.*` folder is now scanned on its own and, once untouched for the time you chose, listed whole as Rebuildable, "Finished PadMint player check". One an app has open isn't listed, and nothing inside one is offered piece by piece.
+
 ## 0.27.0 and Windows 0.1.3
 
 Finding more to remove, and saying what everything is.

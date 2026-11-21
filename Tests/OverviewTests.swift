@@ -591,6 +591,21 @@ import Foundation
         let checkList = suggestions([checks], advice: checkAdvice, gone: [], quiet: 3600, now: now)
         check(checkList.map(\.name) == ["padmint-player-check.Ab12Cd", "build-tmp"] && checkList[0].cost == .rebuild && checkList[0].why == "Finished PadMint player check · untouched 2 hours",
               "under an hour, a finished player check is listed as Rebuildable; one still running and one held open aren't")
+        // 0.27.1: with 53 checks the temporary folder passed a million entries and showed nothing, so each check is
+        // scanned on its own and judged the same way.
+        var ownCheck = item(tmpRoot + "/padmint-player-check.Own03", .temporary, 21 * gib); ownCheck.latestModifiedAt = now.addingTimeInterval(-2 * 3600)
+        var liveCheck = item(tmpRoot + "/padmint-player-check.Live04", .temporary, 22 * gib); liveCheck.latestModifiedAt = now.addingTimeInterval(-5 * 3600)
+        liveCheck.processes = [ProcessEvidence(pid: 2, command: "Python", access: "r", path: tmpRoot + "/padmint-player-check.Live04/source")]
+        liveCheck.contents = FolderContents(children: [ChildSummary(name: "tools", directory: true, identity: "7", bytes: 5 * gib, files: 9, modifiedAt: now.addingTimeInterval(-9 * 3600))],
+                                            fileTypes: [], listedChildren: 1, retainedLimit: 512, omittedEntries: 0)
+        let ownList = suggestions([ownCheck, liveCheck], advice: checkAdvice, gone: [], quiet: 3600, now: now)
+        check(ownList.map(\.name) == ["padmint-player-check.Own03"] && ownList[0].cost == .rebuild && ownList[0].why == "Finished PadMint player check · untouched 2 hours",
+              "a player check scanned on its own is listed whole as Rebuildable; one an app holds open isn't, and nothing inside it is offered")
+        check(suggestions([ownCheck], advice: checkAdvice, gone: [], quiet: 3 * 86400, now: now).isEmpty, "a player check scanned on its own follows Untouched for")
+        let checkRoot = NSTemporaryDirectory() + "cc-overview-fixture-" + UUID().uuidString
+        for name in ["padmint-player-check.Ab12Cd", "padmint-player-check.Zz99Yy", "other-folder"] { try? FileManager.default.createDirectory(atPath: checkRoot + "/" + name, withIntermediateDirectories: true) }
+        FileManager.default.createFile(atPath: checkRoot + "/padmint-player-check.log", contents: Data())
+        check(playerCheckFolders(in: checkRoot) == [checkRoot + "/padmint-player-check.Ab12Cd", checkRoot + "/padmint-player-check.Zz99Yy"], "discovery finds each player-check folder in a temporary folder, and no file or other folder")
         // 0.25.1: Safe to remove folders follow Untouched for too, by their last use.
         let safeCache = aged("/Users/x/Library/Containers/com.apple.CoreDevice.CoreDeviceService/Data/Library/Caches/AppInstallationBinaryDeltas/com.x.app", .installCache, hours: 24 * 9, gib: 6)
         let safeNow = suggestions([safeCache], advice: checkAdvice, gone: [], quiet: 7 * 86400, now: now)

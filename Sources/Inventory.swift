@@ -73,6 +73,8 @@ struct Inventory {
                 }
             }
         }
+        // PadMint player checks, each on its own: together they outgrow what one scan of the temporary folder reads.
+        for root in Coverage.temporaryRoots() where !preferences.excluded(root) { for p in playerCheckFolders(in: root) { add(p) } }
         // Big folders git ignores (agent artifacts, downloaded references, build-macos): read-only git, a few at a time.
         let ignored = parallelMap(repositoriesFound) { cancellation.stopped ? [] : largeIgnoredFolders($0) }
         for folders in ignored { for p in folders { add(p) } }

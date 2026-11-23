@@ -96,6 +96,16 @@ Check 'a folder of backups says how many and how new' ($backupsAbout[0] -eq 'Bac
 $miscAbout = Get-CCAbout "$work\about\misc"
 Check 'any other folder names what it holds' ($miscAbout[0] -eq '' -and $miscAbout[1] -eq 'Holds a, b, c and 1 more folder.') ($miscAbout -join ' / ')
 Check 'an empty folder gets no made-up text' ($null -eq (Get-CCAbout "$work\about\misc\a"))
+# Big Windows places with no rule say what they are and how to get space back; any other row still says when it changed.
+$plex = Get-CCAbout (Join-Path $script:CCLocal 'Plex Media Server\')
+Check 'Plex''s data folder is named, with Plex''s own cleanup' ($plex[0] -eq 'Plex library' -and $plex[1] -like '*Clean Bundles*') ($plex -join ' / ')
+Check 'Program Files points to Installed apps' ((Get-CCAbout $env:ProgramFiles)[1] -like '*Settings > Apps > Installed apps*')
+$plain = New-TestItem 'other' 20 "$work\about\misc\a"; Resolve-CCAnswer $plain (& $place 'other') $null $null
+Check 'a folder with nothing to tell still says when it changed' ($plain.Reason -eq 'Not a known place, untouched 2 weeks') $plain.Reason
+foreach ($c in (Join-Path $script:CCHome 'go\pkg\mod'), (Join-Path $script:CCLocal 'ccache')) {
+    $entry = $script:CacheEntries | Where-Object { $_.Path -ieq $c }
+    Check ('a package cache, and a move may reach it: ' + $c) ($entry -and (Test-CCAllowed $c $s2))
+}
 # Build folders: "build" is output by name; any other build-like name is output only when the project's git ignores it.
 $builds = [pscustomobject]@{ Rule = 'build'; Repo = $null; LookInside = $null; Siblings = "$work\projects\app\build" }
 $old = New-TestItem 'build' 10 "$work\projects\app\build\old"; Resolve-CCAnswer $old $builds $null $null

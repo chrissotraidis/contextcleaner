@@ -2,7 +2,7 @@
 # Reads sizes and dates only. Nothing here deletes, moves or changes a file.
 # Runs on Windows PowerShell 5.1, which every Windows 10 and 11 has, and on PowerShell 7.
 
-$script:CCVersion = '0.1.3'
+$script:CCVersion = '0.1.4'
 $script:CCHome = [Environment]::GetFolderPath('UserProfile')
 $script:CCLocal = [Environment]::GetFolderPath('LocalApplicationData')
 $script:CCRoaming = [Environment]::GetFolderPath('ApplicationData')
@@ -25,7 +25,7 @@ $script:Coverage = [ordered]@{
     claude    = @('Claude', 'Claude and Claude Code data and history')
     models    = @('AI models', 'Hugging Face, Ollama and LM Studio downloads')
     projects  = @('Project build folders', 'Build output and worktrees in folders that hold git repositories')
-    caches    = @('Package caches', 'npm, pnpm, Yarn, Bun, pip, uv, NuGet, Gradle, Cargo, Go, Playwright, Electron')
+    caches    = @('Package caches', 'npm, pnpm, Yarn, Bun, pip, uv, NuGet, Gradle, Cargo, Go, ccache, Playwright, Electron')
     android   = @('Android SDK', 'Emulator system images, NDKs and virtual devices')
     temp      = @('Temporary files', 'Big items in your Temp folder')
     gpu       = @('Shader caches', 'DirectX, NVIDIA and AMD shader caches')
@@ -661,7 +661,8 @@ $script:CacheEntries = @(
     @('uv\cache', 'uv package cache', 'uv', $script:CCLocal), @('Yarn\Cache', 'Yarn download cache', 'Yarn', $script:CCLocal), @('pnpm\store', 'pnpm store', 'pnpm', $script:CCLocal),
     @('pnpm-cache', 'pnpm cache', 'pnpm', $script:CCLocal), @('.bun\install\cache', 'Bun package cache', 'Bun', $script:CCHome), @('.nuget\packages', 'NuGet packages', 'NuGet', $script:CCHome),
     @('NuGet\v3-cache', 'NuGet HTTP cache', 'NuGet', $script:CCLocal), @('.gradle\caches', 'Gradle cache', 'Gradle', $script:CCHome), @('.cargo\registry', 'Cargo registry', 'Cargo', $script:CCHome),
-    @('go-build', 'Go build cache', 'Go', $script:CCLocal), @('ms-playwright', 'Playwright browsers', 'Playwright', $script:CCLocal), @('electron\Cache', 'Electron downloads', 'Electron', $script:CCLocal),
+    @('go-build', 'Go build cache', 'Go', $script:CCLocal), @('go\pkg\mod', 'Go module cache', 'Go', $script:CCHome), @('ccache', 'ccache compiler cache', 'ccache', $script:CCLocal),
+    @('ms-playwright', 'Playwright browsers', 'Playwright', $script:CCLocal), @('electron\Cache', 'Electron downloads', 'Electron', $script:CCLocal),
     @('electron-builder\Cache', 'electron-builder downloads', 'electron-builder', $script:CCLocal), @('.cache\pip', 'pip download cache', 'pip', $script:CCHome), @('.cache\uv', 'uv package cache', 'uv', $script:CCHome)
 ) | ForEach-Object { [pscustomobject]@{ Path = [IO.Path]::GetFullPath((Join-Path $_[3] $_[0])); Name = $_[1]; App = $_[2] } }
 # Shader caches: the graphics driver or DirectX rebuilds them.
@@ -933,9 +934,23 @@ function Set-CCAnswer($Item, [string]$Answer, [string]$Reason, [string]$Explanat
     $Item.Answer = $script:Answers[$Answer]; $Item.Reason = $Reason; $Item.Explanation = $Explanation; $Item.Consequence = $Consequence; $Item.HowTo = $HowTo
 }
 
-# What a folder no rule covers is, from its name and what's inside: a release check, a folder of backups, or the
-# folders it holds. Returns a short label (or nothing) and a sentence, or nothing at all. Reads names and dates only.
+# Big Windows places with no rule of their own: what they are, and Windows' or the app's own way to get space back.
+$script:AboutPlaces = @(
+    @($env:ProgramFiles, 'Installed apps', 'Apps installed for everyone on this PC. To remove one, use Settings > Apps > Installed apps and sort by size.'),
+    @(${env:ProgramFiles(x86)}, 'Installed apps', 'Apps installed for everyone on this PC (32-bit ones, and Steam). To remove one, use Settings > Apps > Installed apps and sort by size.'),
+    @((Join-Path $script:CCLocal 'Programs'), 'Installed apps', 'Apps installed just for you. To remove one, use Settings > Apps > Installed apps and sort by size.'),
+    @($env:ProgramData, 'Shared app data', 'Data apps keep for everyone on this PC: installers, caches and settings. To free a big folder here, remove or clean up the app that owns it.'),
+    @((Join-Path $script:CCLocal 'Plex Media Server'), 'Plex library', 'Plex Media Server''s library: posters, thumbnails, metadata and its database. Your media files are elsewhere. In Plex, Settings > Troubleshooting has Clean Bundles and Optimize Database, and each library''s menu has Empty Trash.'),
+    @((Join-Path $script:CCLocal 'Google'), 'Browser data', 'Google Chrome''s profiles (history, passwords, extensions) and its cache, with any other Google app''s data. To clear the cache, press Ctrl+Shift+Delete in Chrome.'),
+    @((Join-Path $script:CCLocal 'BraveSoftware'), 'Browser data', 'Brave''s profiles (history, passwords, extensions) and its cache. To clear the cache, press Ctrl+Shift+Delete in Brave.'),
+    @((Join-Path $script:CCLocal 'Mozilla'), 'Browser data', 'Firefox''s cache. To clear it, press Ctrl+Shift+Delete in Firefox.')
+) | Where-Object { $_[0] } | ForEach-Object { [pscustomobject]@{ Path = [IO.Path]::GetFullPath($_[0]).TrimEnd('\'); Label = $_[1]; Text = $_[2] } }
+
+# What a folder no rule covers is: a known Windows place, or from its name and what's inside, a release check, a folder
+# of backups, or the folders it holds. Returns a short label (or nothing) and a sentence, or nothing at all. Reads names and dates only.
 function Get-CCAbout([string]$Path) {
+    $known = $script:AboutPlaces | Where-Object { $_.Path -ieq $Path.TrimEnd('\') } | Select-Object -First 1
+    if ($known) { return @($known.Label, $known.Text) }
     $name = Split-Path $Path -Leaf
     if ($name -match '^(?<base>.+?)-checks?$') {
         $base = $Matches.base
@@ -1059,9 +1074,9 @@ function Resolve-CCAnswer($Item, $Place, $Newest, $Roomy) {
         'windows-old' { Set-CCAnswer $Item Keep 'Previous Windows' 'Your previous Windows installation, kept to roll back an upgrade.' 'You can no longer go back to the previous version.' 'Settings > System > Storage > Temporary files > Previous Windows installation(s).'; $Item.Action = 'storage' }
         'windows-temp' { Set-CCAnswer $Item Keep 'Windows cleans it' 'Files Windows keeps for itself: update downloads, temporary files and error reports.' 'Windows removes them safely itself; moving them by hand can break an update in progress.' 'Settings > System > Storage > Temporary files, or turn on Storage Sense to do it on a schedule.'; $Item.Action = 'storage' }
         'other' {
-            # Say what it is when its name or contents tell, instead of only that no rule covers it.
+            # Say what it is when its name or contents tell, instead of only that no rule covers it, and as on the Mac, when it last changed.
             $about = Get-CCAbout $Item.Path
-            $short = if ($about -and $about[0]) { $about[0] + ', ' + $quiet } else { 'Not a known place' }
+            $short = (@($(if ($about -and $about[0]) { $about[0] } else { 'Not a known place' }), $quiet)) -join ', '
             $text = if ($about) { $about[1] + ' ' } else { 'A folder Context Cleaner has no rule for. ' }
             Set-CCAnswer $Item Other $short ($text + 'Its size leaves out the known places inside it.') 'Unknown. Look inside.' 'Open it in Explorer to see what it holds.'
         }

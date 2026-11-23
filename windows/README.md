@@ -25,7 +25,7 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
 
 ## Get it
 
-1. Download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.1), or clone this repository.
+1. Download `Context-Cleaner-…-windows.zip` from the [Windows release](https://github.com/chrissotraidis/contextcleaner/releases/tag/windows-v0.1.4), or clone this repository.
 2. Right-click the zip, choose **Properties**, tick **Unblock** and choose **OK**, then extract it anywhere.
 3. Double-click **Context Cleaner.cmd**. In **Settings**, turn on **Start menu shortcut** to open it from Start, with its icon and no console window.
 4. Choose **Scan**. It reads folder sizes and dates for about a minute and changes nothing.
@@ -43,7 +43,7 @@ Nothing to install: it runs on Windows PowerShell, which every Windows 10 and 11
 | Rebuildable | You wait for the next build or download to recreate it. |
 | Review first | It may hold something that exists only there: task outputs, downloads, recent crashes, a worktree with unpushed work, or a folder of 500 MB or more that a project's git ignores (Not in git, only on this PC). |
 | Not for the Recycle Bin | WSL and Docker disks, games, app data, chat history and Windows' own files. The card says how to get space back with their own tools. |
-| Everything else | Folders with no rule. **Track This Folder** scans one item by item from then on. |
+| Everything else | Folders with no rule. Each says when it last changed and, when it can tell, what it is: installed apps, Plex's library, a browser's data, a release check, a folder of backups, or what it holds. **Track This Folder** scans one item by item from then on. |
 
 ## What it looks at
 
@@ -54,7 +54,7 @@ Turn any group off in **Settings › Where Context Cleaner looks**.
 | Codex | `.codex` (conversations, generated images, worktrees), `Documents\Codex` task folders, old runtimes in `.cache\codex-runtimes`, the Codex app's data |
 | Claude, AI models | Claude and Claude Code data; Hugging Face, Ollama and LM Studio models |
 | Project build folders | `build`, `dist`, `out`, `target`, `node_modules`, `.next`, `obj` and more, in every folder that holds git repositories (found on their own, or set in Settings). As on the Mac, `build` is output by name; any other name counts as output only when the project's git ignores it, and is Review first otherwise. A build folder holding several builds is listed build by build, and the newest is Rebuildable. A git worktree is offered only when git has everything in it. |
-| Package caches | npm, pnpm, Yarn, Bun, pip, uv, NuGet, Gradle, Cargo, Go, Playwright, Electron; Android system images and NDKs |
+| Package caches | npm, pnpm, Yarn, Bun, pip, uv, NuGet, Gradle, Cargo, Go (build and module caches), ccache, Playwright, Electron; Android system images and NDKs |
 | Temporary files, crash dumps, shader caches | Big items in Temp, and in a Temp folder something still writes to, the files in it that have sat untouched (such as the Remote Desktop client's traces, which pile up by gigabytes a day); crash dumps and error reports; DirectX, NVIDIA and AMD shader caches |
 | WSL and Docker | Each Linux distribution's disk, with **Look Inside** listing the biggest folders inside Linux, read-only; Docker Desktop's disks |
 | Steam games | Every game in every Steam library, with when Steam says you last played it, and **Uninstall in Steam** on its card |

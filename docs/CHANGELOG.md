@@ -7,10 +7,10 @@ What changed in each release. Each version's [validation record](validation) say
 Everything else says what each folder is and when it last changed, as on the Mac.
 
 - **Every Everything else row says when it last changed.** "Not a known place, untouched 2 years" instead of only "Not a known place".
-- **Big Windows places with no rule say what they are, and how to get space back.** Program Files and your own apps folder are Installed apps (Settings > Apps > Installed apps, sorted by size); Plex Media Server's folder is its library, with Plex's Clean Bundles, Optimize Database and Empty Trash; Chrome, Brave and Firefox folders are browser data (Ctrl+Shift+Delete); ProgramData is app data shared by everyone. Here that named 72 GB that read "Not a known place".
+- **Big Windows places with no rule say what they are, and how to get space back.** Program Files and your own apps folder are Installed apps (Settings > Apps > Installed apps, sorted by size); Plex Media Server's folder is its library, with Plex's Clean Bundles, Optimize Database and Empty Trash; Chrome, Brave and Firefox folders are browser data (Ctrl+Shift+Delete); ProgramData is app data shared by everyone. Here that named 73 GB that read "Not a known place".
 - **Go's module cache and ccache**, the two caches the Mac added in 0.27.0 that Windows didn't have yet.
 - Includes Windows 0.1.2 and 0.1.3, which were never released on their own: ref folders are kept, a size filter that hides everything offers Show All Sizes, and folders that tell what they are say so.
-- Validation: 116 checks on Windows PowerShell 5.1 and PowerShell 7; two real scans on Windows 11.
+- Validation: 116 checks on Windows PowerShell 5.1 and PowerShell 7; a real scan on Windows 11 Pro, and the installed build showed the new rows and cards.
 
 ## 0.27.0 and Windows 0.1.3
 

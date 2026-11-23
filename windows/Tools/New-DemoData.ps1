@@ -28,7 +28,7 @@ $rows = @(
     @('Lantern Road', 'C:\Program Files (x86)\Steam\steamapps\common\Lantern Road', 'Steam', 'Games', 'Games', 'game', 'Not for the Recycle Bin', 'Installed game, untouched 37 days', 24.9, 37, 0, 'A game installed through Steam.', 'Steam would still list it as installed.', 'To keep it but free this drive, move it to D: with Steam > Settings > Storage > Move.'),
     @('Codex conversations', ($userHome + '\.codex\sessions'), 'Codex', 'AI tools', 'Chat history', 'history', 'Not for the Recycle Bin', 'Chat history', 2.3, 0, 0.1, 'Conversation records this app keeps.', 'Removing them loses conversation history.', 'Manage conversations inside the app.'),
     @('Windows Update downloads', 'C:\Windows\SoftwareDistribution\Download', 'Windows Update', 'Windows', 'System files', 'windows-temp', 'Not for the Recycle Bin', 'Windows cleans it', 4.8, 3, 0, 'Files Windows keeps for itself.', 'Windows removes them safely itself.', 'Settings > System > Storage > Temporary files.'),
-    @('Media Library', ($userHome + '\AppData\Local\Media Library'), 'Everything else', 'Everything else', '~\AppData\Local', 'other', 'Everything else', 'Not a known place', 14.2, 0, 0, 'A folder Context Cleaner has no rule for.', 'Unknown. Look inside.', 'Open it in Explorer to see what it holds.')
+    @('Media Library', ($userHome + '\AppData\Local\Media Library'), 'Everything else', 'Everything else', '~\AppData\Local', 'other', 'Everything else', 'Not a known place, changed today', 14.2, 0, 0, 'A folder Context Cleaner has no rule for.', 'Unknown. Look inside.', 'Open it in Explorer to see what it holds.')
 )
 function Sum($list) { $t = [long]0; foreach ($i in $list) { $t += $i.Bytes }; $t }
 $now = [datetime]::UtcNow
